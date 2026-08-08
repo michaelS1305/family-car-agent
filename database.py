@@ -106,3 +106,11 @@ def get_user_by_token(shortcut_token):
     )
 
     return cursor.fetchone()
+
+def get_all_users():
+    cursor = conn.execute("""
+        SELECT id, name
+        FROM users
+    """)
+
+    return cursor.fetchall()

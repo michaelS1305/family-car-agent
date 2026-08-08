@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from models import CarConnection
 from datetime import datetime
-from database import conn, insert_car_event, get_latest_event, get_active_driver, init_db
+from database import conn, insert_car_event, get_latest_event, get_active_driver, init_db, get_all_users
 from car_service import connect_user, disconnect_user
 
 app = FastAPI()
@@ -42,4 +42,8 @@ def get_car_status():
         "status": "available",
         "current_driver": None
     }
+
+@app.get("/debug/users")
+def debug_users():
+    return get_all_users()
 
