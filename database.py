@@ -1,12 +1,16 @@
 import sqlite3
+import os
+import psycopg
 from datetime import datetime
 
-conn = sqlite3.connect("family_car.db", check_same_thread=False)
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+conn = psycopg.connect(DATABASE_URL)
 
 def init_db():
     conn.execute("""
     CREATE TABLE IF NOT EXISTS car_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         driver_name TEXT NOT NULL,
         status TEXT NOT NULL,
         event_time TEXT NOT NULL
@@ -15,7 +19,7 @@ def init_db():
 
     conn.execute("""
     CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
         phone_number TEXT UNIQUE,
         shortcut_token TEXT UNIQUE
@@ -30,7 +34,7 @@ def insert_car_event(driver_name, status):
     conn.execute(
         """
         INSERT INTO car_events (driver_name, status, event_time)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
         """,
         (driver_name, status, event_time)
     )
@@ -84,7 +88,7 @@ def insert_user(name, phone_number, shortcut_token):
     conn.execute(
         """
         INSERT INTO users (name, phone_number, shortcut_token)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
         """,
         (name, phone_number, shortcut_token)
     )
@@ -96,7 +100,7 @@ def get_user_by_token(shortcut_token):
         """
         SELECT id, name
         FROM users
-        WHERE shortcut_token = ?
+        WHERE shortcut_token = %s
         """,
         (shortcut_token,)
     )
