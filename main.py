@@ -22,25 +22,17 @@ def disconnect_car(connection: CarConnection):
 
 @app.get("/car/status")
 def get_car_status():
-    event = get_latest_event()
+    active_driver = get_active_driver()
 
-    if not event:
+    if not active_driver:
         return {
             "status": "available",
             "current_driver": None
         }
 
-    driver_name, status, event_time = event
-
-    if status == "connected":
-        return {
-            "status": "in_use",
-            "current_driver": driver_name
-        }
-
     return {
-        "status": "available",
-        "current_driver": None
+        "status": "in_use",
+        "current_driver": active_driver[0]
     }
 
 
