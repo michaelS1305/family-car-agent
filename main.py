@@ -35,4 +35,6 @@ def get_car_status():
         "current_driver": active_driver[0]
     }
 
-
+@app.post("/telegram/webhook")
+def telegram_webhook(update: dict):
+    return {"ok": True}
