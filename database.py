@@ -22,7 +22,7 @@ def init_db():
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
         phone_number TEXT UNIQUE,
-        shortcut_token TEXT UNIQUE
+        shortcut_token TEXT UNIQUE,
         telegram_chat_id BIGINT UNIQUE
     )
     """)
