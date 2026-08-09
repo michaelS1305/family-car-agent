@@ -127,13 +127,20 @@ def telegram_webhook(update: dict):
         )
         return {"ok": True}
 
-    reply = ask_agent(
-        text,
-        user_id=user[0],
-        user_name=user[1],
-        chat_id=chat_id
-    )
+    try:
+        reply = ask_agent(
+            text,
+            user_id=user[0],
+            user_name=user[1],
+            chat_id=chat_id
+        )
 
-    send_telegram_message(chat_id, reply)
+        send_telegram_message(chat_id, reply)
+
+    except Exception as e:
+            send_telegram_message(
+                chat_id,
+                f"Error: {str(e)}"
+            )
 
     return {"ok": True}
