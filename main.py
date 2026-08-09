@@ -4,6 +4,7 @@ from datetime import datetime
 from telegram_service import send_telegram_message
 from database import conn, insert_car_event, get_latest_event, get_active_driver, init_db
 from car_service import connect_user, disconnect_user
+from ai_service import understand_message
 
 app = FastAPI()
 
@@ -46,7 +47,9 @@ def telegram_webhook(update: dict):
     chat_id = message["chat"]["id"]
     text = message.get("text", "").strip()
 
-    if text == "מי עם הרכב?":
+    intent = understand_message(text)
+
+    if intent == "car_status":
         active_driver = get_active_driver()
 
         if active_driver:
@@ -55,5 +58,11 @@ def telegram_webhook(update: dict):
             reply = "הרכב פנוי כרגע 🟢"
 
         send_telegram_message(chat_id, reply)
+
+    else:
+        send_telegram_message(
+            chat_id,
+            "אני עדיין לא יודע לעזור עם זה 🤖"
+        )
 
     return {"ok": True}
