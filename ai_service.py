@@ -19,7 +19,7 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 def understand_message(text):
     response = client.models.generate_content(
-        model="gemini-3-flash-preview",
+        model="gemini-3.1-flash-lite",
         contents=f"""
 You are an AI assistant for a family shared car.
 
@@ -170,7 +170,7 @@ def ask_agent(text, user_id, user_name, chat_id):
         }
 
     response = client.models.generate_content(
-        model="gemini-3-flash-preview",
+        model="gemini-3.1-flash-lite",
         contents=f"""
 Current date and time: {now.isoformat()}
 
