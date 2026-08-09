@@ -1,5 +1,6 @@
 import os
 from google import genai
+from database import get_active_driver
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -25,3 +26,30 @@ Return ONLY the intent name.
     )
 
     return response.text.strip()
+
+
+def get_car_status_tool():
+    active_driver = get_active_driver()
+
+    if active_driver:
+        return {
+            "status": "in_use",
+            "current_driver": active_driver[0]
+        }
+
+    return {
+        "status": "available",
+        "current_driver": None
+    }
+
+
+def ask_agent(text):
+    response = client.models.generate_content(
+        model="gemini-3-flash-preview",
+        contents=text,
+        config={
+            "tools": [get_car_status_tool]
+        }
+    )
+
+    return response.text
