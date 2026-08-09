@@ -25,7 +25,7 @@ def connect_user(shortcut_token):
 
     send_telegram_message(
         user[2],
-        f"{user[1]} took the car 🚗"
+        f"{user[1]} לקח את הרכב 🚗"
     )
 
     return result
@@ -42,7 +42,7 @@ def disconnect_user(shortcut_token):
 
     if not active_driver:
         return {
-            "message": "Car is already available"
+            "message": "הרכב כבר פנוי"
         }
 
     if active_driver[0] != user[1]:
@@ -55,7 +55,7 @@ def disconnect_user(shortcut_token):
 
     send_telegram_message(
         user[2],
-        "The car is now available 🟢"
+        "הרכב פנוי עכשו 🟢"
     )
 
     return result

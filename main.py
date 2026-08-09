@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from models import CarConnection
 from datetime import datetime
-from telegram_service import send_telegram_message, send_telegram_message
+from telegram_service import send_telegram_message
 from database import (conn,  
                       get_active_driver, 
                       init_db, 
@@ -44,72 +44,6 @@ def get_car_status():
 
 @app.post("/telegram/webhook")
 def telegram_webhook(update: dict):
-    callback = update.get("callback_query")
-
-    if callback:
-        chat_id = callback["message"]["chat"]["id"]
-        data = callback["data"]
-
-        user = get_user_by_telegram_chat_id(chat_id)
-
-        if not user:
-            send_telegram_message(
-                chat_id,
-                "המשתמש הזה עדיין לא רשום במערכת."
-            )
-            return {"ok": True}
-
-        # Cancel reservation
-        if data.startswith("cancel_reservation:"):
-            reservation_id = int(data.split(":")[1])
-
-            result = cancel_reservation(
-                reservation_id,
-                user[0]
-            )
-
-            if result["success"]:
-                send_telegram_message(
-                    chat_id,
-                    "ההזמנה בוטלה ✅"
-                )
-            else:
-                send_telegram_message(
-                    chat_id,
-                    result["message"]
-                )
-
-        # Update reservation
-        elif data.startswith("update_reservation|"):
-            _, reservation_id, start_time, end_time = data.split("|")
-
-            result = update_reservation(
-                int(reservation_id),
-                user[0],
-                start_time,
-                end_time
-            )
-
-            if result["success"]:
-                send_telegram_message(
-                    chat_id,
-                    "ההזמנה עודכנה ✅"
-                )
-            else:
-                send_telegram_message(
-                    chat_id,
-                    result["message"]
-                )
-
-        # User rejected the confirmation
-        elif data == "dismiss":
-            send_telegram_message(
-                chat_id,
-                "לא ביצעתי שום שינוי."
-            )
-
-        return {"ok": True}
-
     message = update.get("message")
 
     if not message:
@@ -137,10 +71,10 @@ def telegram_webhook(update: dict):
 
         send_telegram_message(chat_id, reply)
 
-    except Exception as e:
-            send_telegram_message(
-                chat_id,
-                f"Error: {str(e)}"
-            )
+    except Exception:
+        send_telegram_message(
+            chat_id,
+            "אני לא זמין כרגע, נסה שוב בעוד כמה דקות."
+        )
 
     return {"ok": True}
