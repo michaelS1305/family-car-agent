@@ -1,4 +1,5 @@
 from database import get_active_driver, insert_car_event, get_user_by_token
+from telegram_service import send_telegram_message
 
 def connect_user(shortcut_token):
     user = get_user_by_token(shortcut_token)
@@ -16,7 +17,14 @@ def connect_user(shortcut_token):
             "current_driver": active_driver[0]
         }
 
-    return insert_car_event(user[1], "connected")
+    result = insert_car_event(user[1], "connected")
+
+    send_telegram_message(
+        user[2],
+        f"{user[1]} took the car 🚗"
+    )
+
+    return result
 
 def disconnect_user(shortcut_token):
     user = get_user_by_token(shortcut_token)
@@ -39,4 +47,11 @@ def disconnect_user(shortcut_token):
             "current_driver": active_driver[0]
         }
 
-    return insert_car_event(user[1], "disconnected")
+    result = insert_car_event(user[1], "disconnected")
+
+    send_telegram_message(
+        user[2],
+        "The car is now available 🟢"
+    )
+
+    return result

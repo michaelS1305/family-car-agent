@@ -23,6 +23,7 @@ def init_db():
         name TEXT NOT NULL,
         phone_number TEXT UNIQUE,
         shortcut_token TEXT UNIQUE
+        telegram_chat_id BIGINT UNIQUE
     )
     """)
 
@@ -98,7 +99,7 @@ def insert_user(name, phone_number, shortcut_token):
 def get_user_by_token(shortcut_token):
     cursor = conn.execute(
         """
-        SELECT id, name
+        SELECT id, name, telegram_chat_id
         FROM users
         WHERE shortcut_token = %s
         """,
