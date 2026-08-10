@@ -9,6 +9,7 @@ from database import (
     save_onboarding_session,
     delete_onboarding_session,
 )
+from geocoding_service import geocode_address
 
 
 CONNECT_SHORTCUT_URL = (
@@ -36,12 +37,12 @@ def handle_onboarding(chat_id, text):
         )
 
         return (
-            "ברוך הבא ל-Family Car Agent 🚗\n\n"
+            "ברוך/ה הבא/ה ל-Family Car Agent 🚗\n\n"
             "הבוט עוזר למשפחה לנהל רכב משותף בצורה אוטומטית.\n"
             "הוא יודע לזהות מי משתמש ברכב, לבדוק אם הוא פנוי, "
             "לנהל הזמנות ולעדכן את בני המשפחה.\n\n"
             "ההרשמה נדרשת רק פעם אחת.\n\n"
-            "כדי להתחיל, כתוב:\n"
+            "כדי להתחיל, כתוב/י:\n"
             "1 - ליצור משפחה חדשה\n"
             "2 - להצטרף למשפחה קיימת"
         )
@@ -66,19 +67,17 @@ def handle_onboarding(chat_id, text):
                 chat_id,
                 step="create_family_name"
             )
-
-            return "איך תרצה לקרוא למשפחה?"
+            return "איך תרצה/י לקרוא למשפחה?"
 
         if text == "2":
             save_onboarding_session(
                 chat_id,
                 step="join_family_code"
             )
-
             return "מה הקוד המשפחתי?"
 
         return (
-            "כתוב 1 כדי ליצור משפחה "
+            "כתוב/י 1 כדי ליצור משפחה "
             "או 2 כדי להצטרף למשפחה קיימת."
         )
 
@@ -87,7 +86,12 @@ def handle_onboarding(chat_id, text):
     # -------------------------------------------------
 
     if step == "create_family_name":
-        data["family_name"] = text
+        family_name = text.strip()
+
+        if not family_name:
+            return "יש להזין שם למשפחה."
+
+        data["family_name"] = family_name
 
         save_onboarding_session(
             chat_id,
@@ -96,17 +100,22 @@ def handle_onboarding(chat_id, text):
         )
 
         return (
-            "בחר קוד משפחתי.\n"
-            "בני המשפחה האחרים ישתמשו בו כדי להצטרף."
+            "בחר/י קוד משפחתי.\n"
+            "בני המשפחה האחרים ישתמשו בו פעם אחת כדי להצטרף."
         )
 
     if step == "create_family_code":
-        existing_family = get_family_by_code(text)
+        family_code = text.strip()
+
+        if not family_code:
+            return "יש להזין קוד משפחתי."
+
+        existing_family = get_family_by_code(family_code)
 
         if existing_family:
-            return "הקוד הזה כבר תפוס. בחר קוד אחר."
+            return "הקוד הזה כבר תפוס. בחר/י קוד אחר."
 
-        data["family_code"] = text
+        data["family_code"] = family_code
 
         save_onboarding_session(
             chat_id,
@@ -114,26 +123,115 @@ def handle_onboarding(chat_id, text):
             data=json.dumps(data)
         )
 
-        return "מה כתובת הבית של המשפחה?"
+        return (
+            "מה כתובת הבית של המשפחה? 🏠\n\n"
+            "כתוב/י את הכתובת בפורמט:\n"
+            "עיר, רחוב, מספר בית\n\n"
+            "לדוגמה:\n"
+            "תל אביב, דיזנגוף, 120"
+        )
 
     if step == "create_family_address":
-        data["home_address"] = text
+        parsed_address = parse_home_address(text)
+
+        if not parsed_address:
+            return (
+                "הכתובת לא נראית מלאה.\n\n"
+                "נסה/י שוב בפורמט:\n"
+                "עיר, רחוב, מספר בית\n\n"
+                "לדוגמה:\n"
+                "תל אביב, דיזנגוף, 120"
+            )
+
+        city, street, house_number = parsed_address
+
+        try:
+            location = geocode_address(
+                city=city,
+                street=street,
+                house_number=house_number
+            )
+        except Exception:
+            return (
+                "לא הצלחתי לבדוק את הכתובת כרגע.\n"
+                "נסה/י שוב בעוד כמה רגעים."
+            )
+
+        if not location:
+            return (
+                "לא הצלחתי למצוא את הכתובת הזאת 📍\n\n"
+                "בדוק/י שהעיר, הרחוב ומספר הבית נכונים "
+                "ונסה/י שוב.\n\n"
+                "לדוגמה:\n"
+                "תל אביב, דיזנגוף, 120"
+            )
+
+        normalized_address = f"{city}, {street}, {house_number}"
+
+        data["home_address"] = normalized_address
+        data["home_latitude"] = location["latitude"]
+        data["home_longitude"] = location["longitude"]
+        data["geocoded_address"] = location["address"]
 
         save_onboarding_session(
             chat_id,
-            step="create_user_name",
+            step="confirm_family_address",
             data=json.dumps(data)
         )
 
-        return "מה השם שלך?"
+        return (
+            "מצאתי את הכתובת הבאה 📍\n\n"
+            f"{location['address']}\n\n"
+            "האם זו כתובת הבית של המשפחה?\n"
+            "כתוב/י ״כן״ או ״לא״."
+        )
+
+    if step == "confirm_family_address":
+        if is_yes(text):
+            save_onboarding_session(
+                chat_id,
+                step="create_user_name",
+                data=json.dumps(data)
+            )
+            return "מעולה ✅\nמה השם שלך?"
+
+        if is_no(text):
+            for key in (
+                "home_address",
+                "home_latitude",
+                "home_longitude",
+                "geocoded_address",
+            ):
+                data.pop(key, None)
+
+            save_onboarding_session(
+                chat_id,
+                step="create_family_address",
+                data=json.dumps(data)
+            )
+
+            return (
+                "אין בעיה.\n"
+                "הזן/י שוב את כתובת הבית בפורמט:\n"
+                "עיר, רחוב, מספר בית\n\n"
+                "לדוגמה:\n"
+                "תל אביב, דיזנגוף, 120"
+            )
+
+        return "כתוב/י ״כן״ אם הכתובת נכונה או ״לא״ כדי להזין אותה מחדש."
 
     if step == "create_user_name":
-        user_name = text
+        user_name = text.strip()
+
+        if not user_name:
+            return "יש להזין שם."
 
         family_id = create_family(
             name=data["family_name"],
             family_code=data["family_code"],
-            home_address=data["home_address"]
+            home_address=data["home_address"],
+            home_latitude=data["home_latitude"],
+            home_longitude=data["home_longitude"]
         )
 
         shortcut_token = generate_shortcut_token()
@@ -163,10 +261,14 @@ def handle_onboarding(chat_id, text):
     # -------------------------------------------------
 
     if step == "join_family_code":
-        family = get_family_by_code(text)
+        family_code = text.strip()
+        family = get_family_by_code(family_code)
 
         if not family:
-            return "לא מצאתי משפחה עם הקוד הזה. נסה שוב."
+            return (
+                "לא מצאתי משפחה עם הקוד הזה.\n"
+                "בדוק/י את הקוד ונסה/י שוב."
+            )
 
         data["family_id"] = family[0]
         data["family_name"] = family[1]
@@ -183,7 +285,10 @@ def handle_onboarding(chat_id, text):
         )
 
     if step == "join_user_name":
-        user_name = text
+        user_name = text.strip()
+
+        if not user_name:
+            return "יש להזין שם."
 
         shortcut_token = generate_shortcut_token()
 
@@ -215,7 +320,7 @@ def handle_onboarding(chat_id, text):
         if text.strip() != "התקנתי":
             return (
                 "אחרי שהתקנת את שני הקיצורים, "
-                "כתוב לי ״התקנתי״."
+                "כתוב/י לי ״התקנתי״."
             )
 
         save_onboarding_session(
@@ -227,9 +332,9 @@ def handle_onboarding(chat_id, text):
             "מעולה ✅\n"
             "עכשיו נגדיר את CarPlay כך שהכול יעבוד אוטומטית.\n\n"
             "שלב 1 מתוך 6:\n"
-            "פתח באייפון את אפליקציית ״קיצורים״ "
-            "ועבור ללשונית ״אוטומציה״.\n\n"
-            "כשהגעת לשם, כתוב ״הבא״."
+            "פתח/י באייפון את אפליקציית ״קיצורים״ "
+            "ועבור/י ללשונית ״אוטומציה״.\n\n"
+            "כשהגעת לשם, כתוב/י ״הבא״."
         )
 
     # -------------------------------------------------
@@ -238,7 +343,7 @@ def handle_onboarding(chat_id, text):
 
     if step == "carplay_connect_open_automation":
         if not is_next(text):
-            return 'כשהגעת ללשונית ״אוטומציה״, כתוב ״הבא״.'
+            return 'כשהגעת ללשונית ״אוטומציה״, כתוב/י ״הבא״.'
 
         save_onboarding_session(
             chat_id,
@@ -247,16 +352,16 @@ def handle_onboarding(chat_id, text):
 
         return (
             "שלב 2 מתוך 6:\n"
-            "לחץ על + ליצירת אוטומציה חדשה "
-            "ובחר ״CarPlay״.\n\n"
-            "בחר ״מתחבר״.\n"
-            "אם מופיעה האפשרות ״הפעל מיד״ — בחר בה.\n\n"
-            "כשתסיים, כתוב ״הבא״."
+            "לחץ/י על + ליצירת אוטומציה חדשה "
+            "ובחר/י ״CarPlay״.\n\n"
+            "בחר/י ״מתחבר״.\n"
+            "אם מופיעה האפשרות ״הפעל מיד״ — בחר/י בה.\n\n"
+            "כשתסיים/י, כתוב/י ״הבא״."
         )
 
     if step == "carplay_connect_choose_trigger":
         if not is_next(text):
-            return 'כשתסיים להגדיר ״מתחבר״, כתוב ״הבא״.'
+            return 'כשתסיים/י להגדיר ״מתחבר״, כתוב/י ״הבא״.'
 
         save_onboarding_session(
             chat_id,
@@ -265,10 +370,10 @@ def handle_onboarding(chat_id, text):
 
         return (
             "שלב 3 מתוך 6:\n"
-            "בחר פעולה של ״הפעל קיצור״ "
-            "ובחר את קיצור ה-Connect שהתקנת קודם.\n\n"
-            "שמור את האוטומציה.\n\n"
-            "כשתסיים, כתוב ״הבא״."
+            "בחר/י פעולה של ״הפעל קיצור״ "
+            "ובחר/י את קיצור ה-Connect שהותקן קודם.\n\n"
+            "שמור/י את האוטומציה.\n\n"
+            "כשתסיים/י, כתוב/י ״הבא״."
         )
 
     # -------------------------------------------------
@@ -277,7 +382,7 @@ def handle_onboarding(chat_id, text):
 
     if step == "carplay_connect_choose_shortcut":
         if not is_next(text):
-            return 'אחרי ששמרת את אוטומציית החיבור, כתוב ״הבא״.'
+            return 'אחרי ששמרת את אוטומציית החיבור, כתוב/י ״הבא״.'
 
         save_onboarding_session(
             chat_id,
@@ -287,15 +392,15 @@ def handle_onboarding(chat_id, text):
         return (
             "מצוין ✅ אוטומציית החיבור מוכנה.\n\n"
             "שלב 4 מתוך 6:\n"
-            "חזור ללשונית ״אוטומציה״ ולחץ שוב על +.\n"
-            "בחר ״CarPlay״ והפעם בחר ״מתנתק״.\n\n"
-            "אם מופיעה האפשרות ״הפעל מיד״ — בחר בה.\n\n"
-            "כשתסיים, כתוב ״הבא״."
+            "חזור/י ללשונית ״אוטומציה״ ולחץ/י שוב על +.\n"
+            "בחר/י ״CarPlay״ והפעם בחר/י ״מתנתק״.\n\n"
+            "אם מופיעה האפשרות ״הפעל מיד״ — בחר/י בה.\n\n"
+            "כשתסיים/י, כתוב/י ״הבא״."
         )
 
     if step == "carplay_disconnect_choose_trigger":
         if not is_next(text):
-            return 'כשתסיים להגדיר ״מתנתק״, כתוב ״הבא״.'
+            return 'כשתסיים/י להגדיר ״מתנתק״, כתוב/י ״הבא״.'
 
         save_onboarding_session(
             chat_id,
@@ -304,10 +409,10 @@ def handle_onboarding(chat_id, text):
 
         return (
             "שלב 5 מתוך 6:\n"
-            "בחר פעולה של ״הפעל קיצור״ "
-            "ובחר את קיצור ה-Disconnect שהתקנת קודם.\n\n"
-            "שמור את האוטומציה.\n\n"
-            "כשתסיים, כתוב ״הבא״."
+            "בחר/י פעולה של ״הפעל קיצור״ "
+            "ובחר/י את קיצור ה-Disconnect שהותקן קודם.\n\n"
+            "שמור/י את האוטומציה.\n\n"
+            "כשתסיים/י, כתוב/י ״הבא״."
         )
 
     # -------------------------------------------------
@@ -316,7 +421,7 @@ def handle_onboarding(chat_id, text):
 
     if step == "carplay_disconnect_choose_shortcut":
         if not is_next(text):
-            return 'אחרי ששמרת את אוטומציית הניתוק, כתוב ״הבא״.'
+            return 'אחרי ששמרת את אוטומציית הניתוק, כתוב/י ״הבא״.'
 
         save_onboarding_session(
             chat_id,
@@ -329,14 +434,14 @@ def handle_onboarding(chat_id, text):
             "מעכשיו:\n"
             "🚗 כשהאייפון מתחבר ל-CarPlay, "
             "המערכת תדע שלקחת את הרכב.\n\n"
-            "🏠 כשאתה מכבה את הרכב ליד הבית, "
+            "🏠 כשמכבים את הרכב ליד הבית, "
             "המערכת תשחרר אותו אוטומטית.\n\n"
-            "כתוב ״סיימתי״ כדי לסיים את ההגדרה."
+            "כתוב/י ״סיימתי״ כדי לסיים את ההגדרה."
         )
 
     if step == "carplay_setup_complete":
         if text.strip() != "סיימתי":
-            return 'כשהכול מוכן, כתוב ״סיימתי״.'
+            return 'כשהכול מוכן, כתוב/י ״סיימתי״.'
 
         delete_onboarding_session(chat_id)
 
@@ -347,13 +452,13 @@ def handle_onboarding(chat_id, text):
             "לדוגמה:\n"
             "• מי עם הרכב?\n"
             "• הרכב פנוי?\n"
-            "• אני צריך את הרכב מחר מ-18:00 עד 20:00\n"
+            "• אני צריך/ה את הרכב מחר מ-18:00 עד 20:00\n"
             "• אילו הזמנות יש לי?"
         )
 
     return (
         "משהו השתבש בתהליך ההגדרה. "
-        "נסה שוב או שלח /start."
+        "נסה/י שוב או שלח/י /start."
     )
 
 
@@ -366,7 +471,7 @@ def build_shortcut_setup_message(
     if joined:
         intro = (
             f"הצטרפת בהצלחה למשפחת {family_name} ✅\n"
-            f"ברוך הבא, {user_name}!"
+            f"ברוך/ה הבא/ה, {user_name}!"
         )
     else:
         intro = (
@@ -380,16 +485,55 @@ def build_shortcut_setup_message(
         "עכשיו נחבר את האייפון לרכב 🚗\n\n"
         f"קוד החיבור שלך:\n"
         f"{shortcut_token}\n\n"
-        "1. התקן את Connect Shortcut:\n"
+        "1. התקן/י את Connect Shortcut:\n"
         f"{CONNECT_SHORTCUT_URL}\n\n"
-        "2. התקן את Disconnect Shortcut:\n"
+        "2. התקן/י את Disconnect Shortcut:\n"
         f"{DISCONNECT_SHORTCUT_URL}\n\n"
         "בשני הקיצורים, כשהם מבקשים קוד חיבור, "
-        "הדבק את קוד החיבור שמופיע למעלה.\n\n"
+        "יש להדביק את קוד החיבור שמופיע למעלה.\n\n"
         "אחרי שהתקנת את שני הקיצורים, "
-        "כתוב לי ״התקנתי״ "
+        "כתוב/י לי ״התקנתי״ "
         "ואדריך אותך צעד־צעד בהגדרת האוטומציות של CarPlay."
     )
+
+
+def parse_home_address(text):
+    parts = [part.strip() for part in text.split(",")]
+
+    if len(parts) != 3:
+        return None
+
+    city, street, house_number = parts
+
+    if not city or not street or not house_number:
+        return None
+
+    # Allows values such as 120, 12א, 12/3, etc.,
+    # but still requires at least one digit in the house number.
+    if not any(char.isdigit() for char in house_number):
+        return None
+
+    return city, street, house_number
+
+
+def is_yes(text):
+    return text.strip().lower() in {
+        "כן",
+        "כן.",
+        "נכון",
+        "נכון.",
+        "yes",
+        "y",
+    }
+
+
+def is_no(text):
+    return text.strip().lower() in {
+        "לא",
+        "לא.",
+        "no",
+        "n",
+    }
 
 
 def is_next(text):

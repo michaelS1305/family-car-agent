@@ -27,7 +27,11 @@ def connect_car(connection: CarConnection):
 
 @app.post("/car/disconnect")
 def disconnect_car(connection: CarConnection):
-    return disconnect_user(connection.shortcut_token)
+    return disconnect_user(
+        connection.shortcut_token,
+        connection.latitude,
+        connection.longitude
+    )
 
 @app.get("/car/status")
 def get_car_status():

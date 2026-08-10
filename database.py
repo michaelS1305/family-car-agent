@@ -3,6 +3,9 @@ import os
 import psycopg
 import secrets
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -171,7 +174,7 @@ def insert_user(
 def get_user_by_token(shortcut_token):
     cursor = conn.execute(
         """
-        SELECT id, name, telegram_chat_id
+        SELECT id, name, telegram_chat_id, family_id
         FROM users
         WHERE shortcut_token = %s
         """,
@@ -466,6 +469,18 @@ def get_family_by_code(family_code):
         WHERE family_code = %s
         """,
         (family_code,)
+    )
+
+    return cursor.fetchone()
+
+def get_family_by_id(family_id):
+    cursor = conn.execute(
+        """
+        SELECT id, name, home_address, home_latitude, home_longitude
+        FROM families
+        WHERE id = %s
+        """,
+        (family_id,)
     )
 
     return cursor.fetchone()
