@@ -12,16 +12,9 @@ from database import (
 from geocoding_service import geocode_address
 
 
-CONNECT_SHORTCUT_URL = (
-    "https://www.icloud.com/shortcuts/"
-    "ff71e78ac7ee4a03a844969db841cf80"
-)
+CONNECT_SHORTCUT_URL = "https://www.icloud.com/shortcuts/ff71e78ac7ee4a03a844969db841cf80"
 
-DISCONNECT_SHORTCUT_URL = (
-    "https://www.icloud.com/shortcuts/"
-    "08c79c43d9f5454b803a30d561add06c"
-)
-
+DISCONNECT_SHORTCUT_URL = "https://www.icloud.com/shortcuts/e50d6fc5168e4761b861392ca3b25fa9"
 
 def handle_onboarding(chat_id, text):
     session = get_onboarding_session(chat_id)
