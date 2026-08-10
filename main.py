@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from models import CarConnection
 from datetime import datetime
+from onboarding_service import handle_onboarding
 from telegram_service import send_telegram_message
 from database import (conn,  
                       get_active_driver, 
@@ -55,10 +56,13 @@ def telegram_webhook(update: dict):
     user = get_user_by_telegram_chat_id(chat_id)
 
     if not user:
-        send_telegram_message(
-            chat_id,
-            "המשתמש הזה עדיין לא רשום במערכת."
+        reply = handle_onboarding(
+            chat_id=chat_id,
+            text=text
         )
+
+        send_telegram_message(chat_id, reply)
+
         return {"ok": True}
 
     try:

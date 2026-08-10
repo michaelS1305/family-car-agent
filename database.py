@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import psycopg
+import secrets
 from datetime import datetime
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -50,7 +51,37 @@ def init_db():
     )
     """)
 
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS families (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        family_code TEXT UNIQUE NOT NULL,
+        home_address TEXT NOT NULL,
+        home_latitude DOUBLE PRECISION,
+        home_longitude DOUBLE PRECISION,
+        created_at TEXT NOT NULL
+    )
+    """)
+
+    conn.execute("""
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS family_id INTEGER
+    REFERENCES families(id)
+    """)
+
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS onboarding_sessions (
+        telegram_chat_id BIGINT PRIMARY KEY,
+        step TEXT NOT NULL,
+        data TEXT,
+        updated_at TEXT NOT NULL
+    )
+    """)
+
     conn.commit()
+
+def generate_shortcut_token():
+    return secrets.token_urlsafe(32)
 
 def insert_car_event(driver_name, status):
     event_time = datetime.now().isoformat()
@@ -108,13 +139,31 @@ def get_active_driver():
 
     return cursor.fetchone()
 
-def insert_user(name, phone_number, shortcut_token):
+def insert_user(
+    name,
+    phone_number,
+    shortcut_token,
+    telegram_chat_id,
+    family_id
+):
     conn.execute(
         """
-        INSERT INTO users (name, phone_number, shortcut_token)
-        VALUES (%s, %s, %s)
+        INSERT INTO users (
+            name,
+            phone_number,
+            shortcut_token,
+            telegram_chat_id,
+            family_id
+        )
+        VALUES (%s, %s, %s, %s, %s)
         """,
-        (name, phone_number, shortcut_token)
+        (
+            name,
+            phone_number,
+            shortcut_token,
+            telegram_chat_id,
+            family_id
+        )
     )
 
     conn.commit()
@@ -377,3 +426,95 @@ def get_recent_conversation(user_id, limit=10):
     messages = cursor.fetchall()
 
     return list(reversed(messages))
+
+def create_family(name, family_code, home_address, home_latitude=None, home_longitude=None):
+    created_at = datetime.now().isoformat()
+
+    cursor = conn.execute(
+        """
+        INSERT INTO families (
+            name,
+            family_code,
+            home_address,
+            home_latitude,
+            home_longitude,
+            created_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (
+            name,
+            family_code,
+            home_address,
+            home_latitude,
+            home_longitude,
+            created_at
+        )
+    )
+
+    family_id = cursor.fetchone()[0]
+    conn.commit()
+
+    return family_id
+
+def get_family_by_code(family_code):
+    cursor = conn.execute(
+        """
+        SELECT id, name, home_address, home_latitude, home_longitude
+        FROM families
+        WHERE family_code = %s
+        """,
+        (family_code,)
+    )
+
+    return cursor.fetchone()
+
+def get_onboarding_session(chat_id):
+    cursor = conn.execute(
+        """
+        SELECT step, data
+        FROM onboarding_sessions
+        WHERE telegram_chat_id = %s
+        """,
+        (chat_id,)
+    )
+
+    return cursor.fetchone()
+
+def save_onboarding_session(chat_id, step, data=None):
+    conn.execute(
+        """
+        INSERT INTO onboarding_sessions (
+            telegram_chat_id,
+            step,
+            data,
+            updated_at
+        )
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (telegram_chat_id)
+        DO UPDATE SET
+            step = EXCLUDED.step,
+            data = EXCLUDED.data,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (
+            chat_id,
+            step,
+            data,
+            datetime.now().isoformat()
+        )
+    )
+
+    conn.commit()
+
+def delete_onboarding_session(chat_id):
+    conn.execute(
+        """
+        DELETE FROM onboarding_sessions
+        WHERE telegram_chat_id = %s
+        """,
+        (chat_id,)
+    )
+
+    conn.commit()
