@@ -10,11 +10,12 @@ from database import (
     delete_onboarding_session,
 )
 from geocoding_service import geocode_address
+from telegram_service import send_telegram_message
 
 
-CONNECT_SHORTCUT_URL = "https://www.icloud.com/shortcuts/ff71e78ac7ee4a03a844969db841cf80"
+CONNECT_SHORTCUT_URL = "https://www.icloud.com/shortcuts/7a4ba428c6464f95894564e0f20e6f76"
 
-DISCONNECT_SHORTCUT_URL = "https://www.icloud.com/shortcuts/e50d6fc5168e4761b861392ca3b25fa9"
+DISCONNECT_SHORTCUT_URL = "https://www.icloud.com/shortcuts/825de2b3834640f4888b9e265454e22b"
 
 def handle_onboarding(chat_id, text):
     session = get_onboarding_session(chat_id)
@@ -243,6 +244,7 @@ def handle_onboarding(chat_id, text):
         )
 
         return build_shortcut_setup_message(
+            chat_id=chat_id,
             family_name=data["family_name"],
             user_name=user_name,
             shortcut_token=shortcut_token,
@@ -299,6 +301,7 @@ def handle_onboarding(chat_id, text):
         )
 
         return build_shortcut_setup_message(
+            chat_id=chat_id,
             family_name=data["family_name"],
             user_name=user_name,
             shortcut_token=shortcut_token,
@@ -456,6 +459,7 @@ def handle_onboarding(chat_id, text):
 
 
 def build_shortcut_setup_message(
+    chat_id,
     family_name,
     user_name,
     shortcut_token,
@@ -473,22 +477,29 @@ def build_shortcut_setup_message(
             f"שם: {user_name}"
         )
 
+    # Send the connection code as a separate message
+    # so it is easy to copy.
+    send_telegram_message(
+        chat_id,
+        shortcut_token
+    )
+
     return (
         f"{intro}\n\n"
         "עכשיו נחבר את האייפון לרכב 🚗\n\n"
-        f"קוד החיבור שלך:\n"
-        f"{shortcut_token}\n\n"
+        "קוד החיבור נשלח אליך בהודעה נפרדת "
+        "כדי שיהיה קל להעתיק אותו.\n\n"
         "1. התקן/י את Connect Shortcut:\n"
         f"{CONNECT_SHORTCUT_URL}\n\n"
         "2. התקן/י את Disconnect Shortcut:\n"
         f"{DISCONNECT_SHORTCUT_URL}\n\n"
-        "בשני הקיצורים, כשהם מבקשים קוד חיבור, "
-        "יש להדביק את קוד החיבור שמופיע למעלה.\n\n"
+        "בזמן התקנת כל אחד מהקיצורים, "
+        "כשהוא מבקש קוד חיבור, הדבק/י את הקוד "
+        "שקיבלת בהודעה הנפרדת.\n\n"
         "אחרי שהתקנת את שני הקיצורים, "
         "כתוב/י לי ״התקנתי״ "
         "ואדריך אותך צעד־צעד בהגדרת האוטומציות של CarPlay."
     )
-
 
 def parse_home_address(text):
     parts = [part.strip() for part in text.split(",")]
