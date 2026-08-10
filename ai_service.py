@@ -7,7 +7,9 @@ from database import (
     create_reservation,
     get_user_reservations,
     cancel_reservation,
-    update_reservation
+    update_reservation,
+    save_conversation_message,
+    get_recent_conversation
 )
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -134,6 +136,21 @@ def update_reservation_tool(
 def ask_agent(text, user_id, user_name, chat_id):
     now = datetime.now(ZoneInfo("Asia/Jerusalem"))
 
+    # Load recent conversation BEFORE saving the current message
+    recent_messages = get_recent_conversation(user_id, limit=10)
+
+    conversation_history = "\n".join(
+        f"{role}: {content}"
+        for role, content in recent_messages
+    )
+
+    # Save current user message
+    save_conversation_message(
+        user_id=user_id,
+        role="user",
+        content=text
+    )
+
     response = client.models.generate_content(
         model="gemini-3.1-flash-lite",
         contents=f"""
@@ -143,7 +160,10 @@ Current user:
 - user_id: {user_id}
 - name: {user_name}
 
-User message:
+Recent conversation:
+{conversation_history}
+
+Current user message:
 {text}
 """,
         config={
@@ -159,6 +179,12 @@ GENERAL RULES:
 - Never invent car status, drivers, reservations, times, or history.
 - Never claim an action succeeded unless the relevant tool returned success.
 - If a request is outside the available capabilities, say briefly that it is not supported yet.
+
+CONVERSATION CONTEXT:
+- Use the recent conversation to understand short follow-up messages such as "yes", "no", "until 21", "that one", or "change it".
+- When the assistant previously asked the user to confirm a specific reservation change or cancellation, a clear affirmative response such as "yes", "כן", "yep", or similar counts as confirmation for that exact action.
+- Never treat an unrelated "yes" as confirmation.
+- If the conversation context is not clear enough, ask a short clarification question instead of guessing.
 
 CAR STATUS:
 - Use get_car_status_tool when the user asks who has the car or whether it is currently available.
@@ -179,16 +205,19 @@ MODIFYING RESERVATIONS:
 - First use get_user_reservations_tool to identify the relevant reservation.
 - Never modify another user's reservation.
 - If multiple reservations could match, ask which one the user means.
-- Before modifying a reservation, make sure the user's request clearly and explicitly confirms the change.
-- Only then use update_reservation_tool.
-- If the new time conflicts with another reservation, leave the original reservation unchanged.
+- Before modifying a reservation, clearly state the exact old reservation and the exact requested new reservation and ask for confirmation.
+- Only after a clear confirmation in the current conversation context, use update_reservation_tool.
+- If update_reservation_tool succeeds, clearly state the final reservation details.
+- If it fails, clearly explain why and confirm that the original reservation was not changed.
 
 CANCELLING RESERVATIONS:
 - First use get_user_reservations_tool to identify the relevant reservation.
 - Never cancel another user's reservation.
 - If multiple reservations could match, ask which one the user means.
-- Before cancelling, make sure the user clearly and explicitly confirms the cancellation.
-- Only then use cancel_reservation_tool.
+- Before cancelling, clearly state the exact reservation and ask for confirmation.
+- Only after a clear confirmation in the current conversation context, use cancel_reservation_tool.
+- If cancellation succeeds, clearly state which reservation was cancelled.
+- If it fails, clearly explain why.
 
 IMPORTANT:
 - A reservation and the current car status are different things.
@@ -207,4 +236,13 @@ IMPORTANT:
         }
     )
 
-    return response.text
+    reply = response.text
+
+    # Save assistant response
+    save_conversation_message(
+        user_id=user_id,
+        role="assistant",
+        content=reply
+    )
+
+    return reply

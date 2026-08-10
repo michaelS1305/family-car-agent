@@ -39,6 +39,17 @@ def init_db():
     )
     """)
 
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS conversation_messages (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    """)
+
     conn.commit()
 
 def insert_car_event(driver_name, status):
@@ -329,3 +340,40 @@ def update_reservation(reservation_id, user_id, start_time, end_time):
         "success": True,
         "message": "Reservation updated"
     }
+
+def save_conversation_message(user_id, role, content):
+    conn.execute(
+        """
+        INSERT INTO conversation_messages (
+            user_id,
+            role,
+            content,
+            created_at
+        )
+        VALUES (%s, %s, %s, %s)
+        """,
+        (
+            user_id,
+            role,
+            content,
+            datetime.now().isoformat()
+        )
+    )
+
+    conn.commit()
+
+def get_recent_conversation(user_id, limit=10):
+    cursor = conn.execute(
+        """
+        SELECT role, content
+        FROM conversation_messages
+        WHERE user_id = %s
+        ORDER BY id DESC
+        LIMIT %s
+        """,
+        (user_id, limit)
+    )
+
+    messages = cursor.fetchall()
+
+    return list(reversed(messages))
