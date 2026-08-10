@@ -1,4 +1,15 @@
+# Local database
 family_car.db
+
+# Python
 __pycache__/
 *.pyc
+.venv/
+venv/
+
+# Secrets / local environment
 .env
+.env.*
+
+# OS / editor noise
+.DS_Store

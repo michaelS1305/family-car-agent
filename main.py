@@ -8,7 +8,8 @@ from database import (conn,
                       init_db, 
                       get_user_by_telegram_chat_id,
                       cancel_reservation,
-                      update_reservation)
+                      update_reservation,
+                       get_onboarding_session)
 from car_service import connect_user, disconnect_user
 from ai_service import ask_agent
 
@@ -54,14 +55,19 @@ def telegram_webhook(update: dict):
     text = message.get("text", "").strip()
 
     user = get_user_by_telegram_chat_id(chat_id)
+    onboarding_session = get_onboarding_session(chat_id)
 
-    if not user:
+    # If the user is not registered yet,
+    # or still has an active onboarding session,
+    # continue onboarding.
+    if not user or onboarding_session:
         reply = handle_onboarding(
             chat_id=chat_id,
             text=text
         )
 
-        send_telegram_message(chat_id, reply)
+        if reply:
+            send_telegram_message(chat_id, reply)
 
         return {"ok": True}
 
