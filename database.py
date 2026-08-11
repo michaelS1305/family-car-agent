@@ -89,6 +89,13 @@ def init_db():
 
     conn.commit()
 
+
+def rollback_connection():
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+
 def generate_shortcut_token():
     return secrets.token_urlsafe(32)
 
@@ -258,83 +265,106 @@ def get_recent_events(family_id, limit=10):
 
     return cursor.fetchall()
 
-def get_conflicting_reservation(family_id, start_time, end_time, exclude_reservation_id=None):
-    cursor = conn.execute(
-        """
-        SELECT r.id, r.user_id, r.start_time, r.end_time
-        FROM reservations r
-        JOIN users u ON u.id = r.user_id
-        WHERE u.family_id = %s
-          AND r.status = 'active'
-          AND r.start_time < %s
-          AND r.end_time > %s
-          AND (%s IS NULL OR r.id != %s)
-        ORDER BY r.start_time
-        LIMIT 1
-        """,
-        (
-            family_id,
-            end_time,
-            start_time,
-            exclude_reservation_id,
-            exclude_reservation_id
+def get_conflicting_reservation(
+    family_id,
+    start_time,
+    end_time,
+    exclude_reservation_id=None
+):
+    if exclude_reservation_id is None:
+        cursor = conn.execute(
+            """
+            SELECT r.id, r.user_id, r.start_time, r.end_time
+            FROM reservations r
+            JOIN users u ON u.id = r.user_id
+            WHERE u.family_id = %s
+              AND r.status = 'active'
+              AND r.start_time < %s
+              AND r.end_time > %s
+            ORDER BY r.start_time
+            LIMIT 1
+            """,
+            (family_id, end_time, start_time)
         )
-    )
+    else:
+        cursor = conn.execute(
+            """
+            SELECT r.id, r.user_id, r.start_time, r.end_time
+            FROM reservations r
+            JOIN users u ON u.id = r.user_id
+            WHERE u.family_id = %s
+              AND r.status = 'active'
+              AND r.start_time < %s
+              AND r.end_time > %s
+              AND r.id != %s
+            ORDER BY r.start_time
+            LIMIT 1
+            """,
+            (
+                family_id,
+                end_time,
+                start_time,
+                exclude_reservation_id
+            )
+        )
 
     return cursor.fetchone()
 
 def create_reservation(user_id, start_time, end_time):
-    user = conn.execute(
-        """
-        SELECT family_id
-        FROM users
-        WHERE id = %s
-        """,
-        (user_id,)
-    ).fetchone()
+    try:
+        user = conn.execute(
+            """
+            SELECT family_id
+            FROM users
+            WHERE id = %s
+            """,
+            (user_id,)
+        ).fetchone()
 
-    if not user or user[0] is None:
-        return {
-            "success": False,
-            "message": "User family not found"
-        }
+        if not user or user[0] is None:
+            return {
+                "success": False,
+                "message": "User family not found"
+            }
 
-    family_id = user[0]
-    conflict = get_conflicting_reservation(
-        family_id,
-        start_time,
-        end_time
-    )
-
-    if conflict:
-        return {
-            "success": False,
-            "message": "Car is already reserved for this time"
-        }
-
-    created_at = datetime.now().isoformat()
-
-    conn.execute(
-        """
-        INSERT INTO reservations (
-            user_id,
+        family_id = user[0]
+        conflict = get_conflicting_reservation(
+            family_id,
             start_time,
-            end_time,
-            status,
-            created_at
+            end_time
         )
-        VALUES (%s, %s, %s, 'active', %s)
-        """,
-        (user_id, start_time, end_time, created_at)
-    )
 
-    conn.commit()
+        if conflict:
+            return {
+                "success": False,
+                "message": "Car is already reserved for this time"
+            }
 
-    return {
-        "success": True,
-        "message": "Reservation created"
-    }
+        created_at = datetime.now().isoformat()
 
+        conn.execute(
+            """
+            INSERT INTO reservations (
+                user_id,
+                start_time,
+                end_time,
+                status,
+                created_at
+            )
+            VALUES (%s, %s, %s, 'active', %s)
+            """,
+            (user_id, start_time, end_time, created_at)
+        )
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "message": "Reservation created"
+        }
+    except Exception:
+        rollback_connection()
+        raise
 def get_family_reservations(family_id):
     cursor = conn.execute(
         """
@@ -375,108 +405,114 @@ def get_reservation_by_id(reservation_id):
     return cursor.fetchone()
 
 def cancel_reservation(reservation_id, user_id):
-    reservation = get_reservation_by_id(reservation_id)
+    try:
+        reservation = get_reservation_by_id(reservation_id)
 
-    if not reservation:
+        if not reservation:
+            return {
+                "success": False,
+                "message": "Reservation not found"
+            }
+
+        if reservation[1] != user_id:
+            return {
+                "success": False,
+                "message": "You cannot cancel another user's reservation"
+            }
+
+        if reservation[4] != "active":
+            return {
+                "success": False,
+                "message": "Reservation is not active"
+            }
+
+        conn.execute(
+            """
+            UPDATE reservations
+            SET status = 'cancelled'
+            WHERE id = %s
+            """,
+            (reservation_id,)
+        )
+
+        conn.commit()
+
         return {
-            "success": False,
-            "message": "Reservation not found"
+            "success": True,
+            "message": "Reservation cancelled"
         }
-
-    if reservation[1] != user_id:
-        return {
-            "success": False,
-            "message": "You cannot cancel another user's reservation"
-        }
-
-    if reservation[4] != "active":
-        return {
-            "success": False,
-            "message": "Reservation is not active"
-        }
-
-    conn.execute(
-        """
-        UPDATE reservations
-        SET status = 'cancelled'
-        WHERE id = %s
-        """,
-        (reservation_id,)
-    )
-
-    conn.commit()
-
-    return {
-        "success": True,
-        "message": "Reservation cancelled"
-    }
-
+    except Exception:
+        rollback_connection()
+        raise
 def update_reservation(reservation_id, user_id, start_time, end_time):
-    reservation = get_reservation_by_id(reservation_id)
+    try:
+        reservation = get_reservation_by_id(reservation_id)
 
-    if not reservation:
+        if not reservation:
+            return {
+                "success": False,
+                "message": "Reservation not found"
+            }
+
+        if reservation[1] != user_id:
+            return {
+                "success": False,
+                "message": "You cannot modify another user's reservation"
+            }
+
+        if reservation[4] != "active":
+            return {
+                "success": False,
+                "message": "Reservation is not active"
+            }
+
+        family = conn.execute(
+            """
+            SELECT family_id
+            FROM users
+            WHERE id = %s
+            """,
+            (user_id,)
+        ).fetchone()
+
+        if not family or family[0] is None:
+            return {
+                "success": False,
+                "message": "User family not found"
+            }
+
+        conflict = get_conflicting_reservation(
+            family[0],
+            start_time,
+            end_time,
+            exclude_reservation_id=reservation_id
+        )
+
+        if conflict:
+            return {
+                "success": False,
+                "message": "Car is already reserved for this time"
+            }
+
+        conn.execute(
+            """
+            UPDATE reservations
+            SET start_time = %s,
+                end_time = %s
+            WHERE id = %s
+            """,
+            (start_time, end_time, reservation_id)
+        )
+
+        conn.commit()
+
         return {
-            "success": False,
-            "message": "Reservation not found"
+            "success": True,
+            "message": "Reservation updated"
         }
-
-    if reservation[1] != user_id:
-        return {
-            "success": False,
-            "message": "You cannot modify another user's reservation"
-        }
-
-    if reservation[4] != "active":
-        return {
-            "success": False,
-            "message": "Reservation is not active"
-        }
-
-    family = conn.execute(
-        """
-        SELECT family_id
-        FROM users
-        WHERE id = %s
-        """,
-        (user_id,)
-    ).fetchone()
-
-    if not family or family[0] is None:
-        return {
-            "success": False,
-            "message": "User family not found"
-        }
-
-    conflict = get_conflicting_reservation(
-        family[0],
-        start_time,
-        end_time,
-        exclude_reservation_id=reservation_id
-    )
-
-    if conflict:
-        return {
-            "success": False,
-            "message": "Car is already reserved for this time"
-        }
-
-    conn.execute(
-        """
-        UPDATE reservations
-        SET start_time = %s,
-            end_time = %s
-        WHERE id = %s
-        """,
-        (start_time, end_time, reservation_id)
-    )
-
-    conn.commit()
-
-    return {
-        "success": True,
-        "message": "Reservation updated"
-    }
-
+    except Exception:
+        rollback_connection()
+        raise
 def save_conversation_message(user_id, role, content):
     conn.execute(
         """
