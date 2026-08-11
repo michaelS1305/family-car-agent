@@ -1,3 +1,4 @@
+import traceback
 from fastapi import FastAPI
 from models import CarConnection
 from onboarding_service import handle_onboarding
@@ -73,9 +74,11 @@ def telegram_webhook(update: dict):
         send_telegram_message(chat_id, reply)
 
     except Exception:
+        traceback.print_exc()
+
         send_telegram_message(
             chat_id,
-            "אני לא זמין כרגע, נסה שוב בעוד כמה דקות.",
+            "אני לא זמין כרגע, נסה שוב בעוד כמה דקות."
         )
 
     return {"ok": True}
