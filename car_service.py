@@ -1,6 +1,26 @@
-from database import get_active_driver, insert_car_event, get_user_by_token, get_family_by_id
+from database import (
+    get_active_driver,
+    insert_car_event,
+    get_user_by_token,
+    get_family_by_id,
+    get_users_by_family_id,
+)
 from telegram_service import send_telegram_message
 from math import radians, sin, cos, sqrt, atan2
+
+
+def notify_family(family_id, message):
+    family_users = get_users_by_family_id(family_id)
+
+    for family_user in family_users:
+        telegram_chat_id = family_user[2]
+
+        if telegram_chat_id is not None:
+            send_telegram_message(
+                telegram_chat_id,
+                message
+            )
+
 
 def connect_user(shortcut_token):
     user = get_user_by_token(shortcut_token)
@@ -10,7 +30,14 @@ def connect_user(shortcut_token):
             "message": "Invalid shortcut token"
         }
 
-    active_driver = get_active_driver()
+    family_id = user[3]
+
+    if family_id is None:
+        return {
+            "message": "User family not found"
+        }
+
+    active_driver = get_active_driver(family_id)
 
     if active_driver:
         if active_driver[0] == user[1]:
@@ -20,16 +47,25 @@ def connect_user(shortcut_token):
             }
 
         # Handover: close previous driver's active session
-        insert_car_event(active_driver[0], "disconnected")
+        insert_car_event(
+            active_driver[0],
+            "disconnected",
+            family_id
+        )
 
-    result = insert_car_event(user[1], "connected")
+    result = insert_car_event(
+        user[1],
+        "connected",
+        family_id
+    )
 
-    send_telegram_message(
-        user[2],
-        f"{user[1]} לקח\ה את הרכב 🚗"
+    notify_family(
+        family_id,
+        f"{user[1]} לקח/ה את הרכב 🚗"
     )
 
     return result
+
 
 def disconnect_user(shortcut_token, latitude=None, longitude=None):
     user = get_user_by_token(shortcut_token)
@@ -39,7 +75,14 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
             "message": "Invalid shortcut token"
         }
 
-    active_driver = get_active_driver()
+    family_id = user[3]
+
+    if family_id is None:
+        return {
+            "message": "User family not found"
+        }
+
+    active_driver = get_active_driver(family_id)
 
     if not active_driver:
         return {
@@ -57,7 +100,7 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
             "message": "Location is required"
         }
 
-    family = get_family_by_id(user[3])
+    family = get_family_by_id(family_id)
 
     if not family:
         return {
@@ -85,10 +128,14 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
             "distance_from_home": round(distance)
         }
 
-    result = insert_car_event(user[1], "disconnected")
+    result = insert_car_event(
+        user[1],
+        "disconnected",
+        family_id
+    )
 
-    send_telegram_message(
-        user[2],
+    notify_family(
+        family_id,
         "הרכב פנוי עכשיו 🟢"
     )
 
@@ -97,6 +144,7 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
         "distance_from_home": round(distance),
         "result": result
     }
+
 
 def calculate_distance_meters(lat1, lon1, lat2, lon2):
     earth_radius = 6371000

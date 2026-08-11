@@ -1,15 +1,12 @@
 from fastapi import FastAPI
 from models import CarConnection
-from datetime import datetime
 from onboarding_service import handle_onboarding
 from telegram_service import send_telegram_message
-from database import (conn,  
-                      get_active_driver, 
-                      init_db, 
-                      get_user_by_telegram_chat_id,
-                      cancel_reservation,
-                      update_reservation,
-                       get_onboarding_session)
+from database import (
+    init_db,
+    get_user_by_telegram_chat_id,
+    get_onboarding_session,
+)
 from car_service import connect_user, disconnect_user
 from ai_service import ask_agent
 
@@ -17,36 +14,25 @@ app = FastAPI()
 
 init_db()
 
+
 @app.get("/")
 def home():
     return {"message": "Family Car Agent is running"}
 
+
 @app.post("/car/connect")
 def connect_car(connection: CarConnection):
     return connect_user(connection.shortcut_token)
+
 
 @app.post("/car/disconnect")
 def disconnect_car(connection: CarConnection):
     return disconnect_user(
         connection.shortcut_token,
         connection.latitude,
-        connection.longitude
+        connection.longitude,
     )
 
-@app.get("/car/status")
-def get_car_status():
-    active_driver = get_active_driver()
-
-    if not active_driver:
-        return {
-            "status": "available",
-            "current_driver": None
-        }
-
-    return {
-        "status": "in_use",
-        "current_driver": active_driver[0]
-    }
 
 @app.post("/telegram/webhook")
 def telegram_webhook(update: dict):
@@ -67,7 +53,7 @@ def telegram_webhook(update: dict):
     if not user or onboarding_session:
         reply = handle_onboarding(
             chat_id=chat_id,
-            text=text
+            text=text,
         )
 
         if reply:
@@ -80,7 +66,8 @@ def telegram_webhook(update: dict):
             text,
             user_id=user[0],
             user_name=user[1],
-            chat_id=chat_id
+            chat_id=chat_id,
+            family_id=user[3],
         )
 
         send_telegram_message(chat_id, reply)
@@ -88,7 +75,7 @@ def telegram_webhook(update: dict):
     except Exception:
         send_telegram_message(
             chat_id,
-            "אני לא זמין כרגע, נסה שוב בעוד כמה דקות."
+            "אני לא זמין כרגע, נסה שוב בעוד כמה דקות.",
         )
 
     return {"ok": True}

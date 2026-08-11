@@ -3,6 +3,8 @@ import json
 from database import (
     create_family,
     get_family_by_code,
+    get_family_by_name_and_location,
+    get_family_by_location,
     insert_user,
     generate_shortcut_token,
     get_onboarding_session,
@@ -17,6 +19,8 @@ CONNECT_SHORTCUT_URL = "https://www.icloud.com/shortcuts/7a4ba428c6464f95894564e
 
 DISCONNECT_SHORTCUT_URL = "https://www.icloud.com/shortcuts/825de2b3834640f4888b9e265454e22b"
 
+BOT_URL = "https://t.me/family_car_agent_bot"
+
 def handle_onboarding(chat_id, text):
     session = get_onboarding_session(chat_id)
 
@@ -24,7 +28,10 @@ def handle_onboarding(chat_id, text):
     # START
     # -------------------------------------------------
 
-    if text == "/start" and not session:
+    if text == "/start":
+        if session:
+            delete_onboarding_session(chat_id)
+
         save_onboarding_session(
             chat_id,
             step="choose_action"
@@ -68,7 +75,7 @@ def handle_onboarding(chat_id, text):
                 chat_id,
                 step="join_family_code"
             )
-            return "מה הקוד המשפחתי?"
+            return "מה שם המשפחה שאליה תרצה/י להצטרף?\n\nלדוגמה: כהן"
 
         return (
             "כתוב/י 1 כדי ליצור משפחה "
@@ -94,15 +101,19 @@ def handle_onboarding(chat_id, text):
         )
 
         return (
-            "בחר/י קוד משפחתי.\n"
-            "בני המשפחה האחרים ישתמשו בו פעם אחת כדי להצטרף."
+            "בחר/י קוד משפחתי בן 6 ספרות.\n"
+            "בני המשפחה האחרים ישתמשו בו פעם אחת כדי להצטרף.\n\n"
+            "לדוגמה: 482731"
         )
 
     if step == "create_family_code":
         family_code = text.strip()
 
-        if not family_code:
-            return "יש להזין קוד משפחתי."
+        if not family_code.isdigit() or len(family_code) != 6:
+            return (
+                "הקוד המשפחתי חייב להכיל בדיוק 6 ספרות.\n"
+                "לדוגמה: 482731"
+            )
 
         existing_family = get_family_by_code(family_code)
 
@@ -182,6 +193,19 @@ def handle_onboarding(chat_id, text):
 
     if step == "confirm_family_address":
         if is_yes(text):
+            existing_family = get_family_by_location(
+                data["home_latitude"],
+                data["home_longitude"]
+            )
+
+            if existing_family:
+                delete_onboarding_session(chat_id)
+                return (
+                    "כבר קיימת משפחה הרשומה בכתובת הזאת 🏠\n\n"
+                    "אם זו המשפחה שלך, אין צורך ליצור משפחה חדשה.\n"
+                    "שלח/י /start ובחר/י ״להצטרף למשפחה קיימת״."
+                )
+
             save_onboarding_session(
                 chat_id,
                 step="create_user_name",
@@ -243,6 +267,17 @@ def handle_onboarding(chat_id, text):
             step="waiting_for_shortcuts_install"
         )
 
+        send_telegram_message(
+            chat_id,
+            (
+                "קוד המשפחה שלך הוא:\n"
+                f"{data['family_code']}\n\n"
+                "שמור/י את הקוד הזה. בני המשפחה יצטרכו אותו פעם אחת כדי להצטרף.\n\n"
+                "אפשר לשלוח להם גם את הקישור לבוט:\n"
+                f"{BOT_URL}"
+            )
+        )
+
         return build_shortcut_setup_message(
             chat_id=chat_id,
             family_name=data["family_name"],
@@ -256,37 +291,132 @@ def handle_onboarding(chat_id, text):
     # -------------------------------------------------
 
     if step == "join_family_code":
-        family_code = text.strip()
-        family = get_family_by_code(family_code)
+        family_name = text.strip()
 
-        if not family:
+        if not family_name:
+            return "יש להזין את שם המשפחה."
+
+        data["family_name"] = family_name
+        save_onboarding_session(chat_id, step="join_family_address", data=json.dumps(data))
+
+        return (
+            f"מעולה. עכשיו נוודא שזו משפחת {family_name} הנכונה 🏠\n\n"
+            "מה כתובת הבית של המשפחה?\n"
+            "כתוב/י בפורמט:\nעיר, רחוב, מספר בית\n\n"
+            "לדוגמה:\nתל אביב, דיזנגוף, 120"
+        )
+
+    if step == "join_family_address":
+        parsed_address = parse_home_address(text)
+        if not parsed_address:
             return (
-                "לא מצאתי משפחה עם הקוד הזה.\n"
-                "בדוק/י את הקוד ונסה/י שוב."
+                "הכתובת לא נראית מלאה.\n\n"
+                "נסה/י שוב בפורמט:\nעיר, רחוב, מספר בית\n\n"
+                "לדוגמה:\nתל אביב, דיזנגוף, 120"
             )
 
-        data["family_id"] = family[0]
-        data["family_name"] = family[1]
+        city, street, house_number = parsed_address
+
+        try:
+            location = geocode_address(city=city, street=street, house_number=house_number)
+        except Exception:
+            return "לא הצלחתי לבדוק את הכתובת כרגע.\nנסה/י שוב בעוד כמה רגעים."
+
+        if not location:
+            return (
+                "לא הצלחתי למצוא את הכתובת הזאת 📍\n\n"
+                "בדוק/י שהעיר, הרחוב ומספר הבית נכונים ונסה/י שוב."
+            )
+
+        data["join_home_latitude"] = location["latitude"]
+        data["join_home_longitude"] = location["longitude"]
+        data["join_geocoded_address"] = location["address"]
 
         save_onboarding_session(
             chat_id,
-            step="join_user_name",
+            step="confirm_join_family_address",
             data=json.dumps(data)
         )
 
         return (
-            f"מצאתי את משפחת {family[1]} ✅\n"
-            "מה השם שלך?"
+            "מצאתי את הכתובת הבאה 📍\n\n"
+            f"{location['address']}\n\n"
+            "האם זו כתובת הבית של המשפחה?\n"
+            "כתוב/י ״כן״ או ״לא״."
         )
+
+    if step == "confirm_join_family_address":
+        if is_no(text):
+            for key in ("join_home_latitude", "join_home_longitude", "join_geocoded_address"):
+                data.pop(key, None)
+
+            save_onboarding_session(chat_id, step="join_family_address", data=json.dumps(data))
+            return "אין בעיה.\nהזן/י שוב את כתובת הבית בפורמט:\nעיר, רחוב, מספר בית"
+
+        if not is_yes(text):
+            return "כתוב/י ״כן״ אם הכתובת נכונה או ״לא״ כדי להזין אותה מחדש."
+
+        family = get_family_by_name_and_location(
+            data["family_name"],
+            data["join_home_latitude"],
+            data["join_home_longitude"]
+        )
+
+        if not family:
+            return (
+                "לא מצאתי משפחה שמתאימה לשם ולכתובת שהזנת.\n\n"
+                "בדוק/י את הפרטים עם בן/בת המשפחה שיצרו את המשפחה, "
+                "או שלח/י /start כדי להתחיל מחדש."
+            )
+
+        data["family_id"] = family[0]
+        data["family_name"] = family[1]
+        data["code_attempts"] = 0
+        save_onboarding_session(chat_id, step="join_verify_family_code", data=json.dumps(data))
+
+        return (
+            f"מצאתי את משפחת {family[1]} ✅\n\n"
+            "עכשיו הזן/י את הקוד המשפחתי בן 6 הספרות "
+            "שקיבלתם בזמן יצירת המשפחה."
+        )
+
+    if step == "join_verify_family_code":
+        family_code = text.strip()
+
+        if not family_code.isdigit() or len(family_code) != 6:
+            return "הקוד המשפחתי חייב להכיל בדיוק 6 ספרות.\nנסה/י שוב."
+
+        family = get_family_by_code(family_code)
+
+        if not family or family[0] != data["family_id"]:
+            attempts = data.get("code_attempts", 0) + 1
+            data["code_attempts"] = attempts
+
+            if attempts >= 10:
+                delete_onboarding_session(chat_id)
+                return (
+                    "בוצעו 10 ניסיונות עם קוד לא נכון, ולכן עצרתי את ההצטרפות.\n\n"
+                    "בדוק/י עם בן/בת המשפחה שיצרו את המשפחה מהו הקוד שקיבלו "
+                    "בתהליך ההרשמה, ואז שלח/י /start כדי להתחיל מחדש."
+                )
+
+            save_onboarding_session(chat_id, step="join_verify_family_code", data=json.dumps(data))
+            return (
+                "הקוד המשפחתי שהוזן אינו נכון.\n\n"
+                "בקש/י מבן/בת המשפחה שיצרו את המשפחה לבדוק את הקוד "
+                "שקיבלו בתהליך ההרשמה ונסה/י שוב.\n\n"
+                f"נשארו {10 - attempts} ניסיונות."
+            )
+
+        save_onboarding_session(chat_id, step="join_user_name", data=json.dumps(data))
+        return "הקוד נכון ✅\nמה השם שלך?"
 
     if step == "join_user_name":
         user_name = text.strip()
-
         if not user_name:
             return "יש להזין שם."
 
         shortcut_token = generate_shortcut_token()
-
         insert_user(
             name=user_name,
             phone_number=None,
@@ -295,10 +425,7 @@ def handle_onboarding(chat_id, text):
             family_id=data["family_id"]
         )
 
-        save_onboarding_session(
-            chat_id,
-            step="waiting_for_shortcuts_install"
-        )
+        save_onboarding_session(chat_id, step="waiting_for_shortcuts_install")
 
         return build_shortcut_setup_message(
             chat_id=chat_id,
@@ -432,6 +559,11 @@ def handle_onboarding(chat_id, text):
             "המערכת תדע שלקחת את הרכב.\n\n"
             "🏠 כשמכבים את הרכב ליד הבית, "
             "המערכת תשחרר אותו אוטומטית.\n\n"
+            "חשוב: בפעם הראשונה שהאוטומציות פועלות, האייפון עשוי להציג "
+            "בקשות הרשאה עבור הקיצורים, המיקום או החיבור לשרת. "
+            "יש לאשר את ההרשאות ולאפשר אותן גם להמשך כשמופיעה אפשרות כזאת. "
+            "בלי האישור הראשוני, החיבור או הניתוק האוטומטי עלולים לא לעבוד.\n\n"
+            "אחרי האישור הראשוני, הכול אמור לעבוד אוטומטית.\n\n"
             "כתוב/י ״סיימתי״ כדי לסיים את ההגדרה."
         )
 
@@ -477,27 +609,19 @@ def build_shortcut_setup_message(
             f"שם: {user_name}"
         )
 
-    # Send the connection code as a separate message
-    # so it is easy to copy.
-    send_telegram_message(
-        chat_id,
-        shortcut_token
-    )
+    send_telegram_message(chat_id, shortcut_token)
 
     return (
         f"{intro}\n\n"
         "עכשיו נחבר את האייפון לרכב 🚗\n\n"
-        "קוד החיבור נשלח אליך בהודעה נפרדת "
-        "כדי שיהיה קל להעתיק אותו.\n\n"
-        "1. התקן/י את Connect Shortcut:\n"
+        "שלחתי לך את קוד החיבור בהודעה נפרדת כדי שיהיה קל להעתיק אותו.\n\n"
+        "1. פתח/י את הקישור של Connect. ייפתח חלון באפליקציית ״קיצורים״.\n"
+        "לחץ/י על ״הוסף קיצור״, ורק אז הדבק/י את קוד החיבור כשמתבקשים.\n"
         f"{CONNECT_SHORTCUT_URL}\n\n"
-        "2. התקן/י את Disconnect Shortcut:\n"
+        "2. עשה/י בדיוק אותו דבר עם Disconnect:\n"
+        "פתח/י את הקישור, לחץ/י על ״הוסף קיצור״, ואז הדבק/י את אותו קוד החיבור.\n"
         f"{DISCONNECT_SHORTCUT_URL}\n\n"
-        "בזמן התקנת כל אחד מהקיצורים, "
-        "כשהוא מבקש קוד חיבור, הדבק/י את הקוד "
-        "שקיבלת בהודעה הנפרדת.\n\n"
-        "אחרי שהתקנת את שני הקיצורים, "
-        "כתוב/י לי ״התקנתי״ "
+        "אחרי שהתקנת את שני הקיצורים, כתוב/י לי ״התקנתי״ "
         "ואדריך אותך צעד־צעד בהגדרת האוטומציות של CarPlay."
     )
 
