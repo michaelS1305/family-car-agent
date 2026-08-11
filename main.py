@@ -14,6 +14,7 @@ from car_service import connect_user, disconnect_user
 from ai_service import ask_agent
 
 app = FastAPI()
+
 init_db()
 
 
@@ -50,6 +51,9 @@ def telegram_webhook(update: dict):
         user = get_user_by_telegram_chat_id(chat_id)
         onboarding_session = get_onboarding_session(chat_id)
 
+        # If the user is not registered yet,
+        # or still has an active onboarding session,
+        # continue onboarding.
         if not user or onboarding_session:
             reply = handle_onboarding(
                 chat_id=chat_id,
@@ -73,28 +77,26 @@ def telegram_webhook(update: dict):
 
         return {"ok": True}
 
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
 
-        # Recover a psycopg connection that may have been left
-        # in a failed transaction state by the original exception.
+        # Recover the shared psycopg connection if an unexpected
+        # database error left the current transaction aborted.
         try:
             conn.rollback()
         except Exception:
             traceback.print_exc()
 
-        # TEMPORARY DEBUG:
-        # Send the real exception to Telegram so we can diagnose
-        # the issue even if Render does not show the traceback.
+        # Keep the technical error private from the user.
         try:
             if "chat_id" in locals():
                 send_telegram_message(
                     chat_id,
-                    f"DEBUG ERROR:\n{type(e).__name__}: {e}",
+                    "אני לא זמין כרגע, נסה שוב בעוד כמה דקות.",
                 )
         except Exception:
             traceback.print_exc()
 
-        # Return HTTP 200 so Telegram does not keep retrying
-        # the same failed update while debugging.
+        # Return HTTP 200 so Telegram does not repeatedly resend
+        # the same failed update.
         return {"ok": False}
