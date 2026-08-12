@@ -40,20 +40,25 @@ def connect_user(shortcut_token):
     active_driver = get_active_driver(family_id)
 
     if active_driver:
-        if active_driver[0] == user[1]:
+        active_driver_name = active_driver[0]
+        active_driver_user_id = active_driver[1]
+
+        if active_driver_user_id == user[0]:
             return {
                 "message": "User is already the current driver",
-                "current_driver": active_driver[0]
+                "current_driver": active_driver_name
             }
 
-        # Handover: close previous driver's active session
+        # Handover: close the previous driver's active session.
         insert_car_event(
-            active_driver[0],
+            active_driver_user_id,
+            active_driver_name,
             "disconnected",
             family_id
         )
 
     result = insert_car_event(
+        user[0],
         user[1],
         "connected",
         family_id
@@ -89,10 +94,13 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
             "message": "הרכב כבר פנוי"
         }
 
-    if active_driver[0] != user[1]:
+    active_driver_name = active_driver[0]
+    active_driver_user_id = active_driver[1]
+
+    if active_driver_user_id != user[0]:
         return {
             "message": "Only the current driver can disconnect",
-            "current_driver": active_driver[0]
+            "current_driver": active_driver_name
         }
 
     if latitude is None or longitude is None:
@@ -129,6 +137,7 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
         }
 
     result = insert_car_event(
+        user[0],
         user[1],
         "disconnected",
         family_id
