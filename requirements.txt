@@ -49,3 +49,4 @@ tzdata==2026.2
 urllib3==2.7.0
 uvicorn==0.52.1
 websockets==16.1.1
+psycopg-pool==3.3.0

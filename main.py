@@ -5,7 +5,6 @@ from models import CarConnection
 from onboarding_service import handle_onboarding
 from telegram_service import send_telegram_message
 from database import (
-    conn,
     init_db,
     get_user_by_telegram_chat_id,
     get_onboarding_session,
@@ -79,13 +78,6 @@ def telegram_webhook(update: dict):
 
     except Exception:
         traceback.print_exc()
-
-        # Recover the shared psycopg connection if an unexpected
-        # database error left the current transaction aborted.
-        try:
-            conn.rollback()
-        except Exception:
-            traceback.print_exc()
 
         # Keep the technical error private from the user.
         try:
