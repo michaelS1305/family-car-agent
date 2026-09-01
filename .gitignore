@@ -10,6 +10,8 @@ venv/
 # Secrets / local environment
 .env
 .env.*
+!.env.example
+!frontend/.env.example
 
 # OS / editor noise
 .DS_Store

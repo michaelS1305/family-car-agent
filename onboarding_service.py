@@ -1,7 +1,14 @@
 import json
 
+from onboarding_rules import (
+    is_next,
+    is_no,
+    is_valid_family_code,
+    is_yes,
+    parse_home_address,
+)
 from database import (
-    create_family,
+    create_family_with_first_user,
     get_family_by_code,
     get_family_by_name_and_location,
     get_family_by_location,
@@ -13,11 +20,7 @@ from database import (
 )
 from geocoding_service import geocode_address
 from telegram_service import send_telegram_message
-
-
-CONNECT_SHORTCUT_URL = "https://www.icloud.com/shortcuts/7a4ba428c6464f95894564e0f20e6f76"
-
-DISCONNECT_SHORTCUT_URL = "https://www.icloud.com/shortcuts/825de2b3834640f4888b9e265454e22b"
+from carplay_config import CONNECT_SHORTCUT_URL, DISCONNECT_SHORTCUT_URL
 
 BOT_URL = "https://t.me/family_car_agent_bot"
 
@@ -109,7 +112,7 @@ def handle_onboarding(chat_id, text):
     if step == "create_family_code":
         family_code = text.strip()
 
-        if not family_code.isdigit() or len(family_code) != 6:
+        if not is_valid_family_code(family_code):
             return (
                 "הקוד המשפחתי חייב להכיל בדיוק 6 ספרות.\n"
                 "לדוגמה: 482731"
@@ -244,21 +247,17 @@ def handle_onboarding(chat_id, text):
         if not user_name:
             return "יש להזין שם."
 
-        family_id = create_family(
+        shortcut_token = generate_shortcut_token()
+
+        create_family_with_first_user(
             name=data["family_name"],
             family_code=data["family_code"],
             home_address=data["home_address"],
-            home_latitude=data["home_latitude"],
-            home_longitude=data["home_longitude"]
-        )
-
-        shortcut_token = generate_shortcut_token()
-
-        insert_user(
-            name=user_name,
+            user_name=user_name,
             shortcut_token=shortcut_token,
             telegram_chat_id=chat_id,
-            family_id=family_id
+            home_latitude=data["home_latitude"],
+            home_longitude=data["home_longitude"]
         )
 
         save_onboarding_session(
@@ -384,7 +383,7 @@ def handle_onboarding(chat_id, text):
         family_code = text.strip()
 
         family = None
-        if family_code.isdigit() and len(family_code) == 6:
+        if is_valid_family_code(family_code):
             family = get_family_by_code(family_code)
 
         if not family or family[0] != data["family_id"]:
@@ -644,51 +643,3 @@ def build_shortcut_setup_message(
         "אחרי שהתקנת את שני הקיצורים, כתוב/י לי ״התקנתי״ "
         "ואדריך אותך צעד־צעד בהגדרת הפעולות האוטומטיות של CarPlay."
     )
-
-def parse_home_address(text):
-    parts = [part.strip() for part in text.split(",")]
-
-    if len(parts) != 3:
-        return None
-
-    city, street, house_number = parts
-
-    if not city or not street or not house_number:
-        return None
-
-    # Allows values such as 120, 12א, 12/3, etc.,
-    # but still requires at least one digit in the house number.
-    if not any(char.isdigit() for char in house_number):
-        return None
-
-    return city, street, house_number
-
-
-def is_yes(text):
-    return text.strip().lower() in {
-        "כן",
-        "כן.",
-        "נכון",
-        "נכון.",
-        "yes",
-        "y",
-    }
-
-
-def is_no(text):
-    return text.strip().lower() in {
-        "לא",
-        "לא.",
-        "no",
-        "n",
-    }
-
-
-def is_next(text):
-    return text.strip() in {
-        "הבא",
-        "המשך",
-        "סיימתי",
-        "בוצע",
-        "עשיתי",
-    }

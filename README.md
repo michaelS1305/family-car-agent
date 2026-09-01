@@ -164,7 +164,7 @@ a previous reservation can be understood in context.
   Database                PostgreSQL hosted on Supabase
   Database driver         Psycopg 3
   Connection management   `psycopg_pool.ConnectionPool`
-  Geocoding               OpenStreetMap Nominatim
+  Geocoding               Google Maps Geocoding API
   Mobile automation       Apple Shortcuts + CarPlay automations
   Deployment              Render
   Configuration           Environment variables / `python-dotenv`
@@ -329,11 +329,22 @@ Create a local `.env` file:
 
 ``` env
 DATABASE_URL=your_postgresql_connection_string
+SUPABASE_URL=https://your-project-ref.supabase.co
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 GEMINI_API_KEY=your_gemini_api_key
+GOOGLE_MAPS_API_KEY=your_server_side_google_maps_api_key
+RUN_DB_INIT=true
+CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
 
-Do not commit this file.
+Do not commit this file. Keep `GOOGLE_MAPS_API_KEY` server-side and
+restrict it to the Google Maps Geocoding API where supported.
+
+`RUN_DB_INIT` is disabled unless its value is exactly `true` (case-insensitive).
+Use `true` only when a local development database needs initialization. Keep it
+`false` in production and manage production schema changes as explicit
+migrations. `CORS_ALLOWED_ORIGINS` accepts exact, comma-separated browser
+origins; wildcard origins are rejected.
 
 ### 5. Run the API
 
@@ -365,7 +376,9 @@ POST /car/connect
 POST /car/disconnect
 ```
 
-The application initializes the required PostgreSQL tables on startup.
+Database initialization is disabled by default. In production, set
+`RUN_DB_INIT=false` and provide the deployed frontend's exact HTTPS origin in
+`CORS_ALLOWED_ORIGINS`.
 
 ## Screenshots
 
