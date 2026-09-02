@@ -1,3 +1,6 @@
+import unicodedata
+
+
 def parse_home_address(text):
     parts = [part.strip() for part in text.split(",")]
 
@@ -21,8 +24,31 @@ def is_valid_family_code(family_code):
     return family_code.isdigit() and len(family_code) == 6
 
 
-NAME_APOSTROPHES = {"'", "’", "׳"}
-NAME_INFIX_SEPARATORS = {" ", "-", "‐", "‑"}
+CANONICAL_NAME_APOSTROPHE = "'"
+CANONICAL_NAME_HYPHEN = "-"
+NAME_APOSTROPHE_VARIANTS = ("'", "’", "׳")
+NAME_HYPHEN_VARIANTS = ("-", "‐", "‑", "‒", "–", "—", "−")
+NAME_CHARACTER_TRANSLATION = str.maketrans(
+    {
+        **{
+            character: CANONICAL_NAME_APOSTROPHE
+            for character in NAME_APOSTROPHE_VARIANTS
+        },
+        **{
+            character: CANONICAL_NAME_HYPHEN
+            for character in NAME_HYPHEN_VARIANTS
+        },
+    }
+)
+NAME_SQL_TRANSLATE_SOURCE = "".join(
+    NAME_APOSTROPHE_VARIANTS[1:] + NAME_HYPHEN_VARIANTS[1:]
+)
+NAME_SQL_TRANSLATE_TARGET = (
+    CANONICAL_NAME_APOSTROPHE * (len(NAME_APOSTROPHE_VARIANTS) - 1)
+    + CANONICAL_NAME_HYPHEN * (len(NAME_HYPHEN_VARIANTS) - 1)
+)
+NAME_APOSTROPHES = {CANONICAL_NAME_APOSTROPHE}
+NAME_INFIX_SEPARATORS = {" ", CANONICAL_NAME_HYPHEN}
 NAME_SEPARATORS = NAME_APOSTROPHES | NAME_INFIX_SEPARATORS
 
 
@@ -30,7 +56,9 @@ def normalize_human_name(value):
     if not isinstance(value, str):
         return None
 
-    normalized = " ".join(value.strip().split())
+    normalized = unicodedata.normalize("NFC", value)
+    normalized = " ".join(normalized.strip().split())
+    normalized = normalized.translate(NAME_CHARACTER_TRANSLATION)
     if not normalized or any(character.isdigit() for character in normalized):
         return None
     if not any(character.isalpha() for character in normalized):

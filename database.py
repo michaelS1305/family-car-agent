@@ -5,6 +5,10 @@ from psycopg.errors import ForeignKeyViolation, UniqueViolation
 import secrets
 from datetime import datetime
 from dotenv import load_dotenv
+from onboarding_rules import (
+    NAME_SQL_TRANSLATE_SOURCE,
+    NAME_SQL_TRANSLATE_TARGET,
+)
 
 load_dotenv()
 
@@ -962,6 +966,46 @@ def get_family_by_location(latitude, longitude, radius_meters=50):
             radius_meters,
         )
 
+
+CANONICAL_FAMILY_NAME_PREDICATE = """
+    LOWER(
+        BTRIM(
+            REGEXP_REPLACE(
+                TRANSLATE(NORMALIZE(name, NFC), %s, %s),
+                '[[:space:]]+',
+                ' ',
+                'g'
+            )
+        )
+    ) = LOWER(%s)
+"""
+
+
+def _family_name_exists(conn, name):
+    exact_match = conn.execute(
+        """
+        SELECT 1
+        FROM families
+        WHERE LOWER(TRIM(name)) = LOWER(TRIM(%s))
+        LIMIT 1
+        """,
+        (name,),
+    ).fetchone()
+    if exact_match:
+        return True
+
+    canonical_match = conn.execute(
+        f"""
+        SELECT 1
+        FROM families
+        WHERE {CANONICAL_FAMILY_NAME_PREDICATE}
+        LIMIT 1
+        """,
+        (NAME_SQL_TRANSLATE_SOURCE, NAME_SQL_TRANSLATE_TARGET, name),
+    ).fetchone()
+    return canonical_match is not None
+
+
 def _get_family_by_name_and_location(
     conn,
     name,
@@ -969,11 +1013,20 @@ def _get_family_by_name_and_location(
     longitude,
     radius_meters=50,
 ):
-    cursor = conn.execute(
+    name_predicates = (
+        ("LOWER(TRIM(name)) = LOWER(TRIM(%s))", (name,)),
+        (
+            CANONICAL_FAMILY_NAME_PREDICATE,
+            (NAME_SQL_TRANSLATE_SOURCE, NAME_SQL_TRANSLATE_TARGET, name),
+        ),
+    )
+
+    for name_predicate, name_parameters in name_predicates:
+        cursor = conn.execute(
             """
             SELECT id, name, home_address, home_latitude, home_longitude
             FROM families
-            WHERE LOWER(TRIM(name)) = LOWER(TRIM(%s))
+            WHERE {name_predicate}
               AND home_latitude IS NOT NULL
               AND home_longitude IS NOT NULL
               AND (
@@ -991,9 +1044,9 @@ def _get_family_by_name_and_location(
                 + POWER(home_longitude - %s, 2)
             )
             LIMIT 1
-            """,
+            """.format(name_predicate=name_predicate),
             (
-                name,
+                *name_parameters,
                 latitude,
                 latitude,
                 longitude,
@@ -1001,9 +1054,13 @@ def _get_family_by_name_and_location(
                 latitude,
                 longitude
             )
-    )
+        )
 
-    return cursor.fetchone()
+        family = cursor.fetchone()
+        if family:
+            return family
+
+    return None
 
 
 def get_family_by_name_and_location(name, latitude, longitude, radius_meters=50):
@@ -1015,6 +1072,7 @@ def get_family_by_name_and_location(name, latitude, longitude, radius_meters=50)
             longitude,
             radius_meters,
         )
+
 
 def get_family_by_id(family_id):
     with pool.connection() as conn:
@@ -1184,15 +1242,7 @@ def submit_pwa_join_family_name(auth_user_id, family_name):
                 {"family_name", "address", "address_confirmed", "family_code"},
             )
 
-            family_exists = conn.execute(
-                """
-                SELECT 1
-                FROM families
-                WHERE LOWER(TRIM(name)) = LOWER(TRIM(%s))
-                LIMIT 1
-                """,
-                (family_name,),
-            ).fetchone()
+            family_exists = _family_name_exists(conn, family_name)
             if not family_exists:
                 return _increment_join_failure_locked(
                     conn,

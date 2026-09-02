@@ -157,6 +157,30 @@ class FamilyCreationServiceTests(unittest.TestCase):
             "סנדרוביץ'",
         )
 
+    def test_family_name_variants_are_stored_canonically(self):
+        variants = (
+            ("סנדרוביץ'", "סנדרוביץ'"),
+            ("סנדרוביץ׳", "סנדרוביץ'"),
+            ("סנדרוביץ’", "סנדרוביץ'"),
+            ("  סנדרוביץ׳  ", "סנדרוביץ'"),
+            ("בן‐דוד", "בן-דוד"),
+            ("Smith‑Jones", "Smith-Jones"),
+        )
+
+        for family_name, expected_name in variants:
+            with self.subTest(family_name=family_name):
+                database_stub.create_family_with_first_user.reset_mock()
+                resolved = self.resolve_address()
+                self.create(
+                    family_name=family_name,
+                    address_resolution_token=resolved.resolution_token,
+                )
+
+                self.assertEqual(
+                    database_stub.create_family_with_first_user.call_args.kwargs["name"],
+                    expected_name,
+                )
+
     def test_duplicate_family_code(self):
         database_stub.get_family_by_code.return_value = (7, "כהן")
         self.assert_error("FAMILY_CODE_TAKEN")

@@ -1,9 +1,14 @@
-const apostrophes = new Set(["'", '’', '׳'])
-const infixSeparators = new Set([' ', '-', '‐', '‑'])
+const apostrophes = new Set(["'"])
+const infixSeparators = new Set([' ', '-'])
 const isLetter = (character: string) => /^\p{L}$/u.test(character)
 
 export function normalizeHumanName(value: string) {
-  return value.trim().replace(/\s+/gu, ' ')
+  return value
+    .normalize('NFC')
+    .trim()
+    .replace(/\s+/gu, ' ')
+    .replace(/[’׳]/gu, "'")
+    .replace(/[‐‑‒–—−]/gu, '-')
 }
 
 export function isValidHumanName(value: string) {

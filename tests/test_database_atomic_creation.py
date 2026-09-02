@@ -519,6 +519,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
             self.cursor(None),
             self.cursor(tuple(active_session)),
             self.cursor(None),
+            self.cursor(None),
             self.cursor(tuple(locked_session)),
         ]
 
@@ -536,9 +537,96 @@ class AtomicPwaJoinTests(unittest.TestCase):
         )
         self.assertIn(
             "INTERVAL '15 minutes'",
-            self.connection.execute.call_args_list[5].args[0],
+            self.connection.execute.call_args_list[6].args[0],
         )
         self.assertTrue(self.transaction_context.committed)
+
+    def test_same_literal_family_name_advances_without_incrementing_attempts(self):
+        active_session = list(self.session_row())
+        active_session[1] = "family_name"
+        active_session[2] = None
+        active_session[3] = None
+        active_session[6] = 2
+        advanced_session = list(active_session)
+        advanced_session[1] = "address"
+        advanced_session[2] = "סנדרוביץ'"
+        self.connection.execute.side_effect = [
+            self.cursor(None),
+            self.cursor(),
+            self.cursor(None),
+            self.cursor(tuple(active_session)),
+            self.cursor((1,)),
+            self.cursor(tuple(advanced_session)),
+        ]
+
+        result = database.submit_pwa_join_family_name(
+            "auth-user-uuid",
+            "סנדרוביץ'",
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["session"]["family_name_attempts"], 2)
+        self.assertFalse(
+            any(
+                "family_name_attempts = %s" in call.args[0]
+                for call in self.connection.execute.call_args_list
+            )
+        )
+
+    def test_legacy_punctuation_name_uses_canonical_fallback_without_failure(self):
+        active_session = list(self.session_row())
+        active_session[1] = "family_name"
+        active_session[2] = None
+        active_session[3] = None
+        active_session[6] = 2
+        advanced_session = list(active_session)
+        advanced_session[1] = "address"
+        advanced_session[2] = "סנדרוביץ'"
+        self.connection.execute.side_effect = [
+            self.cursor(None),
+            self.cursor(),
+            self.cursor(None),
+            self.cursor(tuple(active_session)),
+            self.cursor(None),
+            self.cursor((1,)),
+            self.cursor(tuple(advanced_session)),
+        ]
+
+        result = database.submit_pwa_join_family_name(
+            "auth-user-uuid",
+            "סנדרוביץ'",
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["session"]["family_name_attempts"], 2)
+        fallback_lookup = self.connection.execute.call_args_list[5]
+        self.assertIn("NORMALIZE(name, NFC)", fallback_lookup.args[0])
+        self.assertIn("TRANSLATE", fallback_lookup.args[0])
+        self.assertIn("REGEXP_REPLACE", fallback_lookup.args[0])
+        source_characters, target_characters, lookup_name = fallback_lookup.args[1]
+        for legacy_character in ("’", "׳", "‐", "‑", "‒", "–", "—", "−"):
+            self.assertIn(legacy_character, source_characters)
+        self.assertEqual(len(source_characters), len(target_characters))
+        self.assertEqual(lookup_name, "סנדרוביץ'")
+
+    def test_legacy_name_and_location_falls_back_to_canonical_comparison(self):
+        expected_family = (7, "סנדרוביץ׳", "דימונה, המעפיל, 1209", 31.0, 35.0)
+        self.connection.execute.side_effect = [
+            self.cursor(None),
+            self.cursor(expected_family),
+        ]
+
+        family = database._get_family_by_name_and_location(
+            self.connection,
+            "סנדרוביץ'",
+            31.0,
+            35.0,
+        )
+
+        self.assertEqual(family, expected_family)
+        fallback_lookup = self.connection.execute.call_args_list[1]
+        self.assertIn("NORMALIZE(name, NFC)", fallback_lookup.args[0])
+        self.assertEqual(fallback_lookup.args[1][2], "סנדרוביץ'")
 
     def test_expired_lock_is_reset_safely_when_session_starts(self):
         reset_session = list(self.session_row())

@@ -1,4 +1,5 @@
 import unittest
+import unicodedata
 
 from onboarding_rules import (
     is_next,
@@ -62,17 +63,63 @@ class HumanNameTests(unittest.TestCase):
             "Michael Cohen": "Michael Cohen",
             "בן-דוד": "בן-דוד",
             "O'Connor": "O'Connor",
-            "D’Angelo": "D’Angelo",
+            "D’Angelo": "D'Angelo",
             "סנדרוביץ'": "סנדרוביץ'",
-            "סנדרוביץ׳": "סנדרוביץ׳",
-            "סנדרוביץ’": "סנדרוביץ’",
-            "Smith‐Jones": "Smith‐Jones",
-            "Smith‑Jones": "Smith‑Jones",
+            "סנדרוביץ׳": "סנדרוביץ'",
+            "סנדרוביץ’": "סנדרוביץ'",
+            "Smith‐Jones": "Smith-Jones",
+            "Smith‑Jones": "Smith-Jones",
+            "Smith‒Jones": "Smith-Jones",
+            "Smith–Jones": "Smith-Jones",
+            "Smith—Jones": "Smith-Jones",
+            "Smith−Jones": "Smith-Jones",
+            "משפחת O’Connor": "משפחת O'Connor",
             "  Michael   Cohen  ": "Michael Cohen",
         }
         for value, normalized in expected.items():
             with self.subTest(value=value):
                 self.assertEqual(normalize_human_name(value), normalized)
+
+    def test_create_and_join_variants_share_one_canonical_name(self):
+        apostrophe_variants = (
+            "סנדרוביץ'",
+            "סנדרוביץ׳",
+            "סנדרוביץ’",
+        )
+        hyphen_variants = (
+            "בן-דוד",
+            "בן‐דוד",
+            "בן‑דוד",
+            "בן‒דוד",
+            "בן–דוד",
+            "בן—דוד",
+            "בן−דוד",
+        )
+
+        for create_name in apostrophe_variants:
+            for join_name in apostrophe_variants:
+                with self.subTest(create=create_name, join=join_name):
+                    self.assertEqual(
+                        normalize_human_name(create_name),
+                        normalize_human_name(join_name),
+                    )
+
+        for create_name in hyphen_variants:
+            for join_name in hyphen_variants:
+                with self.subTest(create=create_name, join=join_name):
+                    self.assertEqual(
+                        normalize_human_name(create_name),
+                        normalize_human_name(join_name),
+                    )
+
+    def test_unicode_nfc_and_whitespace_are_canonicalized(self):
+        decomposed = unicodedata.normalize("NFD", "José")
+
+        self.assertEqual(normalize_human_name(decomposed), "José")
+        self.assertEqual(
+            normalize_human_name("  משפחת   O’Connor  "),
+            "משפחת O'Connor",
+        )
 
     def test_rejects_unsafe_separator_shapes(self):
         for value in (

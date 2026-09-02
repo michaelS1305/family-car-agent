@@ -145,6 +145,29 @@ class JoinFamilyServiceTests(unittest.TestCase):
             "סנדרוביץ'",
         )
 
+    def test_family_name_variants_use_the_same_canonical_lookup(self):
+        variants = (
+            ("סנדרוביץ׳", "סנדרוביץ'"),
+            ("סנדרוביץ’", "סנדרוביץ'"),
+            ("  סנדרוביץ'  ", "סנדרוביץ'"),
+            ("בן‑דוד", "בן-דוד"),
+            ("Smith—Jones", "Smith-Jones"),
+        )
+        for family_name, expected_name in variants:
+            with self.subTest(family_name=family_name):
+                database_stub.submit_pwa_join_family_name.reset_mock()
+                database_stub.submit_pwa_join_family_name.return_value = {
+                    "success": True,
+                    "session": session(step="address", family_name=expected_name),
+                }
+
+                service.submit_join_family_name("auth-user-uuid", family_name)
+
+                database_stub.submit_pwa_join_family_name.assert_called_once_with(
+                    "auth-user-uuid",
+                    expected_name,
+                )
+
     def test_third_failure_returns_lock_metadata_and_warning(self):
         locked_until = datetime(2026, 8, 30, 12, 15, tzinfo=timezone.utc)
         database_stub.verify_pwa_join_family_code.return_value = {

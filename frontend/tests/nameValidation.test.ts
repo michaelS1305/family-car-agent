@@ -23,6 +23,18 @@ test('sensible spaces, hyphens, and apostrophes remain valid', () => {
   assert.equal(isValidHumanName('Smith‐Jones'), true)
   assert.equal(isValidHumanName('Smith‑Jones'), true)
   assert.equal(normalizeHumanName('  Michael   Cohen  '), 'Michael Cohen')
+  assert.equal(normalizeHumanName('סנדרוביץ׳'), "סנדרוביץ'")
+  assert.equal(normalizeHumanName('סנדרוביץ’'), "סנדרוביץ'")
+  assert.equal(normalizeHumanName('Smith‑Jones'), 'Smith-Jones')
+  assert.equal(normalizeHumanName('Smith—Jones'), 'Smith-Jones')
+  assert.equal(normalizeHumanName('  משפחת   O’Connor  '), "משפחת O'Connor")
+})
+
+test('NFC normalization makes visually identical names canonical', () => {
+  const decomposed = 'José'.normalize('NFD')
+
+  assert.equal(normalizeHumanName(decomposed), 'José')
+  assert.equal(isValidHumanName(decomposed), true)
 })
 
 test('leading, trailing, or repeated separators are rejected', () => {
