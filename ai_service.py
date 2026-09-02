@@ -1,200 +1,30 @@
 import os
-from google import genai
-from database import (
-    get_active_driver,
-    get_last_driver,
-    get_recent_events,
-    create_reservation,
-    get_user_reservations,
-    get_family_reservations,
-    cancel_reservation,
-    update_reservation,
-    save_conversation_message,
-    get_recent_conversation,
-)
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
 from dotenv import load_dotenv
+from google import genai
+
+from database import (
+    get_active_driver,
+    get_family_reservations,
+    get_last_driver,
+    get_recent_events,
+    get_user_reservations,
+)
 from identity import CurrentUser
+
 
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = "gemini-3.1-flash-lite"
+MAX_TOOL_ROUNDS = 8
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
-def understand_message(text):
-    response = client.models.generate_content(
-        model="gemini-3.1-flash-lite",
-        contents=f"""
-You are an AI assistant for a family shared car.
-
-Classify the user's intent.
-
-Available intents:
-
-- car_status
-- unknown
-
-User message:
-{text}
-
-Return ONLY the intent name.
-"""
-    )
-
-    return response.text.strip()
-
-
-def ask_agent(text, current_user: CurrentUser):
-    user_id = current_user.user_id
-    user_name = current_user.name
-    family_id = current_user.family_id
-    if family_id is None:
-        raise ValueError("A family-scoped AI request requires a family mapping")
-    now = datetime.now(ZoneInfo("Asia/Jerusalem"))
-
-    # Tools are defined inside ask_agent so Gemini can only access
-    # data for the current user's family.
-    def get_car_status_tool():
-        """Get the current availability and driver of this family's car."""
-        active_driver = get_active_driver(family_id)
-
-        if active_driver:
-            return {
-                "status": "in_use",
-                "current_driver": active_driver[0],
-            }
-
-        return {
-            "status": "available",
-            "current_driver": None,
-        }
-
-    def get_last_driver_tool():
-        """Get the most recent car event for this family."""
-        event = get_last_driver(family_id)
-
-        if not event:
-            return {
-                "driver": None,
-                "status": None,
-                "event_time": None,
-            }
-
-        return {
-            "driver": event[0],
-            "status": event[1],
-            "event_time": event[2],
-        }
-
-    def get_recent_events_tool():
-        """Get recent car usage events for this family."""
-        events = get_recent_events(family_id)
-
-        return [
-            {
-                "driver": event[0],
-                "status": event[1],
-                "event_time": event[2],
-            }
-            for event in events
-        ]
-
-    def create_reservation_tool(start_time: str, end_time: str):
-        """Reserve this family's car for the current user for a specific time range."""
-        return create_reservation(
-            user_id,
-            start_time,
-            end_time,
-        )
-
-    def get_user_reservations_tool():
-        """Get reservations created by the current user."""
-        reservations = get_user_reservations(user_id, family_id)
-
-        return [
-            {
-                "reservation_id": reservation[0],
-                "start_time": reservation[1],
-                "end_time": reservation[2],
-                "status": reservation[3],
-            }
-            for reservation in reservations
-        ]
-
-    def get_family_reservations_tool():
-        """Get reservations for all members of the current user's family."""
-        reservations = get_family_reservations(family_id)
-
-        return [
-            {
-                "reservation_id": reservation[0],
-                "user_id": reservation[1],
-                "user_name": reservation[2],
-                "start_time": reservation[3],
-                "end_time": reservation[4],
-                "status": reservation[5],
-            }
-            for reservation in reservations
-        ]
-
-    def cancel_reservation_tool(reservation_id: int):
-        """Cancel one of the current user's reservations."""
-        return cancel_reservation(
-            reservation_id,
-            user_id,
-            family_id,
-        )
-
-    def update_reservation_tool(
-        reservation_id: int,
-        start_time: str,
-        end_time: str,
-    ):
-        """Update the time range of one of the current user's reservations."""
-        return update_reservation(
-            reservation_id,
-            user_id,
-            family_id,
-            start_time,
-            end_time,
-        )
-
-    # Load recent conversation BEFORE saving the current message
-    recent_messages = get_recent_conversation(user_id, limit=10)
-
-    conversation_history = "\n".join(
-        f"{role}: {content}"
-        for role, content in recent_messages
-    )
-
-    # Save current user message
-    save_conversation_message(
-        user_id=user_id,
-        role="user",
-        content=text,
-    )
-
-    response = client.models.generate_content(
-        model="gemini-3.1-flash-lite",
-        contents=f"""
-Current date and time: {now.isoformat()}
-
-Current user:
-- user_id: {user_id}
-- name: {user_name}
-- family_id: {family_id}
-
-Recent conversation:
-{conversation_history}
-
-Current user message:
-{text}
-""",
-        config={
-            "system_instruction": """
+SYSTEM_INSTRUCTION = """
 You are a family shared-car assistant.
 
 Your job is ONLY to help family members manage and get information about their shared car.
@@ -272,27 +102,154 @@ IMPORTANT:
 - A reservation and the current car status are different things.
 - A future reservation does not mean the car is currently unavailable.
 - Never change data just because the user is asking a question about it.
-""",
-            "tools": [
-                get_car_status_tool,
-                get_last_driver_tool,
-                get_recent_events_tool,
-                create_reservation_tool,
-                get_user_reservations_tool,
-                get_family_reservations_tool,
-                cancel_reservation_tool,
-                update_reservation_tool,
-            ],
-        },
+"""
+
+
+TOOL_DECLARATIONS = [
+    {"name": "get_car_status_tool", "description": "Get this family's current car status.", "parameters": {"type": "object", "properties": {}}},
+    {"name": "get_last_driver_tool", "description": "Get this family's most recent car event.", "parameters": {"type": "object", "properties": {}}},
+    {"name": "get_recent_events_tool", "description": "Get this family's recent car events.", "parameters": {"type": "object", "properties": {}}},
+    {
+        "name": "create_reservation_tool",
+        "description": "Reserve this family's car for the current user.",
+        "parameters": {"type": "object", "properties": {"start_time": {"type": "string"}, "end_time": {"type": "string"}}, "required": ["start_time", "end_time"]},
+    },
+    {"name": "get_user_reservations_tool", "description": "Get the current user's reservations.", "parameters": {"type": "object", "properties": {}}},
+    {"name": "get_family_reservations_tool", "description": "Get this family's reservations.", "parameters": {"type": "object", "properties": {}}},
+    {
+        "name": "cancel_reservation_tool",
+        "description": "Cancel one reservation owned by the current user.",
+        "parameters": {"type": "object", "properties": {"reservation_id": {"type": "integer"}}, "required": ["reservation_id"]},
+    },
+    {
+        "name": "update_reservation_tool",
+        "description": "Update one reservation owned by the current user.",
+        "parameters": {"type": "object", "properties": {"reservation_id": {"type": "integer"}, "start_time": {"type": "string"}, "end_time": {"type": "string"}}, "required": ["reservation_id", "start_time", "end_time"]},
+    },
+]
+
+
+def understand_message(text):
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=f"""
+You are an AI assistant for a family shared car.
+
+Classify the user's intent.
+
+Available intents:
+
+- car_status
+- unknown
+
+User message:
+{text}
+
+Return ONLY the intent name.
+"""
     )
+    return response.text.strip()
 
-    reply = response.text
 
-    # Save assistant response
-    save_conversation_message(
-        user_id=user_id,
-        role="assistant",
-        content=reply,
-    )
+def _value(value, name):
+    return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
 
-    return reply
+
+def _response_parts(response):
+    candidates = getattr(response, "candidates", None)
+    if not candidates:
+        return []
+    return list(getattr(candidates[0].content, "parts", None) or [])
+
+
+def _structured_history(history):
+    return [
+        {
+            "role": "model" if role == "assistant" else "user",
+            "parts": [{"text": content}],
+        }
+        for role, content in history
+        if role in {"user", "assistant"}
+    ]
+
+
+def _read_tool(name, current_user):
+    family_id = current_user.family_id
+    if name == "get_car_status_tool":
+        active_driver = get_active_driver(family_id)
+        return {"status": "in_use" if active_driver else "available", "current_driver": active_driver[0] if active_driver else None}
+    if name == "get_last_driver_tool":
+        event = get_last_driver(family_id)
+        return {"driver": event[0] if event else None, "status": event[1] if event else None, "event_time": event[2] if event else None}
+    if name == "get_recent_events_tool":
+        return [{"driver": row[0], "status": row[1], "event_time": row[2]} for row in get_recent_events(family_id)]
+    if name == "get_user_reservations_tool":
+        return [{"reservation_id": row[0], "start_time": row[1], "end_time": row[2], "status": row[3]} for row in get_user_reservations(current_user.user_id, family_id)]
+    if name == "get_family_reservations_tool":
+        return [{"reservation_id": row[0], "user_name": row[2], "start_time": row[3], "end_time": row[4], "status": row[5]} for row in get_family_reservations(family_id)]
+    raise ValueError("Unknown read tool")
+
+
+def _safe_mutation_arguments(action_type, arguments):
+    allowed = {
+        "create_reservation": ("start_time", "end_time"),
+        "update_reservation": ("reservation_id", "start_time", "end_time"),
+        "cancel_reservation": ("reservation_id",),
+    }
+    return {
+        key: arguments[key]
+        for key in allowed[action_type]
+        if key in arguments
+    }
+
+
+def generate_agent_response(text, current_user: CurrentUser, history, mutation_dispatcher):
+    if current_user.family_id is None:
+        raise ValueError("A family-scoped AI request requires a family mapping")
+
+    now = datetime.now(ZoneInfo("Asia/Jerusalem"))
+    contents = _structured_history(history)
+    contents.append({
+        "role": "user",
+        "parts": [{"text": f"Current date and time: {now.isoformat()}\nCurrent user's name: {current_user.name}\n\n{text}"}],
+    })
+    mutation_names = {
+        "create_reservation_tool": "create_reservation",
+        "update_reservation_tool": "update_reservation",
+        "cancel_reservation_tool": "cancel_reservation",
+    }
+
+    for _ in range(MAX_TOOL_ROUNDS):
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config={
+                "system_instruction": SYSTEM_INSTRUCTION,
+                "tools": [{"function_declarations": TOOL_DECLARATIONS}],
+                "automatic_function_calling": {"disable": True},
+            },
+        )
+        parts = _response_parts(response)
+        function_parts = [part for part in parts if _value(part, "function_call") is not None]
+        if not function_parts:
+            reply = (getattr(response, "text", None) or "").strip()
+            return reply or "לא הצלחתי לנסח תשובה כרגע. אפשר לנסות שוב."
+
+        contents.append(response.candidates[0].content)
+        function_responses = []
+        for part in function_parts:
+            function_call = _value(part, "function_call")
+            name = _value(function_call, "name")
+            arguments = dict(_value(function_call, "args") or {})
+            if name in mutation_names:
+                action_type = mutation_names[name]
+                result = mutation_dispatcher(
+                    action_type,
+                    _safe_mutation_arguments(action_type, arguments),
+                )
+            else:
+                result = _read_tool(name, current_user)
+            function_responses.append({"function_response": {"name": name, "response": {"result": result}}})
+        contents.append({"role": "user", "parts": function_responses})
+
+    raise RuntimeError("Gemini exceeded the maximum number of tool rounds")

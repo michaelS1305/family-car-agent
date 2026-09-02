@@ -12,6 +12,45 @@ export type CurrentUserResult =
   | { status: 'unmapped' }
   | { status: 'unauthenticated' }
 
+export type ChatMessage = {
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+
+export type ChatHistoryMessage = ChatMessage & {
+  request_id: string
+  request_status: 'completed' | 'failed'
+}
+
+export type ChatResponse = {
+  request_id: string
+  status: 'completed'
+  assistant_message: ChatMessage & { role: 'assistant' }
+}
+
+export class ChatApiError extends Error {
+  readonly code: string
+  readonly status?: number
+  readonly retryAfterSeconds?: number
+  readonly networkUncertain: boolean
+
+  constructor(
+    code: string,
+    message: string,
+    status?: number,
+    retryAfterSeconds?: number,
+    networkUncertain = false,
+  ) {
+    super(message)
+    this.name = 'ChatApiError'
+    this.code = code
+    this.status = status
+    this.retryAfterSeconds = retryAfterSeconds
+    this.networkUncertain = networkUncertain
+  }
+}
+
 export type ApiRequestErrorKind = 'network' | 'server' | 'invalid-response'
 
 export class ApiRequestError extends Error {
@@ -148,9 +187,142 @@ function getCurrentUserUrl(explicitBaseUrl?: string) {
 }
 
 function getApiUrl(path: string, explicitBaseUrl?: string) {
-  const configuredBaseUrl = explicitBaseUrl ?? import.meta.env.VITE_API_BASE_URL
+  const configuredBaseUrl = explicitBaseUrl ?? import.meta.env?.VITE_API_BASE_URL
   const baseUrl = configuredBaseUrl?.trim().replace(/\/+$/, '') ?? ''
   return `${baseUrl}${path}`
+}
+
+function isChatMessage(value: unknown): value is ChatMessage {
+  if (!value || typeof value !== 'object') return false
+  const message = value as Partial<ChatMessage>
+  return (
+    (message.role === 'user' || message.role === 'assistant')
+    && typeof message.content === 'string'
+    && typeof message.created_at === 'string'
+  )
+}
+
+async function readChatError(response: Response) {
+  try {
+    const body = await response.json() as {
+      detail?: { code?: unknown; message?: unknown; retry_after_seconds?: unknown }
+    }
+    if (
+      typeof body.detail?.code === 'string'
+      && typeof body.detail.message === 'string'
+    ) {
+      return new ChatApiError(
+        body.detail.code,
+        body.detail.message,
+        response.status,
+        typeof body.detail.retry_after_seconds === 'number'
+          ? body.detail.retry_after_seconds
+          : undefined,
+      )
+    }
+  } catch {
+    // Fall through to the safe generic response below.
+  }
+  return new ChatApiError(
+    'CHAT_UNAVAILABLE',
+    'לא הצלחנו לקבל תשובה כרגע. אפשר לנסות שוב.',
+    response.status,
+  )
+}
+
+export async function getChatHistory(
+  accessToken: string,
+  options: RequestOptions = {},
+): Promise<ChatHistoryMessage[]> {
+  const fetcher = options.fetcher ?? fetch
+  let response: Response
+  try {
+    response = await fetcher(getApiUrl('/api/chat/history', options.baseUrl), {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      signal: options.signal,
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ChatApiError(
+      'NETWORK_ERROR',
+      'לא הצלחנו לטעון את השיחות. בדקו את החיבור ונסו שוב.',
+      undefined,
+      undefined,
+      true,
+    )
+  }
+  if (!response.ok) throw await readChatError(response)
+  let body: { messages?: unknown }
+  try {
+    body = await response.json() as { messages?: unknown }
+  } catch {
+    throw new ChatApiError('INVALID_RESPONSE', 'התקבלה תשובה לא תקינה מהשרת.')
+  }
+  if (
+    !Array.isArray(body.messages)
+    || !body.messages.every((message) => (
+      isChatMessage(message)
+      && typeof (message as Partial<ChatHistoryMessage>).request_id === 'string'
+      && (
+        (message as Partial<ChatHistoryMessage>).request_status === 'completed'
+        || (message as Partial<ChatHistoryMessage>).request_status === 'failed'
+      )
+    ))
+  ) {
+    throw new ChatApiError('INVALID_RESPONSE', 'התקבלה תשובה לא תקינה מהשרת.')
+  }
+  return body.messages as ChatHistoryMessage[]
+}
+
+export async function sendChatMessage(
+  accessToken: string,
+  requestId: string,
+  message: string,
+  options: RequestOptions = {},
+): Promise<ChatResponse> {
+  const fetcher = options.fetcher ?? fetch
+  let response: Response
+  try {
+    response = await fetcher(getApiUrl('/api/chat', options.baseUrl), {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ request_id: requestId, message }),
+      signal: options.signal,
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ChatApiError(
+      'NETWORK_ERROR',
+      'לא הצלחנו לשלוח את ההודעה. בדקו את החיבור ונסו שוב.',
+      undefined,
+      undefined,
+      true,
+    )
+  }
+  if (!response.ok) throw await readChatError(response)
+  let body: Partial<ChatResponse>
+  try {
+    body = await response.json() as Partial<ChatResponse>
+  } catch {
+    throw new ChatApiError('INVALID_RESPONSE', 'התקבלה תשובה לא תקינה מהשרת.')
+  }
+  if (
+    body.status !== 'completed'
+    || body.request_id !== requestId
+    || !isChatMessage(body.assistant_message)
+    || body.assistant_message.role !== 'assistant'
+  ) {
+    throw new ChatApiError('INVALID_RESPONSE', 'התקבלה תשובה לא תקינה מהשרת.')
+  }
+  return body as ChatResponse
 }
 
 async function readOnboardingError(response: Response) {

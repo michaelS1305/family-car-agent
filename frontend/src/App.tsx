@@ -1220,8 +1220,14 @@ function App() {
     )
   }
 
-  if (destination === 'main' && currentUser) {
-    return <MainAppScreen user={currentUser} />
+  if (destination === 'main' && currentUser && session) {
+    return (
+      <MainAppScreen
+        user={currentUser}
+        accessToken={session.access_token}
+        authUserId={session.user.id}
+      />
+    )
   }
 
   if (destination === 'welcome') {

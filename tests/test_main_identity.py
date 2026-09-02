@@ -68,6 +68,7 @@ models_stub = stub_module(
     CarConnection=type("CarConnection", (), {}),
     CarPlaySetupResponse=type("CarPlaySetupResponse", (), {}),
     CarPlaySetupStatusRequest=type("CarPlaySetupStatusRequest", (), {}),
+    ChatRequest=type("ChatRequest", (), {}),
     CreateFamilyAddressRequest=type("CreateFamilyAddressRequest", (), {}),
     CreateFamilyRequest=type("CreateFamilyRequest", (), {}),
     JoinFamilyAddressConfirmationRequest=type("JoinFamilyAddressConfirmationRequest", (), {}),
@@ -84,6 +85,25 @@ car_stub = stub_module(
     "car_service",
     connect_user=Mock(),
     disconnect_user=Mock(),
+)
+
+
+class FakeChatError(Exception):
+    def __init__(self, status_code=409, code="CHAT_ERROR", message="Chat error"):
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+        self.retry_after_seconds = None
+
+    def detail(self):
+        return {"code": self.code, "message": self.message}
+
+
+chat_stub = stub_module(
+    "chat_service",
+    ChatError=FakeChatError,
+    get_chat_history=Mock(return_value=[]),
+    process_chat_message=Mock(),
 )
 carplay_setup_value = types.SimpleNamespace(
     connection_code="private-code",
@@ -164,6 +184,7 @@ def load_main_module(environment=None):
                 "models": models_stub,
                 "database": database_stub,
                 "car_service": car_stub,
+                "chat_service": chat_stub,
                 "carplay_setup_service": carplay_setup_stub,
                 "auth_service": auth_stub,
                 "family_creation_service": family_creation_stub,
@@ -269,6 +290,60 @@ class ApiMeRouteTests(unittest.TestCase):
         self.assertEqual(tuple(parameters), ("current_user",))
         self.assertNotIn("user_id", parameters)
         self.assertNotIn("family_id", parameters)
+
+
+class ChatRouteTests(unittest.TestCase):
+    def setUp(self):
+        chat_stub.process_chat_message.reset_mock(return_value=True, side_effect=True)
+        chat_stub.process_chat_message.return_value = {
+            "request_id": "request-id",
+            "status": "completed",
+            "assistant_message": {
+                "role": "assistant",
+                "content": "תשובה",
+                "created_at": "2026-09-02T12:00:00+00:00",
+            },
+        }
+        chat_stub.get_chat_history.reset_mock(return_value=True, side_effect=True)
+        chat_stub.get_chat_history.return_value = []
+
+    def test_chat_route_uses_current_user_and_accepts_no_identity_fields(self):
+        current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
+        request = types.SimpleNamespace(
+            request_id="request-id",
+            message="מי עם הרכב?",
+            user_id=999,
+            family_id=888,
+            auth_user_id="forged",
+        )
+
+        response = main.chat(request, current_user)
+        parameters = inspect.signature(main.chat).parameters
+
+        self.assertEqual(tuple(parameters), ("request", "current_user"))
+        self.assertIs(
+            parameters["current_user"].default.dependency,
+            auth_stub.get_current_user,
+        )
+        chat_stub.process_chat_message.assert_called_once_with(
+            "request-id",
+            "מי עם הרכב?",
+            current_user,
+        )
+        self.assertEqual(response["status"], "completed")
+
+    def test_history_route_is_scoped_to_current_user(self):
+        current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
+
+        response = main.chat_history(30, current_user)
+        parameters = inspect.signature(main.chat_history).parameters
+
+        self.assertIs(
+            parameters["current_user"].default.dependency,
+            auth_stub.get_current_user,
+        )
+        chat_stub.get_chat_history.assert_called_once_with(current_user, 30)
+        self.assertEqual(response, {"messages": []})
 
 
 class CarPlaySetupRouteTests(unittest.TestCase):
