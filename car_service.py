@@ -3,23 +3,8 @@ from database import (
     insert_car_event,
     get_user_by_token,
     get_family_by_id,
-    get_users_by_family_id,
 )
-from telegram_service import send_telegram_message
 from math import radians, sin, cos, sqrt, atan2
-
-
-def notify_family(family_id, message):
-    family_users = get_users_by_family_id(family_id)
-
-    for family_user in family_users:
-        telegram_chat_id = family_user[2]
-
-        if telegram_chat_id is not None:
-            send_telegram_message(
-                telegram_chat_id,
-                message
-            )
 
 
 def connect_user(shortcut_token):
@@ -30,7 +15,7 @@ def connect_user(shortcut_token):
             "message": "Invalid shortcut token"
         }
 
-    family_id = user[3]
+    family_id = user[2]
 
     if family_id is None:
         return {
@@ -64,11 +49,6 @@ def connect_user(shortcut_token):
         family_id
     )
 
-    notify_family(
-        family_id,
-        f"{user[1]} לקח/ה את הרכב 🚗"
-    )
-
     return result
 
 
@@ -80,7 +60,7 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
             "message": "Invalid shortcut token"
         }
 
-    family_id = user[3]
+    family_id = user[2]
 
     if family_id is None:
         return {
@@ -141,11 +121,6 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
         user[1],
         "disconnected",
         family_id
-    )
-
-    notify_family(
-        family_id,
-        "הרכב פנוי עכשיו 🟢"
     )
 
     return {

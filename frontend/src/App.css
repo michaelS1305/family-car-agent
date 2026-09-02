@@ -1,0 +1,1028 @@
+.welcome-screen,
+.flow-screen,
+.success-screen,
+.identity-state-screen {
+  width: 100%;
+  min-height: 100svh;
+  background: #fffefc;
+}
+
+.identity-state-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding:
+    max(32px, env(safe-area-inset-top))
+    max(24px, env(safe-area-inset-right))
+    max(32px, env(safe-area-inset-bottom))
+    max(24px, env(safe-area-inset-left));
+  color: #263241;
+  text-align: center;
+}
+
+.identity-state-screen h1 {
+  margin: 24px 0 0;
+  font-size: clamp(1.7rem, 7vw, 2.35rem);
+  line-height: 1.3;
+}
+
+.identity-state-screen p {
+  max-width: 440px;
+  margin: 14px 0 0;
+  color: #68747c;
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.identity-error-mark {
+  width: 66px;
+  height: 66px;
+  display: grid;
+  place-items: center;
+  border-radius: 22px;
+  color: #923f3b;
+  background: #fff1ef;
+  font-size: 1.8rem;
+  font-weight: 750;
+}
+
+.identity-retry-button {
+  width: min(100%, 280px);
+  margin-top: 30px;
+}
+
+.final-processing-screen small {
+  max-width: 360px;
+  margin-top: 28px;
+  color: #8a908f;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.final-processing-spinner {
+  width: 82px;
+  height: 82px;
+  display: grid;
+  place-items: center;
+  border-radius: 28px;
+  background: #edf5f1;
+}
+
+.final-processing-spinner span {
+  width: 30px;
+  height: 30px;
+  border: 3px solid rgba(47, 104, 87, 0.2);
+  border-top-color: #2f6857;
+  border-radius: 50%;
+  animation: auth-spin 850ms linear infinite;
+}
+
+.final-processing-message {
+  min-height: 1.7em;
+  color: #516069 !important;
+  font-weight: 650;
+  animation: processing-copy-in 320ms ease-out;
+}
+
+.placeholder-logo {
+  width: 94px;
+  height: 94px;
+  object-fit: contain;
+}
+
+.main-app-placeholder .success-brand {
+  margin-top: 18px;
+  color: #2f6857;
+}
+
+.main-app-placeholder .secondary-button,
+.carplay-setup-loading .secondary-button {
+  width: min(100%, 320px);
+  margin-top: 28px;
+}
+
+.carplay-wizard {
+  width: 100%;
+  min-height: 100svh;
+  padding:
+    max(18px, env(safe-area-inset-top))
+    max(18px, env(safe-area-inset-right))
+    max(30px, env(safe-area-inset-bottom))
+    max(18px, env(safe-area-inset-left));
+  color: #263241;
+  background: #fffefc;
+}
+
+.carplay-wizard-navigation {
+  width: min(100%, 680px);
+  display: grid;
+  grid-template-columns: 64px minmax(120px, 1fr) 64px;
+  align-items: center;
+  gap: 14px;
+  margin: 0 auto;
+}
+
+.carplay-wizard-navigation button {
+  min-height: 36px;
+  padding: 6px 9px;
+  border: 1px solid #e1ded9;
+  border-radius: 12px;
+  color: #44515c;
+  background: rgba(255, 255, 255, 0.86);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.carplay-wizard-navigation .is-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.carplay-progress-wrap {
+  display: grid;
+  gap: 7px;
+  text-align: center;
+}
+
+.carplay-progress-wrap span {
+  color: #7b8580;
+  font-size: 0.76rem;
+  font-weight: 680;
+}
+
+.carplay-progress-bar {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8e8e4;
+}
+
+.carplay-progress-bar i {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: #487769;
+  transition: width 220ms ease;
+}
+
+.carplay-wizard-card {
+  width: min(100%, 560px);
+  margin: clamp(42px, 8vh, 82px) auto 0;
+  text-align: center;
+}
+
+.carplay-wizard h1 {
+  margin: 0;
+  font-size: clamp(1.85rem, 7.4vw, 2.55rem);
+  line-height: 1.25;
+}
+
+.carplay-primary-instruction {
+  margin: 22px auto 0;
+  color: #344150;
+  font-size: clamp(1.12rem, 4.7vw, 1.35rem);
+  font-weight: 680;
+  line-height: 1.55;
+}
+
+.carplay-secondary-copy {
+  max-width: 460px;
+  margin: 13px auto 0;
+  color: #748079;
+  font-size: 0.98rem;
+  line-height: 1.65;
+  white-space: pre-line;
+}
+
+.carplay-shortcut-link {
+  width: min(100%, 310px);
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 24px auto 0;
+  border-radius: 15px;
+  font-size: 0.94rem;
+  text-decoration: none;
+}
+
+.carplay-guide-image {
+  width: min(100%, 390px);
+  max-height: 56svh;
+  display: block;
+  margin: 34px auto 0;
+  border: 1px solid #ebe8e3;
+  border-radius: 24px;
+  object-fit: contain;
+  box-shadow: 0 14px 38px rgba(39, 50, 65, 0.08);
+}
+
+.connection-code-panel {
+  display: grid;
+  gap: 14px;
+  margin: 28px auto 0;
+  padding: 24px;
+  border-radius: 22px;
+  background: #f1f6f3;
+}
+
+.connection-code-panel.compact {
+  grid-template-columns: 1fr auto;
+  gap: 8px 14px;
+  align-items: center;
+  margin-top: 20px;
+  padding: 14px 16px;
+  text-align: right;
+}
+
+.connection-code-panel.compact span {
+  font-size: 0.78rem;
+}
+
+.connection-code-panel.compact strong {
+  max-width: 260px;
+  overflow: hidden;
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-code-panel.compact .secondary-button {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  width: auto;
+  min-height: 38px;
+  padding: 6px 12px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+}
+
+.connection-code-panel span {
+  color: #52616b;
+  font-weight: 700;
+}
+
+.connection-code-panel strong {
+  overflow-wrap: anywhere;
+  color: #244f43;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: clamp(1.05rem, 4.4vw, 1.32rem);
+  letter-spacing: 0.025em;
+}
+
+.connection-code-panel .secondary-button {
+  width: min(100%, 230px);
+  margin: 0 auto;
+}
+
+.carplay-instructions,
+.carplay-final-note {
+  display: grid;
+  gap: 10px;
+  margin: 24px auto 0;
+  padding: 0 22px 0 0;
+  color: #344150;
+  font-size: 1rem;
+  text-align: right;
+  line-height: 1.55;
+}
+
+.carplay-final-note {
+  padding: 20px;
+  border-radius: 18px;
+  background: #f4f6f5;
+  list-style: none;
+  text-align: center;
+}
+
+.carplay-final-note li {
+  list-style: none;
+}
+
+.carplay-callout {
+  margin: 22px auto 0;
+  padding: 15px 18px;
+  border: 1px solid #d8e7df;
+  border-radius: 16px;
+  color: #315c50;
+  background: #f1f7f4;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.carplay-copy-error {
+  margin: 16px auto 0;
+  color: #923f3b;
+  line-height: 1.5;
+}
+
+.carplay-finish-button {
+  width: min(100%, 320px);
+  margin: 34px auto 0;
+}
+
+.carplay-start-button {
+  width: min(100%, 240px);
+  min-height: 46px;
+  margin: 34px auto 0;
+  border-radius: 15px;
+  font-size: 0.9rem;
+}
+
+.carplay-wizard.finished .carplay-wizard-card {
+  margin-top: max(13vh, 80px);
+}
+
+.main-chat-screen {
+  width: min(100%, 760px);
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  margin: 0 auto;
+  padding:
+    max(22px, env(safe-area-inset-top))
+    max(18px, env(safe-area-inset-right))
+    max(18px, env(safe-area-inset-bottom))
+    max(18px, env(safe-area-inset-left));
+  color: #263241;
+  background: #fffefc;
+}
+
+.main-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.main-chat-header div {
+  display: grid;
+  gap: 4px;
+}
+
+.main-chat-header strong {
+  font-size: 1.03rem;
+}
+
+.main-chat-header span {
+  color: #758078;
+  font-size: 0.86rem;
+}
+
+.main-chat-header button {
+  width: 40px;
+  height: 40px;
+  border: 1px solid #e4e1dc;
+  border-radius: 14px;
+  color: #8a908c;
+  background: #fff;
+}
+
+.chat-empty-state {
+  width: min(100%, 560px);
+  margin: auto auto 0;
+  padding: 72px 0 54px;
+  text-align: center;
+}
+
+.chat-empty-state > p {
+  margin: 0;
+  color: #6f7e76;
+  font-size: 0.84rem;
+  font-weight: 680;
+}
+
+.chat-empty-state h1 {
+  margin: 12px 0 0;
+  font-size: clamp(2rem, 9vw, 3rem);
+  line-height: 1.2;
+}
+
+.chat-suggestions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 44px;
+}
+
+.chat-suggestions button {
+  min-height: 58px;
+  padding: 12px 14px;
+  border: 1px solid #dedbd6;
+  border-radius: 17px;
+  color: #344150;
+  background: #fff;
+  font-size: 0.92rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.chat-composer {
+  width: min(100%, 640px);
+  display: grid;
+  grid-template-columns: 1fr 48px;
+  gap: 10px;
+  margin: auto auto 0;
+  padding: 9px;
+  border: 1px solid #dcd9d4;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 12px 34px rgba(39, 50, 65, 0.08);
+}
+
+.chat-composer input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: #263241;
+  background: transparent;
+  font: inherit;
+}
+
+.chat-composer input::placeholder {
+  color: #9aa09d;
+}
+
+.chat-composer button {
+  width: 48px;
+  height: 48px;
+  border: 0;
+  border-radius: 16px;
+  color: #fff;
+  background: #263241;
+  font-size: 1.2rem;
+}
+
+.chat-composer button:disabled {
+  opacity: 0.42;
+}
+
+@media (max-width: 430px) {
+  .chat-suggestions {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-empty-state {
+    padding-top: 54px;
+  }
+}
+
+@media (max-width: 430px) {
+  .carplay-wizard {
+    padding-inline: 14px;
+  }
+
+  .carplay-wizard-navigation {
+    grid-template-columns: 58px minmax(100px, 1fr) 58px;
+    gap: 9px;
+  }
+
+  .carplay-wizard-card {
+    margin-top: 38px;
+  }
+
+  .carplay-guide-image {
+    max-height: 54svh;
+  }
+}
+
+.welcome-screen {
+  display: flex;
+  flex-direction: column;
+  padding:
+    max(13vh, env(safe-area-inset-top))
+    max(22px, env(safe-area-inset-right))
+    max(34px, env(safe-area-inset-bottom))
+    max(22px, env(safe-area-inset-left));
+}
+
+.brand-section {
+  width: min(100%, 640px);
+  margin-inline: auto;
+  text-align: center;
+}
+
+.brand-logo {
+  width: 94px;
+  height: 94px;
+  display: block;
+  margin: 0 auto 22px;
+  object-fit: contain;
+}
+
+.brand-section h1 {
+  margin: 0;
+  color: #263241;
+  font-size: clamp(2.25rem, 10vw, 3.4rem);
+  font-weight: 720;
+  line-height: 1.08;
+  letter-spacing: -0.045em;
+}
+
+.separator {
+  width: 92px;
+  height: 3px;
+  margin: 42px auto 40px;
+  border-radius: 999px;
+  background: #e4dfdb;
+}
+
+.brand-section h2 {
+  margin: 0;
+  color: #263241;
+  font-size: clamp(1.7rem, 7vw, 2.45rem);
+  font-weight: 760;
+  line-height: 1.38;
+  letter-spacing: -0.025em;
+}
+
+.brand-section p {
+  margin: 28px 0 0;
+  color: #344150;
+  font-size: clamp(1.02rem, 4.2vw, 1.32rem);
+  line-height: 1.72;
+}
+
+.welcome-actions {
+  width: min(100%, 770px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin: auto auto 0;
+  padding-top: 64px;
+}
+
+.welcome-actions button {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1.5px solid #d8d4cf;
+  border-radius: 18px;
+  color: #263241;
+  background: rgba(255, 254, 252, 0.88);
+  font-size: clamp(0.92rem, 3.8vw, 1.1rem);
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.button-symbol {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1.8px solid currentColor;
+  border-radius: 50%;
+  font-size: 1.35rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.people-symbol {
+  font-size: 0;
+}
+
+.people-symbol::before,
+.people-symbol::after {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border: 1.7px solid currentColor;
+  border-radius: 50%;
+}
+
+.people-symbol::after {
+  margin-inline-start: -2px;
+}
+
+.flow-screen {
+  display: flex;
+  flex-direction: column;
+  padding:
+    max(22px, env(safe-area-inset-top))
+    max(22px, env(safe-area-inset-right))
+    max(28px, env(safe-area-inset-bottom))
+    max(22px, env(safe-area-inset-left));
+}
+
+.flow-header {
+  width: min(100%, 600px);
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  align-items: center;
+  margin: 0 auto;
+}
+
+.back-button {
+  width: 44px;
+  height: 44px;
+  border: 1px solid #e1ddd8;
+  border-radius: 14px;
+  color: #263241;
+  background: #fffefc;
+  font-size: 1.45rem;
+  cursor: pointer;
+}
+
+.progress-label {
+  color: #7b817f;
+  font-size: 0.9rem;
+  font-weight: 650;
+  text-align: center;
+}
+
+.flow-content {
+  width: min(100%, 520px);
+  display: flex;
+  flex: 1;
+  margin: 0 auto;
+}
+
+.auth-content {
+  align-items: center;
+  justify-content: center;
+  padding-block: 42px;
+}
+
+.auth-card {
+  width: 100%;
+  padding: clamp(26px, 7vw, 38px);
+  border: 1.5px solid #dedad5;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 52px rgba(38, 50, 65, 0.07);
+  text-align: center;
+}
+
+.auth-mark {
+  width: 66px;
+  height: 66px;
+  display: grid;
+  place-items: center;
+  margin: 0 auto 28px;
+  border-radius: 22px;
+  color: #2f6857;
+  background: #edf5f1;
+  font-size: 1.7rem;
+  font-weight: 750;
+}
+
+.auth-actions {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  margin-top: 36px;
+}
+
+.auth-provider-button {
+  width: 100%;
+  max-width: 288px;
+  padding: 0;
+  border: 0;
+  border-radius: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.auth-provider-button:focus-visible {
+  outline: 3px solid #7aa897;
+  outline-offset: 3px;
+}
+
+.auth-provider-button:disabled {
+  cursor: wait;
+}
+
+.official-signin-image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.auth-provider-status {
+  margin: 2px 0 0;
+  color: #68747c;
+  font-size: 0.9rem;
+}
+
+.auth-loading {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 32px;
+  color: #68747c;
+}
+
+.auth-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #d8d4cf;
+  border-top-color: #2f6857;
+  border-radius: 50%;
+  animation: auth-spin 700ms linear infinite;
+}
+
+.auth-error {
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  color: #923f3b;
+  background: #fff1ef;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.auth-note {
+  margin: 26px 0 0;
+  color: #858b8a;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+@keyframes auth-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes processing-copy-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.step-form,
+.confirmation-step {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding-top: clamp(72px, 14vh, 132px);
+}
+
+.step-copy {
+  text-align: center;
+}
+
+.step-copy h1,
+.success-screen h1 {
+  margin: 0;
+  color: #263241;
+  font-size: clamp(2rem, 8vw, 2.75rem);
+  font-weight: 750;
+  line-height: 1.28;
+  letter-spacing: -0.035em;
+}
+
+.step-copy p {
+  max-width: 38ch;
+  margin: 18px auto 0;
+  color: #6b747c;
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.field-group {
+  margin-top: 54px;
+}
+
+.field-group label {
+  display: block;
+  margin: 0 4px 10px;
+  color: #344150;
+  font-size: 0.94rem;
+  font-weight: 680;
+}
+
+.field-group input {
+  width: 100%;
+  min-height: 62px;
+  padding: 14px 18px;
+  border: 1.5px solid #d8d4cf;
+  border-radius: 18px;
+  color: #263241;
+  background: #ffffff;
+  font-size: 1.05rem;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.field-group input::placeholder {
+  color: #a5aaa9;
+}
+
+.field-group input:focus {
+  border-color: #5f6f7d;
+  box-shadow: 0 0 0 4px rgba(95, 111, 125, 0.1);
+}
+
+.field-group input[aria-invalid='true'] {
+  border-color: #b85c58;
+}
+
+.field-error {
+  margin: 10px 4px 0;
+  color: #a34a46;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.primary-button,
+.secondary-button {
+  width: 100%;
+  min-height: 60px;
+  border-radius: 18px;
+  font-size: 1.03rem;
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.primary-button {
+  margin-top: auto;
+  border: 1px solid #263241;
+  color: #ffffff;
+  background: #263241;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled,
+.back-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.secondary-button {
+  border: 1.5px solid #d8d4cf;
+  color: #263241;
+  background: #fffefc;
+}
+
+.address-preview {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 54px;
+  padding: 22px;
+  border: 1.5px solid #dedad5;
+  border-radius: 20px;
+  color: #263241;
+  background: #ffffff;
+  line-height: 1.6;
+}
+
+.address-preview span {
+  font-size: 1.6rem;
+}
+
+.confirmation-actions {
+  display: grid;
+  gap: 12px;
+  margin-top: auto;
+}
+
+.confirmation-actions .primary-button {
+  margin-top: 0;
+}
+
+.success-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding:
+    max(11vh, env(safe-area-inset-top))
+    max(24px, env(safe-area-inset-right))
+    max(30px, env(safe-area-inset-bottom))
+    max(24px, env(safe-area-inset-left));
+  text-align: center;
+}
+
+.success-mark {
+  width: 86px;
+  height: 86px;
+  display: grid;
+  place-items: center;
+  border-radius: 28px;
+  color: #2f6857;
+  background: #edf5f1;
+  font-size: 2.4rem;
+  font-weight: 700;
+}
+
+.success-brand {
+  margin: 22px 0 38px;
+  color: #7b817f;
+  font-size: 0.9rem;
+  font-weight: 680;
+}
+
+.success-copy {
+  margin: 18px 0 0;
+  color: #6b747c;
+  line-height: 1.65;
+}
+
+.family-code-panel {
+  width: min(100%, 440px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 46px;
+  padding: 24px;
+  border: 1.5px solid #dedad5;
+  border-radius: 22px;
+  background: #ffffff;
+}
+
+.family-code-panel span,
+.family-code-panel small {
+  color: #7b817f;
+}
+
+.family-code-panel strong {
+  margin: 10px 0 14px;
+  color: #263241;
+  font-size: 2.5rem;
+  letter-spacing: 0.16em;
+}
+
+.family-code-panel button {
+  border: 0;
+  color: #3d5e72;
+  background: transparent;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.family-code-panel small {
+  margin-top: 18px;
+  line-height: 1.55;
+}
+
+.success-button {
+  width: min(100%, 520px);
+  margin-top: auto;
+}
+
+button:hover {
+  filter: brightness(0.985);
+}
+
+button:active {
+  transform: scale(0.992);
+}
+
+button:focus-visible {
+  outline: 3px solid rgba(38, 50, 65, 0.18);
+  outline-offset: 3px;
+}
+
+@media (max-width: 480px) {
+  .welcome-screen {
+    padding-top: max(10vh, env(safe-area-inset-top));
+  }
+
+  .welcome-actions {
+    gap: 10px;
+  }
+
+  .welcome-actions button {
+    gap: 7px;
+    padding-inline: 8px;
+  }
+
+  .wide-break {
+    display: none;
+  }
+}
+
+@media (max-height: 700px) {
+  .step-form,
+  .confirmation-step {
+    padding-top: 40px;
+  }
+
+  .field-group,
+  .address-preview {
+    margin-top: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
+}
