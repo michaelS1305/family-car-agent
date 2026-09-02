@@ -398,19 +398,32 @@ def load_ai_service(database_stub, model):
 class ToolInvokingModel:
     def __init__(self):
         self.contents = None
+        self.calls = 0
 
     def generate_content(self, **kwargs):
         self.contents = kwargs["contents"]
-        tools = {tool.__name__: tool for tool in kwargs["config"]["tools"]}
-        tools["get_user_reservations_tool"]()
-        tools["get_family_reservations_tool"]()
-        tools["cancel_reservation_tool"](202)
-        tools["update_reservation_tool"](
-            202,
-            "2026-09-04T10:00:00",
-            "2026-09-04T11:00:00",
-        )
-        return types.SimpleNamespace(text="ok")
+        self.calls += 1
+        if self.calls == 1:
+            parts = [
+                types.SimpleNamespace(
+                    function_call=types.SimpleNamespace(
+                        name="get_user_reservations_tool",
+                        args={},
+                    )
+                ),
+                types.SimpleNamespace(
+                    function_call=types.SimpleNamespace(
+                        name="get_family_reservations_tool",
+                        args={},
+                    )
+                ),
+            ]
+            content = types.SimpleNamespace(parts=parts)
+            return types.SimpleNamespace(
+                candidates=[types.SimpleNamespace(content=content)],
+                text="",
+            )
+        return types.SimpleNamespace(candidates=[], text="ok")
 
 
 class PromptCapturingModel:
@@ -420,8 +433,38 @@ class PromptCapturingModel:
     def generate_content(self, **kwargs):
         self.config = kwargs["config"]
         return types.SimpleNamespace(
+            candidates=[],
             text="אני כאן כדי לעזור בניהול הרכב המשפחתי 🙂"
         )
+
+
+class MutationInvokingModel:
+    def __init__(self):
+        self.calls = 0
+        self.config = None
+
+    def generate_content(self, **kwargs):
+        self.calls += 1
+        self.config = kwargs["config"]
+        if self.calls == 1:
+            function_call = types.SimpleNamespace(
+                name="update_reservation_tool",
+                args={
+                    "reservation_id": 101,
+                    "start_time": "2026-09-04T10:00:00",
+                    "end_time": "2026-09-04T11:00:00",
+                    "family_id": 999,
+                },
+            )
+            return types.SimpleNamespace(
+                candidates=[types.SimpleNamespace(
+                    content=types.SimpleNamespace(parts=[
+                        types.SimpleNamespace(function_call=function_call)
+                    ])
+                )],
+                text="",
+            )
+        return types.SimpleNamespace(candidates=[], text="עודכן")
 
 
 class AIToolBoundaryTests(unittest.TestCase):
@@ -431,60 +474,52 @@ class AIToolBoundaryTests(unittest.TestCase):
             "get_active_driver",
             "get_last_driver",
             "get_recent_events",
-            "create_reservation",
             "get_user_reservations",
             "get_family_reservations",
-            "cancel_reservation",
-            "update_reservation",
-            "save_conversation_message",
-            "get_recent_conversation",
         ):
             setattr(self.database_stub, name, Mock())
-        self.database_stub.get_recent_conversation.return_value = [
-            ("user", "A private")
-        ]
         self.database_stub.get_user_reservations.return_value = []
         self.database_stub.get_family_reservations.return_value = []
         self.model = ToolInvokingModel()
         self.service = load_ai_service(self.database_stub, self.model)
 
     def test_tools_close_over_validated_current_user_identity(self):
+        dispatcher = Mock()
         with patch.object(self.service, "ZoneInfo", return_value=timezone.utc):
-            self.service.ask_agent(
+            self.service.generate_agent_response(
                 "test",
                 CurrentUser(user_id=1, name="A1", family_id=10),
+                [("user", "A private")],
+                dispatcher,
             )
 
         self.database_stub.get_family_reservations.assert_called_once_with(10)
         self.database_stub.get_user_reservations.assert_called_once_with(1, 10)
-        self.database_stub.cancel_reservation.assert_called_once_with(202, 1, 10)
-        self.database_stub.update_reservation.assert_called_once_with(
-            202,
-            1,
-            10,
-            "2026-09-04T10:00:00",
-            "2026-09-04T11:00:00",
-        )
-        self.database_stub.get_recent_conversation.assert_called_once_with(1, limit=10)
-        self.assertIn("A private", self.model.contents)
-        self.assertNotIn("B private", self.model.contents)
+        dispatcher.assert_not_called()
+        serialized_contents = repr(self.model.contents)
+        self.assertNotIn("user_id", serialized_contents)
+        self.assertNotIn("family_id", serialized_contents)
 
     def test_ai_request_without_family_fails_before_any_data_access(self):
         with self.assertRaises(ValueError):
-            self.service.ask_agent(
+            self.service.generate_agent_response(
                 "test",
                 CurrentUser(user_id=1, name="A1", family_id=None),
+                [],
+                Mock(),
             )
-        self.database_stub.get_recent_conversation.assert_not_called()
+        self.database_stub.get_user_reservations.assert_not_called()
 
     def test_system_instruction_keeps_ai_inside_family_car_domain(self):
         model = PromptCapturingModel()
         self.service.client.models = model
 
         with patch.object(self.service, "ZoneInfo", return_value=timezone.utc):
-            reply = self.service.ask_agent(
+            reply = self.service.generate_agent_response(
                 "כתוב לי קוד בפייתון",
                 CurrentUser(user_id=1, name="A1", family_id=10),
+                [],
+                Mock(),
             )
 
         instruction = model.config["system_instruction"]
@@ -502,13 +537,38 @@ class AIToolBoundaryTests(unittest.TestCase):
             "get_active_driver",
             "get_last_driver",
             "get_recent_events",
-            "create_reservation",
             "get_user_reservations",
             "get_family_reservations",
-            "cancel_reservation",
-            "update_reservation",
         ):
             getattr(self.database_stub, name).assert_not_called()
+
+    def test_mutation_is_manually_dispatched_without_trusting_model_identity(self):
+        model = MutationInvokingModel()
+        self.service.client.models = model
+        dispatcher = Mock(return_value={
+            "success": True,
+            "code": "RESERVATION_UPDATED",
+        })
+
+        with patch.object(self.service, "ZoneInfo", return_value=timezone.utc):
+            reply = self.service.generate_agent_response(
+                "עדכן את ההזמנה",
+                CurrentUser(user_id=1, name="A1", family_id=10),
+                [("user", "שאלה קודמת"), ("assistant", "תשובה קודמת")],
+                dispatcher,
+            )
+
+        self.assertEqual(reply, "עודכן")
+        dispatcher.assert_called_once_with(
+            "update_reservation",
+            {
+                "reservation_id": 101,
+                "start_time": "2026-09-04T10:00:00",
+                "end_time": "2026-09-04T11:00:00",
+            },
+        )
+        self.assertTrue(model.config["automatic_function_calling"]["disable"])
+        self.assertEqual(model.calls, 2)
 
 
 if __name__ == "__main__":

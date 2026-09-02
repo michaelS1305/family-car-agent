@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "test:frontend": "node --test --experimental-strip-types tests/apiClient.test.ts tests/appDestination.test.ts tests/authSessionTransition.test.ts tests/carPlaySetup.test.ts tests/createFamilySubmission.test.ts tests/createValidationAttempts.test.ts tests/invalidSessionRecovery.test.ts tests/joinFamilyRequests.test.ts tests/joinFamilySubmission.test.ts tests/nameValidation.test.ts tests/onboardingDraft.test.ts",
+    "test:frontend": "node --test --experimental-strip-types tests/apiClient.test.ts tests/appDestination.test.ts tests/authSessionTransition.test.ts tests/carPlaySetup.test.ts tests/chatClient.test.ts tests/chatSubmission.test.ts tests/createFamilySubmission.test.ts tests/createValidationAttempts.test.ts tests/invalidSessionRecovery.test.ts tests/joinFamilyRequests.test.ts tests/joinFamilySubmission.test.ts tests/nameValidation.test.ts tests/onboardingDraft.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

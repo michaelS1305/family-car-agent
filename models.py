@@ -1,6 +1,7 @@
 from typing import Literal
+from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class CarConnection(BaseModel):
@@ -48,3 +49,18 @@ class JoinFamilyCodeRequest(BaseModel):
 
 class JoinFamilyCompleteRequest(BaseModel):
     user_name: str
+
+
+class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    message: str
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value):
+        normalized = value.strip()
+        if not 1 <= len(normalized) <= 4000:
+            raise ValueError("message must contain between 1 and 4000 characters")
+        return normalized

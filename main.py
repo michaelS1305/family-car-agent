@@ -10,6 +10,7 @@ from models import (
     CarConnection,
     CarPlaySetupResponse,
     CarPlaySetupStatusRequest,
+    ChatRequest,
     CreateFamilyAddressRequest,
     CreateFamilyRequest,
     JoinFamilyAddressConfirmationRequest,
@@ -22,6 +23,7 @@ from database import (
     init_db,
 )
 from car_service import connect_user, disconnect_user
+from chat_service import ChatError, get_chat_history, process_chat_message
 from carplay_setup_service import (
     CarPlaySetupError,
     prepare_carplay_setup,
@@ -88,6 +90,40 @@ def get_me(current_user: CurrentUser = Depends(get_current_user)):
         "family_id": current_user.family_id,
         "carplay_setup_status": current_user.carplay_setup_status,
     }
+
+
+def _raise_chat_error(error):
+    headers = None
+    if error.retry_after_seconds is not None:
+        headers = {"Retry-After": str(error.retry_after_seconds)}
+    raise HTTPException(
+        status_code=error.status_code,
+        detail=error.detail(),
+        headers=headers,
+    ) from error
+
+
+@app.post("/api/chat", status_code=200)
+def chat(
+    request: ChatRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return process_chat_message(
+            request.request_id,
+            request.message,
+            current_user,
+        )
+    except ChatError as error:
+        _raise_chat_error(error)
+
+
+@app.get("/api/chat/history", status_code=200)
+def chat_history(
+    limit: int = 30,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    return {"messages": get_chat_history(current_user, limit)}
 
 
 @app.post(
