@@ -83,6 +83,16 @@ class CarPlaySetupServiceTests(unittest.TestCase):
         self.assertEqual(result, "completed")
         database_stub.set_carplay_setup_status.assert_called_once_with(17, "completed")
 
+    def test_status_update_requires_a_family_mapping(self):
+        with self.assertRaises(service.CarPlaySetupError) as raised:
+            service.update_carplay_setup_status(
+                CurrentUser(user_id=17, name="מיכאל", family_id=None),
+                "completed",
+            )
+
+        self.assertEqual(raised.exception.code, "CARPLAY_SETUP_UNAVAILABLE")
+        database_stub.set_carplay_setup_status.assert_not_called()
+
     def test_rejects_an_unknown_status_before_database_access(self):
         with self.assertRaises(service.CarPlaySetupError) as raised:
             service.update_carplay_setup_status(

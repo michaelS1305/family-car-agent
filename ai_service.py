@@ -51,6 +51,8 @@ def ask_agent(text, current_user: CurrentUser):
     user_id = current_user.user_id
     user_name = current_user.name
     family_id = current_user.family_id
+    if family_id is None:
+        raise ValueError("A family-scoped AI request requires a family mapping")
     now = datetime.now(ZoneInfo("Asia/Jerusalem"))
 
     # Tools are defined inside ask_agent so Gemini can only access
@@ -110,7 +112,7 @@ def ask_agent(text, current_user: CurrentUser):
 
     def get_user_reservations_tool():
         """Get reservations created by the current user."""
-        reservations = get_user_reservations(user_id)
+        reservations = get_user_reservations(user_id, family_id)
 
         return [
             {
@@ -143,6 +145,7 @@ def ask_agent(text, current_user: CurrentUser):
         return cancel_reservation(
             reservation_id,
             user_id,
+            family_id,
         )
 
     def update_reservation_tool(
@@ -154,6 +157,7 @@ def ask_agent(text, current_user: CurrentUser):
         return update_reservation(
             reservation_id,
             user_id,
+            family_id,
             start_time,
             end_time,
         )

@@ -159,15 +159,6 @@ def init_db():
         """)
 
         conn.execute("""
-        CREATE TABLE IF NOT EXISTS onboarding_sessions (
-            telegram_chat_id BIGINT PRIMARY KEY,
-            step TEXT NOT NULL,
-            data TEXT,
-            updated_at TEXT NOT NULL
-        )
-        """)
-
-        conn.execute("""
         CREATE TABLE IF NOT EXISTS pwa_join_sessions (
             auth_user_id UUID NOT NULL,
             step TEXT NOT NULL DEFAULT 'family_name',
@@ -356,37 +347,11 @@ def get_active_driver(family_id):
 
         return cursor.fetchone()
 
-def insert_user(
-    name,
-    shortcut_token,
-    telegram_chat_id,
-    family_id
-):
-    with pool.connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO users (
-                name,
-                shortcut_token,
-                telegram_chat_id,
-                family_id
-            )
-            VALUES (%s, %s, %s, %s)
-            """,
-            (
-                name,
-                shortcut_token,
-                telegram_chat_id,
-                family_id
-            )
-        )
-
-
 def get_user_by_token(shortcut_token):
     with pool.connection() as conn:
         cursor = conn.execute(
             """
-            SELECT id, name, telegram_chat_id, family_id
+            SELECT id, name, family_id
             FROM users
             WHERE shortcut_token = %s
             """,
@@ -394,20 +359,6 @@ def get_user_by_token(shortcut_token):
         )
 
         return cursor.fetchone()
-
-def get_user_by_telegram_chat_id(chat_id):
-    with pool.connection() as conn:
-        cursor = conn.execute(
-            """
-            SELECT id, name, telegram_chat_id, family_id
-            FROM users
-            WHERE telegram_chat_id = %s
-            """,
-            (chat_id,)
-        )
-
-        return cursor.fetchone()
-
 
 def get_user_by_auth_user_id(auth_user_id):
     with pool.connection() as conn:
@@ -421,28 +372,6 @@ def get_user_by_auth_user_id(auth_user_id):
         )
 
         return cursor.fetchone()
-
-def get_users_by_family_id(family_id):
-    with pool.connection() as conn:
-        cursor = conn.execute(
-            """
-            SELECT id, name, telegram_chat_id
-            FROM users
-            WHERE family_id = %s
-            """,
-            (family_id,)
-        )
-
-        return cursor.fetchall()
-
-def get_all_users():
-    with pool.connection() as conn:
-        cursor = conn.execute("""
-            SELECT id, name
-            FROM users
-        """)
-
-        return cursor.fetchall()
 
 def get_last_driver(family_id):
     with pool.connection() as conn:
@@ -589,67 +518,44 @@ def get_family_reservations(family_id):
 
         return cursor.fetchall()
 
-def get_user_reservations(user_id):
+def get_user_reservations(user_id, family_id):
     with pool.connection() as conn:
         cursor = conn.execute(
             """
-            SELECT id, start_time, end_time, status
-            FROM reservations
-            WHERE user_id = %s
-            ORDER BY start_time
+            SELECT r.id, r.start_time, r.end_time, r.status
+            FROM reservations AS r
+            JOIN users AS u ON u.id = r.user_id
+            WHERE r.user_id = %s
+              AND u.family_id = %s
+            ORDER BY r.start_time
             """,
-            (user_id,)
+            (user_id, family_id)
         )
 
         return cursor.fetchall()
 
-def _get_reservation_by_id(conn, reservation_id):
-    cursor = conn.execute(
-        """
-        SELECT id, user_id, start_time, end_time, status
-        FROM reservations
-        WHERE id = %s
-        """,
-        (reservation_id,)
-    )
-
-    return cursor.fetchone()
-
-
-def get_reservation_by_id(reservation_id):
+def cancel_reservation(reservation_id, user_id, family_id):
     with pool.connection() as conn:
-        return _get_reservation_by_id(conn, reservation_id)
-
-def cancel_reservation(reservation_id, user_id):
-    with pool.connection() as conn:
-        reservation = _get_reservation_by_id(conn, reservation_id)
-
-        if not reservation:
-            return {
-                "success": False,
-                "message": "Reservation not found"
-            }
-
-        if reservation[1] != user_id:
-            return {
-                "success": False,
-                "message": "You cannot cancel another user's reservation"
-            }
-
-        if reservation[4] != "active":
-            return {
-                "success": False,
-                "message": "Reservation is not active"
-            }
-
-        conn.execute(
+        updated = conn.execute(
             """
-            UPDATE reservations
+            UPDATE reservations AS r
             SET status = 'cancelled'
-            WHERE id = %s
+            FROM users AS u
+            WHERE r.id = %s
+              AND r.user_id = %s
+              AND u.id = r.user_id
+              AND u.family_id = %s
+              AND r.status = 'active'
+            RETURNING r.id
             """,
-            (reservation_id,)
-        )
+            (reservation_id, user_id, family_id),
+        ).fetchone()
+
+        if not updated:
+            return {
+                "success": False,
+                "message": "Reservation not found or unavailable"
+            }
 
         return {
             "success": True,
@@ -657,66 +563,70 @@ def cancel_reservation(reservation_id, user_id):
         }
 
 
-def update_reservation(reservation_id, user_id, start_time, end_time):
+def update_reservation(
+    reservation_id,
+    user_id,
+    family_id,
+    start_time,
+    end_time,
+):
     with pool.connection() as conn:
-        reservation = _get_reservation_by_id(conn, reservation_id)
+        with conn.transaction():
+            reservation = conn.execute(
+                """
+                SELECT r.id
+                FROM reservations AS r
+                JOIN users AS u ON u.id = r.user_id
+                WHERE r.id = %s
+                  AND r.user_id = %s
+                  AND u.family_id = %s
+                  AND r.status = 'active'
+                FOR UPDATE OF r
+                """,
+                (reservation_id, user_id, family_id),
+            ).fetchone()
 
-        if not reservation:
-            return {
-                "success": False,
-                "message": "Reservation not found"
-            }
+            if not reservation:
+                return {
+                    "success": False,
+                    "message": "Reservation not found or unavailable"
+                }
 
-        if reservation[1] != user_id:
-            return {
-                "success": False,
-                "message": "You cannot modify another user's reservation"
-            }
+            conflict = _get_conflicting_reservation(
+                conn,
+                family_id,
+                start_time,
+                end_time,
+                exclude_reservation_id=reservation_id
+            )
 
-        if reservation[4] != "active":
-            return {
-                "success": False,
-                "message": "Reservation is not active"
-            }
+            if conflict:
+                return {
+                    "success": False,
+                    "message": "Car is already reserved for this time"
+                }
 
-        family = conn.execute(
-            """
-            SELECT family_id
-            FROM users
-            WHERE id = %s
-            """,
-            (user_id,)
-        ).fetchone()
+            updated = conn.execute(
+                """
+                UPDATE reservations AS r
+                SET start_time = %s,
+                    end_time = %s
+                FROM users AS u
+                WHERE r.id = %s
+                  AND r.user_id = %s
+                  AND u.id = r.user_id
+                  AND u.family_id = %s
+                  AND r.status = 'active'
+                RETURNING r.id
+                """,
+                (start_time, end_time, reservation_id, user_id, family_id),
+            ).fetchone()
 
-        if not family or family[0] is None:
-            return {
-                "success": False,
-                "message": "User family not found"
-            }
-
-        conflict = _get_conflicting_reservation(
-            conn,
-            family[0],
-            start_time,
-            end_time,
-            exclude_reservation_id=reservation_id
-        )
-
-        if conflict:
-            return {
-                "success": False,
-                "message": "Car is already reserved for this time"
-            }
-
-        conn.execute(
-            """
-            UPDATE reservations
-            SET start_time = %s,
-                end_time = %s
-            WHERE id = %s
-            """,
-            (start_time, end_time, reservation_id)
-        )
+            if not updated:
+                return {
+                    "success": False,
+                    "message": "Reservation not found or unavailable"
+                }
 
         return {
             "success": True,
@@ -798,8 +708,6 @@ def create_family_with_first_user(
     family_code,
     home_address,
     user_name,
-    shortcut_token,
-    telegram_chat_id,
     home_latitude=None,
     home_longitude=None,
     auth_user_id=None,
@@ -871,17 +779,13 @@ def create_family_with_first_user(
                     """
                     INSERT INTO users (
                         name,
-                        shortcut_token,
-                        telegram_chat_id,
                         family_id,
                         auth_user_id
                     )
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s)
                     """,
                     (
                         user_name,
-                        shortcut_token,
-                        telegram_chat_id,
                         family_id,
                         auth_user_id,
                     )
@@ -1421,12 +1325,10 @@ def complete_pwa_join(auth_user_id, user_name):
                     """
                     INSERT INTO users (
                         name,
-                        shortcut_token,
-                        telegram_chat_id,
                         family_id,
                         auth_user_id
                     )
-                    VALUES (%s, NULL, NULL, %s, %s)
+                    VALUES (%s, %s, %s)
                     RETURNING id
                     """,
                     (user_name, session["family_id"], auth_user_id),
@@ -1446,54 +1348,3 @@ def complete_pwa_join(auth_user_id, user_name):
         if constraint_name == "users_auth_user_id_unique":
             raise AuthUserAlreadyMappedError() from exc
         raise
-
-def get_onboarding_session(chat_id):
-    with pool.connection() as conn:
-        cursor = conn.execute(
-            """
-            SELECT step, data
-            FROM onboarding_sessions
-            WHERE telegram_chat_id = %s
-            """,
-            (chat_id,)
-        )
-
-        return cursor.fetchone()
-
-def save_onboarding_session(chat_id, step, data=None):
-    with pool.connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO onboarding_sessions (
-                telegram_chat_id,
-                step,
-                data,
-                updated_at
-            )
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (telegram_chat_id)
-            DO UPDATE SET
-                step = EXCLUDED.step,
-                data = EXCLUDED.data,
-                updated_at = EXCLUDED.updated_at
-            """,
-            (
-                chat_id,
-                step,
-                data,
-                datetime.now().isoformat()
-            )
-        )
-
-
-def delete_onboarding_session(chat_id):
-    with pool.connection() as conn:
-        conn.execute(
-            """
-            DELETE FROM onboarding_sessions
-            WHERE telegram_chat_id = %s
-            """,
-            (chat_id,)
-        )
-
-        conn.commit()

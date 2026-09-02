@@ -163,6 +163,11 @@ def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Authenticated user is not registered in the application",
         )
+    if internal_user[2] is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated user is not assigned to a family",
+        )
 
     return CurrentUser(
         user_id=internal_user[0],

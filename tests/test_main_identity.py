@@ -76,13 +76,9 @@ models_stub = stub_module(
     JoinFamilyCompleteRequest=type("JoinFamilyCompleteRequest", (), {}),
     JoinFamilyNameRequest=type("JoinFamilyNameRequest", (), {}),
 )
-onboarding_stub = stub_module("onboarding_service", handle_onboarding=Mock())
-telegram_stub = stub_module("telegram_service", send_telegram_message=Mock())
 database_stub = stub_module(
     "database",
     init_db=Mock(),
-    get_user_by_telegram_chat_id=Mock(),
-    get_onboarding_session=Mock(),
 )
 car_stub = stub_module(
     "car_service",
@@ -109,7 +105,6 @@ carplay_setup_stub = stub_module(
     prepare_carplay_setup=Mock(return_value=carplay_setup_value),
     update_carplay_setup_status=Mock(return_value="completed"),
 )
-agent_stub = stub_module("ai_service", ask_agent=Mock())
 auth_stub = stub_module(
     "auth_service",
     get_current_user=Mock(),
@@ -167,12 +162,9 @@ def load_main_module(environment=None):
                 "fastapi": fastapi_stub,
                 "fastapi.middleware.cors": cors_stub,
                 "models": models_stub,
-                "onboarding_service": onboarding_stub,
-                "telegram_service": telegram_stub,
                 "database": database_stub,
                 "car_service": car_stub,
                 "carplay_setup_service": carplay_setup_stub,
-                "ai_service": agent_stub,
                 "auth_service": auth_stub,
                 "family_creation_service": family_creation_stub,
                 "join_family_service": join_family_stub,
@@ -488,69 +480,6 @@ class JoinFamilyRouteTests(unittest.TestCase):
             "verified-auth-user",
             "כהן",
         )
-
-
-class TelegramIdentityBoundaryTests(unittest.TestCase):
-    def setUp(self):
-        onboarding_stub.handle_onboarding.reset_mock(return_value=True)
-        telegram_stub.send_telegram_message.reset_mock(return_value=True)
-        database_stub.get_user_by_telegram_chat_id.reset_mock(return_value=True)
-        database_stub.get_onboarding_session.reset_mock(return_value=True)
-        agent_stub.ask_agent.reset_mock(return_value=True)
-
-    def test_registered_user_identity_comes_from_backend_lookup(self):
-        database_stub.get_user_by_telegram_chat_id.return_value = (
-            17,
-            "מיכאל",
-            777,
-            42,
-        )
-        database_stub.get_onboarding_session.return_value = None
-        agent_stub.ask_agent.return_value = "תשובת הסוכן"
-
-        response = main.telegram_webhook(
-            {
-                "user_id": 9999,
-                "family_id": 8888,
-                "message": {
-                    "chat": {"id": 777},
-                    "text": " מי עם הרכב? ",
-                    "user_id": 9999,
-                    "family_id": 8888,
-                },
-            }
-        )
-
-        database_stub.get_user_by_telegram_chat_id.assert_called_once_with(777)
-        agent_stub.ask_agent.assert_called_once_with(
-            "מי עם הרכב?",
-            CurrentUser(user_id=17, name="מיכאל", family_id=42),
-        )
-        telegram_stub.send_telegram_message.assert_called_once_with(
-            777,
-            "תשובת הסוכן",
-        )
-        self.assertEqual(response, {"ok": True})
-
-    def test_unregistered_user_keeps_existing_onboarding_route(self):
-        database_stub.get_user_by_telegram_chat_id.return_value = None
-        database_stub.get_onboarding_session.return_value = None
-        onboarding_stub.handle_onboarding.return_value = "תשובת הרשמה"
-
-        response = main.telegram_webhook(
-            {"message": {"chat": {"id": 777}, "text": " /start "}}
-        )
-
-        onboarding_stub.handle_onboarding.assert_called_once_with(
-            chat_id=777,
-            text="/start",
-        )
-        agent_stub.ask_agent.assert_not_called()
-        telegram_stub.send_telegram_message.assert_called_once_with(
-            777,
-            "תשובת הרשמה",
-        )
-        self.assertEqual(response, {"ok": True})
 
 
 if __name__ == "__main__":

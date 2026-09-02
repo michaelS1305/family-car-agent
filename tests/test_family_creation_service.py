@@ -118,8 +118,6 @@ class FamilyCreationServiceTests(unittest.TestCase):
             family_code="482731",
             home_address="תל אביב, דיזנגוף, 120",
             user_name="מיכאל",
-            shortcut_token=None,
-            telegram_chat_id=None,
             home_latitude=32.0809,
             home_longitude=34.7806,
             auth_user_id="auth-user-uuid",

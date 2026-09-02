@@ -200,6 +200,21 @@ class SupabaseAuthenticationTests(unittest.TestCase):
         )
         lookup.assert_called_once_with(self.auth_user_id)
 
+    def test_mapped_user_without_family_fails_closed(self):
+        self.configure_valid_claims()
+
+        with self.assertRaises(FakeHTTPException) as raised:
+            self.authenticate(
+                "valid-token",
+                internal_user=(17, "מיכאל", None, "pending"),
+            )
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(
+            raised.exception.detail,
+            "Authenticated user is not assigned to a family",
+        )
+
     def test_unmapped_dependency_returns_auth_identity_without_internal_lookup(self):
         self.configure_valid_claims()
 

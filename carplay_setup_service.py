@@ -49,6 +49,12 @@ def prepare_carplay_setup(current_user: CurrentUser):
 
 
 def update_carplay_setup_status(current_user: CurrentUser, setup_status: str):
+    if current_user.family_id is None:
+        raise CarPlaySetupError(
+            "CARPLAY_SETUP_UNAVAILABLE",
+            "יש להשלים תחילה את ההצטרפות למשפחה.",
+            409,
+        )
     if setup_status not in {"completed", "skipped"}:
         raise CarPlaySetupError(
             "INVALID_CARPLAY_SETUP_STATUS",

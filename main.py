@@ -1,5 +1,4 @@
 import os
-import traceback
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Response
@@ -19,12 +18,8 @@ from models import (
     JoinFamilyCompleteRequest,
     JoinFamilyNameRequest,
 )
-from onboarding_service import handle_onboarding
-from telegram_service import send_telegram_message
 from database import (
     init_db,
-    get_user_by_telegram_chat_id,
-    get_onboarding_session,
 )
 from car_service import connect_user, disconnect_user
 from carplay_setup_service import (
@@ -32,7 +27,6 @@ from carplay_setup_service import (
     prepare_carplay_setup,
     update_carplay_setup_status,
 )
-from ai_service import ask_agent
 from auth_service import get_authenticated_supabase_user, get_current_user
 from family_creation_service import (
     FamilyCreationError,
@@ -331,61 +325,3 @@ def disconnect_car(connection: CarConnection):
         connection.latitude,
         connection.longitude,
     )
-
-
-@app.post("/telegram/webhook")
-def telegram_webhook(update: dict):
-    try:
-        message = update.get("message")
-
-        if not message:
-            return {"ok": True}
-
-        chat_id = message["chat"]["id"]
-        text = message.get("text", "").strip()
-
-        user = get_user_by_telegram_chat_id(chat_id)
-        onboarding_session = get_onboarding_session(chat_id)
-
-        # If the user is not registered yet,
-        # or still has an active onboarding session,
-        # continue onboarding.
-        if not user or onboarding_session:
-            reply = handle_onboarding(
-                chat_id=chat_id,
-                text=text,
-            )
-
-            if reply:
-                send_telegram_message(chat_id, reply)
-
-            return {"ok": True}
-
-        current_user = CurrentUser(
-            user_id=user[0],
-            name=user[1],
-            family_id=user[3],
-        )
-
-        reply = ask_agent(text, current_user)
-
-        send_telegram_message(chat_id, reply)
-
-        return {"ok": True}
-
-    except Exception:
-        traceback.print_exc()
-
-        # Keep the technical error private from the user.
-        try:
-            if "chat_id" in locals():
-                send_telegram_message(
-                    chat_id,
-                    "אני לא זמין כרגע, נסה שוב בעוד כמה דקות.",
-                )
-        except Exception:
-            traceback.print_exc()
-
-        # Return HTTP 200 so Telegram does not repeatedly resend
-        # the same failed update.
-        return {"ok": False}

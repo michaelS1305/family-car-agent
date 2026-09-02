@@ -196,8 +196,6 @@ def create_family_for_auth_user(
             family_code=normalized_family_code,
             home_address=resolved_address.normalized_address,
             user_name=normalized_user_name,
-            shortcut_token=None,
-            telegram_chat_id=None,
             home_latitude=resolved_address.latitude,
             home_longitude=resolved_address.longitude,
             auth_user_id=auth_user_id,

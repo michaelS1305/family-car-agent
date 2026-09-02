@@ -175,8 +175,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
             family_code="482731",
             home_address="תל אביב, דיזנגוף, 120",
             user_name="מיכאל",
-            shortcut_token="shortcut-token",
-            telegram_chat_id=303,
             home_latitude=32.0809,
             home_longitude=34.7806,
         )
@@ -199,7 +197,7 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         self.assertIn("INSERT INTO users", user_insert.args[0])
         self.assertEqual(
             user_insert.args[1],
-            ("מיכאל", "shortcut-token", 303, 7, None),
+            ("מיכאל", 7, None),
         )
 
     def test_user_insert_failure_rolls_back_family_insert(self):
@@ -257,8 +255,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
             family_code="482731",
             home_address="תל אביב, דיזנגוף, 120",
             user_name="מיכאל",
-            shortcut_token=None,
-            telegram_chat_id=None,
             home_latitude=32.0809,
             home_longitude=34.7806,
             auth_user_id="auth-user-uuid",
@@ -273,7 +269,7 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         user_insert = self.connection.execute.call_args_list[-1]
         self.assertEqual(
             user_insert.args[1],
-            ("מיכאל", None, None, 7, "auth-user-uuid"),
+            ("מיכאל", 7, "auth-user-uuid"),
         )
         self.assertTrue(self.transaction_context.committed)
 
@@ -288,8 +284,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
                 family_code="482731",
                 home_address="תל אביב, דיזנגוף, 120",
                 user_name="מיכאל",
-                shortcut_token=None,
-                telegram_chat_id=None,
                 home_latitude=32.0809,
                 home_longitude=34.7806,
                 auth_user_id="auth-user-uuid",
@@ -319,8 +313,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
                 family_code="482731",
                 home_address="תל אביב, דיזנגוף, 120",
                 user_name="מיכאל",
-                shortcut_token=None,
-                telegram_chat_id=None,
                 home_latitude=32.0809,
                 home_longitude=34.7806,
                 auth_user_id="auth-user-uuid",
@@ -359,8 +351,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
                     family_code="482731",
                     home_address="תל אביב, דיזנגוף, 120",
                     user_name="מיכאל",
-                    shortcut_token=None,
-                    telegram_chat_id=None,
                     home_latitude=32.0809,
                     home_longitude=34.7806,
                     auth_user_id="deleted-auth-user-uuid",
