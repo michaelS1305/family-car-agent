@@ -30,6 +30,8 @@ import {
   shouldSubmitComposerKey,
   type CarStatusUiState,
 } from '../chat/chatUi'
+import { createCarStatusRealtimeSync } from '../carStatus/carStatusRealtime'
+import { getSupabaseClient } from '../lib/supabase'
 
 const suggestions = [
   'מי עם הרכב?',
@@ -90,7 +92,7 @@ function isRetryableWithSameRequest(error: unknown) {
   )
 }
 
-export function MainAppScreen({ accessToken, authUserId }: {
+export function MainAppScreen({ user, accessToken, authUserId }: {
   user: InternalUser
   accessToken: string
   authUserId: string
@@ -165,6 +167,7 @@ export function MainAppScreen({ accessToken, authUserId }: {
     let active = true
     let requestSequence = 0
     let lastRefreshAt = Number.NEGATIVE_INFINITY
+    let refreshInFlight: Promise<void> | null = null
 
     const refreshStatus = async (force = false) => {
       const now = Date.now()
@@ -174,30 +177,57 @@ export function MainAppScreen({ accessToken, authUserId }: {
         lastRefreshAt,
       })) return
 
+      if (refreshInFlight) return refreshInFlight
+
       lastRefreshAt = now
       const requestId = ++requestSequence
-      try {
-        const result = await getCarStatus(accessToken)
-        if (active && requestId === requestSequence) setCarStatus(result.status)
-      } catch {
-        if (active && requestId === requestSequence) setCarStatus('unknown')
-      }
+      refreshInFlight = (async () => {
+        try {
+          const result = await getCarStatus(accessToken)
+          if (active && requestId === requestSequence) setCarStatus(result.status)
+        } catch {
+          if (active && requestId === requestSequence) setCarStatus('unknown')
+        } finally {
+          refreshInFlight = null
+        }
+      })()
+      return refreshInFlight
     }
+
+    const familyId = user.family_id
+    const realtimeSync = familyId === null
+      ? null
+      : createCarStatusRealtimeSync({
+          client: getSupabaseClient(),
+          familyId,
+          isVisible: () => document.visibilityState !== 'hidden',
+          refreshStatus: () => refreshStatus(true),
+        })
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') void refreshStatus()
+      if (document.visibilityState === 'visible') {
+        realtimeSync?.handleForeground()
+        if (!realtimeSync) void refreshStatus()
+      } else {
+        realtimeSync?.handleBackground()
+      }
     }
-    const handleFocus = () => { void refreshStatus() }
+    const handleFocus = () => {
+      realtimeSync?.handleForeground()
+      if (!realtimeSync) void refreshStatus()
+    }
 
     void refreshStatus(true)
+    realtimeSync?.start()
     document.addEventListener('visibilitychange', handleVisibilityChange)
     window.addEventListener('focus', handleFocus)
     return () => {
       active = false
+      realtimeSync?.stop()
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('focus', handleFocus)
     }
-  }, [accessToken])
+  }, [accessToken, user.family_id])
 
   useLayoutEffect(() => {
     if (historyLoading) return
