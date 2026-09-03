@@ -16,8 +16,10 @@ import {
   pendingRequestNeedsRetry,
 } from '../chat/chatSubmission'
 import {
+  CHAT_HEADER,
   draftAfterFailedSend,
-  draftAfterSuccessfulSend,
+  draftAfterSendStarts,
+  groupMessagesByMinute,
   isNearScrollBottom,
   retryRequestAfterFailure,
   shouldAutoScroll,
@@ -83,7 +85,7 @@ function isRetryableWithSameRequest(error: unknown) {
   )
 }
 
-export function MainAppScreen({ user, accessToken, authUserId }: {
+export function MainAppScreen({ accessToken, authUserId }: {
   user: InternalUser
   accessToken: string
   authUserId: string
@@ -190,6 +192,7 @@ export function MainAppScreen({ user, accessToken, authUserId }: {
     await requestRunnerRef.current.run(accessToken, request, {
       onStart: () => {
         setSending(true)
+        setDraftMessage((current) => draftAfterSendStarts(current, request.message))
         savePendingRequest(authUserId, request)
         scrollIntentRef.current = 'smooth'
         setMessages((current) => {
@@ -218,7 +221,6 @@ export function MainAppScreen({ user, accessToken, authUserId }: {
           { ...result.assistant_message, localId: `${request.requestId}-assistant` },
         ])
         setLiveAssistantText(result.assistant_message.content)
-        setDraftMessage((current) => draftAfterSuccessfulSend(current, request.message))
         savePendingRequest(authUserId, null)
       },
       onError: (sendError) => {
@@ -251,12 +253,20 @@ export function MainAppScreen({ user, accessToken, authUserId }: {
     if (!historyLoading && !sending && draftMessage.trim()) void submit()
   }
 
+  const messageGroups = groupMessagesByMinute(messages)
+
   return (
     <main className="main-chat-screen" dir="rtl">
       <header className="main-chat-header">
-        <div>
-          <strong>Family Car Agent</strong>
-          <span>היי, {user.name}</span>
+        <button className="chat-menu-button" type="button" aria-label={CHAT_HEADER.menuLabel}>
+          <span className="chat-menu-icon" aria-hidden="true">
+            {Array.from({ length: CHAT_HEADER.menuLines }, (_, index) => <i key={index} />)}
+          </span>
+        </button>
+        <strong className="main-chat-title">{CHAT_HEADER.title}</strong>
+        <div className={`car-status-pill is-${CHAT_HEADER.carStatus.tone}`} aria-label={`מצב הרכב: ${CHAT_HEADER.carStatus.label}`}>
+          <i aria-hidden="true" />
+          <span>{CHAT_HEADER.carStatus.label}</span>
         </div>
       </header>
 
@@ -293,26 +303,31 @@ export function MainAppScreen({ user, accessToken, authUserId }: {
             </div>
           </div>
         )}
-        {messages.map((message) => (
-          <article className={`chat-message chat-message-${message.role}`} key={message.localId}>
-            <div
-              className={`chat-bubble chat-bubble-${message.role}${message.pending ? ' is-pending' : ''}${message.failed ? ' is-failed' : ''}`}
-              dir="auto"
-            >
-              {message.content}
-            </div>
-            {message.pending && <span className="chat-message-status">שולח…</span>}
-            {message.failed && (
-              <div className="chat-message-failure" role="status">
-                <span>לא נשלח</span>
-                {message.retryRequest && (
-                  <button type="button" disabled={sending} onClick={() => void submit(message.retryRequest)}>
-                    נסה שוב
-                  </button>
+        {messageGroups.map((group) => (
+          <div className="chat-time-group" key={group.key}>
+            {group.messages.map((message) => (
+              <article className={`chat-message chat-message-${message.role}`} key={message.localId}>
+                <div
+                  className={`chat-bubble chat-bubble-${message.role}${message.pending ? ' is-pending' : ''}${message.failed ? ' is-failed' : ''}`}
+                  dir="auto"
+                >
+                  {message.content}
+                </div>
+                {message.pending && <span className="chat-message-status">שולח…</span>}
+                {message.failed && (
+                  <div className="chat-message-failure" role="status">
+                    <span>לא נשלח</span>
+                    {message.retryRequest && (
+                      <button type="button" disabled={sending} onClick={() => void submit(message.retryRequest)}>
+                        נסה שוב
+                      </button>
+                    )}
+                  </div>
                 )}
-              </div>
-            )}
-          </article>
+              </article>
+            ))}
+            {group.label && <time className="chat-time-label" dateTime={group.dateTime}>{group.label}</time>}
+          </div>
         ))}
         {sending && <div className="chat-typing" role="status">חושב<span aria-hidden="true">…</span></div>}
       </section>

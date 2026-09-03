@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['app-icon.svg'],
+      includeAssets: ['images/family-car-agent-logo.png'],
       manifest: {
         name: 'Family Car Agent',
         short_name: 'Family Car',
@@ -20,10 +20,10 @@ export default defineConfig({
         theme_color: '#28705c',
         icons: [
           {
-            src: '/app-icon.svg',
-            sizes: 'any',
-            type: 'image/svg+xml',
-            purpose: 'any maskable',
+            src: '/images/family-car-agent-logo.png',
+            sizes: '1254x1254',
+            type: 'image/png',
+            purpose: 'any',
           },
         ],
       },
