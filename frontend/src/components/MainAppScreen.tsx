@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from 'react'
 import {
   ChatApiError,
   getChatHistory,
@@ -9,6 +15,14 @@ import {
   createChatRequestRunner,
   pendingRequestNeedsRetry,
 } from '../chat/chatSubmission'
+import {
+  draftAfterFailedSend,
+  draftAfterSuccessfulSend,
+  isNearScrollBottom,
+  retryRequestAfterFailure,
+  shouldAutoScroll,
+  shouldSubmitComposerKey,
+} from '../chat/chatUi'
 
 const suggestions = [
   'מי עם הרכב?',
@@ -17,14 +31,13 @@ const suggestions = [
   'מה ההזמנה הבאה?',
 ]
 
+type PendingRequest = { requestId: string; message: string }
+
 type DisplayMessage = ChatMessage & {
   localId: string
   pending?: boolean
-}
-
-type PendingRequest = {
-  requestId: string
-  message: string
+  failed?: boolean
+  retryRequest?: PendingRequest
 }
 
 function pendingStorageKey(authUserId: string) {
@@ -58,14 +71,19 @@ function savePendingRequest(authUserId: string, request: PendingRequest | null) 
 
 function readableChatError(error: unknown) {
   if (error instanceof ChatApiError) return error.message
-  return 'לא הצלחנו לקבל תשובה כרגע. אפשר לנסות שוב.'
+  return 'לא הצלחנו לטעון את השיחה כרגע.'
 }
 
-export function MainAppScreen({
-  user,
-  accessToken,
-  authUserId,
-}: {
+function isRetryableWithSameRequest(error: unknown) {
+  return error instanceof ChatApiError && (
+    error.networkUncertain
+    || error.code === 'CHAT_IN_PROGRESS'
+    || error.code === 'CHAT_RECOVERY_REQUIRED'
+    || error.code === 'CHAT_LEASE_LOST'
+  )
+}
+
+export function MainAppScreen({ user, accessToken, authUserId }: {
   user: InternalUser
   accessToken: string
   authUserId: string
@@ -73,60 +91,113 @@ export function MainAppScreen({
   const [draftMessage, setDraftMessage] = useState('')
   const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [historyLoading, setHistoryLoading] = useState(true)
+  const [historyReloadAttempt, setHistoryReloadAttempt] = useState(0)
+  const [historyError, setHistoryError] = useState('')
   const [sending, setSending] = useState(false)
-  const [error, setError] = useState('')
-  const [retryRequest, setRetryRequest] = useState<PendingRequest | null>(null)
-  const endRef = useRef<HTMLDivElement | null>(null)
+  const [liveAssistantText, setLiveAssistantText] = useState('')
+  const threadRef = useRef<HTMLElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const requestRunnerRef = useRef(createChatRequestRunner())
+  const initialHistoryPositionedRef = useRef(false)
+  const nearBottomRef = useRef(true)
+  const scrollIntentRef = useRef<'auto' | 'smooth' | null>(null)
+  const composingRef = useRef(false)
+
+  useEffect(() => {
+    document.documentElement.classList.add('chat-shell-active')
+    document.body.classList.add('chat-shell-active')
+    return () => {
+      document.documentElement.classList.remove('chat-shell-active')
+      document.body.classList.remove('chat-shell-active')
+    }
+  }, [])
 
   useEffect(() => {
     const controller = new AbortController()
+    let active = true
+    initialHistoryPositionedRef.current = false
+
     getChatHistory(accessToken, { signal: controller.signal })
       .then((history) => {
-        setMessages(history.map((message, index) => ({
+        if (!active) return
+        const displayHistory: DisplayMessage[] = history.map((message, index) => ({
           ...message,
           localId: `${message.request_id}-${message.role}-${index}`,
-        })))
+          failed: message.role === 'user' && message.request_status === 'failed',
+        }))
         const pending = loadPendingRequest(authUserId)
-        if (pending) {
-          if (!pendingRequestNeedsRetry(pending, history)) {
-            savePendingRequest(authUserId, null)
-          } else {
-            setRetryRequest(pending)
-            setDraftMessage(pending.message)
-            setError('השליחה הקודמת לא הסתיימה בוודאות. אפשר לנסות שוב בבטחה.')
-          }
+        if (pending && pendingRequestNeedsRetry(pending, history)) {
+          displayHistory.push({
+            role: 'user',
+            content: pending.message,
+            created_at: new Date().toISOString(),
+            localId: pending.requestId,
+            failed: true,
+            retryRequest: pending,
+          })
+        } else if (pending) {
+          savePendingRequest(authUserId, null)
         }
+        setMessages(displayHistory)
       })
       .catch((loadError: unknown) => {
-        if (loadError instanceof DOMException && loadError.name === 'AbortError') return
-        setError(readableChatError(loadError))
+        if (!active || (loadError instanceof DOMException && loadError.name === 'AbortError')) return
+        setHistoryError(readableChatError(loadError))
       })
-      .finally(() => setHistoryLoading(false))
-    return () => controller.abort()
-  }, [accessToken, authUserId])
+      .finally(() => {
+        if (active) setHistoryLoading(false)
+      })
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [accessToken, authUserId, historyReloadAttempt])
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  useLayoutEffect(() => {
+    if (historyLoading) return
+    const thread = threadRef.current
+    if (!thread) return
+    if (!initialHistoryPositionedRef.current) {
+      if (shouldAutoScroll('initial', nearBottomRef.current)) thread.scrollTop = thread.scrollHeight
+      initialHistoryPositionedRef.current = true
+      nearBottomRef.current = true
+      return
+    }
+    const behavior = scrollIntentRef.current
+    if (!behavior) return
+    thread.scrollTo({ top: thread.scrollHeight, behavior })
+    scrollIntentRef.current = null
   }, [historyLoading, messages, sending])
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    const styles = window.getComputedStyle(textarea)
+    const lineHeight = Number.parseFloat(styles.lineHeight) || 24
+    const padding = Number.parseFloat(styles.paddingTop) + Number.parseFloat(styles.paddingBottom)
+    const maxHeight = (lineHeight * 5) + padding
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden'
+  }, [draftMessage])
 
   const submit = async (requestToRetry?: PendingRequest) => {
     if (sending || requestRunnerRef.current.isActive()) return
     const message = (requestToRetry?.message ?? draftMessage).trim()
     if (!message) return
-    const request = requestToRetry ?? {
-      requestId: crypto.randomUUID(),
-      message,
-    }
+    const request = requestToRetry ?? { requestId: crypto.randomUUID(), message }
 
     await requestRunnerRef.current.run(accessToken, request, {
       onStart: () => {
         setSending(true)
-        setError('')
-        setRetryRequest(request)
         savePendingRequest(authUserId, request)
+        scrollIntentRef.current = 'smooth'
         setMessages((current) => {
-          if (current.some((item) => item.localId === request.requestId)) return current
+          if (current.some((item) => item.localId === request.requestId)) {
+            return current.map((item) => item.localId === request.requestId
+              ? { ...item, pending: true, failed: false, retryRequest: undefined }
+              : item)
+          }
           return [...current, {
             role: 'user',
             content: message,
@@ -137,41 +208,47 @@ export function MainAppScreen({
         })
       },
       onSuccess: (result) => {
+        const thread = threadRef.current
+        const wasNearBottom = thread ? isNearScrollBottom(thread) : nearBottomRef.current
+        if (shouldAutoScroll('assistant-response', wasNearBottom)) scrollIntentRef.current = 'smooth'
         setMessages((current) => [
-          ...current.map((item) => (
-            item.localId === request.requestId ? { ...item, pending: false } : item
-          )),
-          {
-            ...result.assistant_message,
-            localId: `${request.requestId}-assistant`,
-          },
+          ...current.map((item) => item.localId === request.requestId
+            ? { ...item, pending: false, failed: false, retryRequest: undefined }
+            : item),
+          { ...result.assistant_message, localId: `${request.requestId}-assistant` },
         ])
-        setDraftMessage('')
-        setRetryRequest(null)
+        setLiveAssistantText(result.assistant_message.content)
+        setDraftMessage((current) => draftAfterSuccessfulSend(current, request.message))
         savePendingRequest(authUserId, null)
       },
       onError: (sendError) => {
-        setError(readableChatError(sendError))
-        setDraftMessage(request.message)
-        const canRetrySameRequest = (
-          sendError instanceof ChatApiError
-          && (
-            sendError.networkUncertain
-            || sendError.code === 'CHAT_IN_PROGRESS'
-            || sendError.code === 'CHAT_RECOVERY_REQUIRED'
-            || sendError.code === 'CHAT_LEASE_LOST'
-          )
-        )
+        setDraftMessage((current) => draftAfterFailedSend(current))
+        const canRetrySameRequest = isRetryableWithSameRequest(sendError)
         if (!canRetrySameRequest) {
-          setRetryRequest(null)
           savePendingRequest(authUserId, null)
         }
-        setMessages((current) => current.map((item) => (
-          item.localId === request.requestId ? { ...item, pending: false } : item
-        )))
+        setMessages((current) => current.map((item) => item.localId === request.requestId
+          ? {
+              ...item,
+              pending: false,
+              failed: true,
+              retryRequest: retryRequestAfterFailure(request, canRetrySameRequest),
+            }
+          : item))
       },
       onFinish: () => setSending(false),
     })
+  }
+
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    const shouldSubmit = shouldSubmitComposerKey({
+      key: event.key,
+      shiftKey: event.shiftKey,
+      isComposing: composingRef.current || event.nativeEvent.isComposing,
+    })
+    if (!shouldSubmit) return
+    event.preventDefault()
+    if (!historyLoading && !sending && draftMessage.trim()) void submit()
   }
 
   return (
@@ -181,12 +258,29 @@ export function MainAppScreen({
           <strong>Family Car Agent</strong>
           <span>היי, {user.name}</span>
         </div>
-        <button type="button" aria-label="הגדרות — בקרוב" disabled>•••</button>
       </header>
 
-      <section className="chat-thread" aria-live="polite" aria-busy={historyLoading || sending}>
-        {historyLoading && <div className="chat-loading">טוענים את השיחה…</div>}
-        {!historyLoading && messages.length === 0 && (
+      <section
+        className="chat-thread"
+        ref={threadRef}
+        aria-busy={historyLoading || sending}
+        aria-label="השיחה"
+        onScroll={(event) => { nearBottomRef.current = isNearScrollBottom(event.currentTarget) }}
+      >
+        {historyLoading && <div className="chat-loading" role="status">טוענים את השיחה…</div>}
+        {!historyLoading && historyError && (
+          <div className="chat-history-error" role="alert">
+            <span>{historyError}</span>
+            <button type="button" onClick={() => {
+              setHistoryLoading(true)
+              setHistoryError('')
+              setHistoryReloadAttempt((value) => value + 1)
+            }}>
+              טען שוב
+            </button>
+          </div>
+        )}
+        {!historyLoading && !historyError && messages.length === 0 && (
           <div className="chat-empty-state">
             <p>העוזר המשפחתי לרכב</p>
             <h1>איך אפשר לעזור?</h1>
@@ -200,44 +294,45 @@ export function MainAppScreen({
           </div>
         )}
         {messages.map((message) => (
-          <article
-            className={`chat-bubble chat-bubble-${message.role}${message.pending ? ' is-pending' : ''}`}
-            key={message.localId}
-          >
-            {message.content}
+          <article className={`chat-message chat-message-${message.role}`} key={message.localId}>
+            <div
+              className={`chat-bubble chat-bubble-${message.role}${message.pending ? ' is-pending' : ''}${message.failed ? ' is-failed' : ''}`}
+              dir="auto"
+            >
+              {message.content}
+            </div>
+            {message.pending && <span className="chat-message-status">שולח…</span>}
+            {message.failed && (
+              <div className="chat-message-failure" role="status">
+                <span>לא נשלח</span>
+                {message.retryRequest && (
+                  <button type="button" disabled={sending} onClick={() => void submit(message.retryRequest)}>
+                    נסה שוב
+                  </button>
+                )}
+              </div>
+            )}
           </article>
         ))}
-        {sending && <div className="chat-typing" role="status">חושב…</div>}
-        <div ref={endRef} />
+        {sending && <div className="chat-typing" role="status">חושב<span aria-hidden="true">…</span></div>}
       </section>
 
-      {error && (
-        <div className="chat-error" role="alert">
-          <span>{error}</span>
-          {retryRequest && (
-            <button type="button" disabled={sending} onClick={() => void submit(retryRequest)}>
-              ניסיון נוסף
-            </button>
-          )}
-        </div>
-      )}
+      <p className="visually-hidden" aria-live="polite" aria-atomic="true">{liveAssistantText}</p>
 
-      <form
-        className="chat-composer"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void submit()
-        }}
-      >
-        <input
+      <form className="chat-composer" onSubmit={(event) => {
+        event.preventDefault()
+        void submit()
+      }}>
+        <textarea
+          ref={textareaRef}
+          rows={1}
           value={draftMessage}
           onChange={(event) => {
             setDraftMessage(event.target.value)
-            if (retryRequest && event.target.value !== retryRequest.message) {
-              setRetryRequest(null)
-              savePendingRequest(authUserId, null)
-            }
           }}
+          onKeyDown={handleComposerKeyDown}
+          onCompositionStart={() => { composingRef.current = true }}
+          onCompositionEnd={() => { composingRef.current = false }}
           placeholder="אפשר לשאול אותי על הרכב..."
           aria-label="הודעה"
           maxLength={4000}
@@ -245,10 +340,10 @@ export function MainAppScreen({
         />
         <button
           type="submit"
-          aria-label="שליחה"
+          aria-label={sending ? 'ההודעה נשלחת' : 'שליחה'}
           disabled={historyLoading || sending || !draftMessage.trim()}
         >
-          ←
+          <span aria-hidden="true">←</span>
         </button>
       </form>
     </main>
