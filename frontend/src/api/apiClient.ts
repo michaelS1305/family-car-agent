@@ -7,6 +7,12 @@ export type InternalUser = {
 
 export type CarPlaySetupStatus = 'pending' | 'completed' | 'skipped'
 
+export type CarStatus = 'available' | 'occupied'
+
+export type CarStatusResponse = {
+  status: CarStatus
+}
+
 export type CurrentUserResult =
   | { status: 'mapped'; user: InternalUser }
   | { status: 'unmapped' }
@@ -561,6 +567,48 @@ export async function getCurrentUser(
   }
 
   return { status: 'mapped', user: body }
+}
+
+export async function getCarStatus(
+  accessToken: string,
+  options: RequestOptions = {},
+): Promise<CarStatusResponse> {
+  const fetcher = options.fetcher ?? fetch
+  let response: Response
+
+  try {
+    response = await fetcher(getApiUrl('/api/car/status', options.baseUrl), {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      signal: options.signal,
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ApiRequestError('network', 'The car status could not be loaded')
+  }
+
+  if (!response.ok) {
+    throw new ApiRequestError(
+      'server',
+      'The backend returned an unexpected car status response',
+      response.status,
+    )
+  }
+
+  let body: Partial<CarStatusResponse>
+  try {
+    body = await response.json() as Partial<CarStatusResponse>
+  } catch {
+    throw new ApiRequestError('invalid-response', 'The car status response is not valid JSON')
+  }
+
+  if (body.status !== 'available' && body.status !== 'occupied') {
+    throw new ApiRequestError('invalid-response', 'The car status response is invalid')
+  }
+  return { status: body.status }
 }
 
 export async function prepareCarPlaySetup(

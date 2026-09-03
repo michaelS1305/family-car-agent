@@ -7,6 +7,7 @@ import {
 } from 'react'
 import {
   ChatApiError,
+  getCarStatus,
   getChatHistory,
   type ChatMessage,
   type InternalUser,
@@ -17,13 +18,17 @@ import {
 } from '../chat/chatSubmission'
 import {
   CHAT_HEADER,
+  CHAT_COMPOSER_LAYOUT,
+  carStatusPresentation,
   draftAfterFailedSend,
   draftAfterSendStarts,
-  groupMessagesByMinute,
+  groupMessagesByDay,
   isNearScrollBottom,
   retryRequestAfterFailure,
   shouldAutoScroll,
+  shouldRefreshCarStatus,
   shouldSubmitComposerKey,
+  type CarStatusUiState,
 } from '../chat/chatUi'
 
 const suggestions = [
@@ -96,6 +101,7 @@ export function MainAppScreen({ accessToken, authUserId }: {
   const [historyReloadAttempt, setHistoryReloadAttempt] = useState(0)
   const [historyError, setHistoryError] = useState('')
   const [sending, setSending] = useState(false)
+  const [carStatus, setCarStatus] = useState<CarStatusUiState>('loading')
   const [liveAssistantText, setLiveAssistantText] = useState('')
   const threadRef = useRef<HTMLElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -154,6 +160,44 @@ export function MainAppScreen({ accessToken, authUserId }: {
       controller.abort()
     }
   }, [accessToken, authUserId, historyReloadAttempt])
+
+  useEffect(() => {
+    let active = true
+    let requestSequence = 0
+    let lastRefreshAt = Number.NEGATIVE_INFINITY
+
+    const refreshStatus = async (force = false) => {
+      const now = Date.now()
+      if (!force && !shouldRefreshCarStatus({
+        isVisible: document.visibilityState !== 'hidden',
+        now,
+        lastRefreshAt,
+      })) return
+
+      lastRefreshAt = now
+      const requestId = ++requestSequence
+      try {
+        const result = await getCarStatus(accessToken)
+        if (active && requestId === requestSequence) setCarStatus(result.status)
+      } catch {
+        if (active && requestId === requestSequence) setCarStatus('unknown')
+      }
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refreshStatus()
+    }
+    const handleFocus = () => { void refreshStatus() }
+
+    void refreshStatus(true)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', handleFocus)
+    return () => {
+      active = false
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [accessToken])
 
   useLayoutEffect(() => {
     if (historyLoading) return
@@ -253,7 +297,8 @@ export function MainAppScreen({ accessToken, authUserId }: {
     if (!historyLoading && !sending && draftMessage.trim()) void submit()
   }
 
-  const messageGroups = groupMessagesByMinute(messages)
+  const messageDays = groupMessagesByDay(messages)
+  const displayedCarStatus = carStatusPresentation(carStatus)
 
   return (
     <main className="main-chat-screen" dir="rtl">
@@ -264,9 +309,9 @@ export function MainAppScreen({ accessToken, authUserId }: {
           </span>
         </button>
         <strong className="main-chat-title">{CHAT_HEADER.title}</strong>
-        <div className={`car-status-pill is-${CHAT_HEADER.carStatus.tone}`} aria-label={`מצב הרכב: ${CHAT_HEADER.carStatus.label}`}>
+        <div className={`car-status-pill is-${displayedCarStatus.tone}`} aria-label={`מצב הרכב: ${displayedCarStatus.label}`}>
           <i aria-hidden="true" />
-          <span>{CHAT_HEADER.carStatus.label}</span>
+          <span>{displayedCarStatus.label}</span>
         </div>
       </header>
 
@@ -303,31 +348,40 @@ export function MainAppScreen({ accessToken, authUserId }: {
             </div>
           </div>
         )}
-        {messageGroups.map((group) => (
-          <div className="chat-time-group" key={group.key}>
-            {group.messages.map((message) => (
-              <article className={`chat-message chat-message-${message.role}`} key={message.localId}>
-                <div
-                  className={`chat-bubble chat-bubble-${message.role}${message.pending ? ' is-pending' : ''}${message.failed ? ' is-failed' : ''}`}
-                  dir="auto"
-                >
-                  {message.content}
-                </div>
-                {message.pending && <span className="chat-message-status">שולח…</span>}
-                {message.failed && (
-                  <div className="chat-message-failure" role="status">
-                    <span>לא נשלח</span>
-                    {message.retryRequest && (
-                      <button type="button" disabled={sending} onClick={() => void submit(message.retryRequest)}>
-                        נסה שוב
-                      </button>
+        {messageDays.map((day) => (
+          <section className="chat-day-group" key={day.key}>
+            {day.label && (
+              <div className="chat-day-separator" aria-hidden="true">
+                <span>{day.label}</span>
+              </div>
+            )}
+            {day.minuteGroups.map((group) => (
+              <div className="chat-time-group" key={group.key}>
+                {group.messages.map((message) => (
+                  <article className={`chat-message chat-message-${message.role}`} key={message.localId}>
+                    <div
+                      className={`chat-bubble chat-bubble-${message.role}${message.pending ? ' is-pending' : ''}${message.failed ? ' is-failed' : ''}`}
+                      dir="auto"
+                    >
+                      {message.content}
+                    </div>
+                    {message.pending && <span className="chat-message-status">שולח…</span>}
+                    {message.failed && (
+                      <div className="chat-message-failure" role="status">
+                        <span>לא נשלח</span>
+                        {message.retryRequest && (
+                          <button type="button" disabled={sending} onClick={() => void submit(message.retryRequest)}>
+                            נסה שוב
+                          </button>
+                        )}
+                      </div>
                     )}
-                  </div>
-                )}
-              </article>
+                  </article>
+                ))}
+                {group.label && <time className="chat-time-label" dateTime={group.dateTime}>{group.label}</time>}
+              </div>
             ))}
-            {group.label && <time className="chat-time-label" dateTime={group.dateTime}>{group.label}</time>}
-          </div>
+          </section>
         ))}
         {sending && <div className="chat-typing" role="status">חושב<span aria-hidden="true">…</span></div>}
       </section>
@@ -338,22 +392,25 @@ export function MainAppScreen({ accessToken, authUserId }: {
         event.preventDefault()
         void submit()
       }}>
-        <textarea
-          ref={textareaRef}
-          rows={1}
-          value={draftMessage}
-          onChange={(event) => {
-            setDraftMessage(event.target.value)
-          }}
-          onKeyDown={handleComposerKeyDown}
-          onCompositionStart={() => { composingRef.current = true }}
-          onCompositionEnd={() => { composingRef.current = false }}
-          placeholder="אפשר לשאול אותי על הרכב..."
-          aria-label="הודעה"
-          maxLength={4000}
-          disabled={historyLoading}
-        />
+        <div className={CHAT_COMPOSER_LAYOUT.fieldClassName}>
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            value={draftMessage}
+            onChange={(event) => {
+              setDraftMessage(event.target.value)
+            }}
+            onKeyDown={handleComposerKeyDown}
+            onCompositionStart={() => { composingRef.current = true }}
+            onCompositionEnd={() => { composingRef.current = false }}
+            placeholder="אפשר לשאול אותי על הרכב..."
+            aria-label="הודעה"
+            maxLength={4000}
+            disabled={historyLoading}
+          />
+        </div>
         <button
+          className={CHAT_COMPOSER_LAYOUT.sendClassName}
           type="submit"
           aria-label={sending ? 'ההודעה נשלחת' : 'שליחה'}
           disabled={historyLoading || sending || !draftMessage.trim()}
