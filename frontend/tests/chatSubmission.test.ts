@@ -36,6 +36,7 @@ test('submission reports pending then success', async () => {
 
 test('submission preserves the same logical request on error', async () => {
   let receivedRequest: { requestId: string; message: string } | undefined
+  const lifecycle: string[] = []
   const runner = createChatRequestRunner(async () => {
     throw new TypeError('offline')
   })
@@ -44,16 +45,20 @@ test('submission preserves the same logical request on error', async () => {
     requestId: 'stable-request-id',
     message: 'הטיוטה שלי',
   }, {
-    onStart: () => undefined,
+    onStart: () => lifecycle.push('pending'),
     onSuccess: () => undefined,
-    onError: (_error, request) => { receivedRequest = request },
-    onFinish: () => undefined,
+    onError: (_error, request) => {
+      receivedRequest = request
+      lifecycle.push('error')
+    },
+    onFinish: () => lifecycle.push('finished'),
   })
 
   assert.deepEqual(receivedRequest, {
     requestId: 'stable-request-id',
     message: 'הטיוטה שלי',
   })
+  assert.deepEqual(lifecycle, ['pending', 'error', 'finished'])
 })
 
 test('double submit is blocked while the first request is active', async () => {

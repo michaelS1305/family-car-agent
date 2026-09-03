@@ -13,6 +13,14 @@ export const CHAT_HEADER = {
 export const CHAT_COMPOSER_LAYOUT = {
   fieldClassName: 'chat-composer-field',
   sendClassName: 'chat-send-button',
+  targetHeightPx: 52,
+  actionCount: 1,
+} as const
+
+export const CHAT_PENDING_UI = {
+  showUserPendingLabel: false,
+  typingDotCount: 3,
+  typingLabel: 'העוזר מכין תשובה',
 } as const
 
 export type CarStatusUiState = 'loading' | 'available' | 'occupied' | 'unknown'
