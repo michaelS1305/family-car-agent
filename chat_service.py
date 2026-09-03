@@ -1,15 +1,17 @@
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from ai_service import generate_agent_response
+from ai_service import GEMINI_MODEL, generate_agent_response
 from database import (
     _cancel_reservation_on_connection,
     _create_reservation_on_connection,
     _update_reservation_on_connection,
     pool,
 )
+from gemini_usage import GeminiUsageTotals, log_gemini_usage
 from identity import CurrentUser
 
 
@@ -19,6 +21,10 @@ CHAT_LEASE_SECONDS = 120
 CHAT_HISTORY_LIMIT = 30
 MODEL_HISTORY_LIMIT = 10
 RESERVATION_LOCK_NAMESPACE = 1178686274
+SENSITIVE_LOG_PATTERN = re.compile(
+    r"(?i)(authorization|bearer|api[_-]?key|secret|shortcut[_-]?token|"
+    r"postgres(?:ql)?://|[?&]key=)"
+)
 
 
 class ChatError(Exception):
@@ -44,6 +50,37 @@ class ChatLeaseLostError(ChatError):
             "הבקשה ממשיכה בעיבוד במקום אחר. נסו שוב בעוד רגע.",
             2,
         )
+
+
+def _safe_exception_message(error):
+    if not type(error).__module__.startswith("google.genai.errors"):
+        return "[redacted]"
+    message = " ".join(str(error).split())
+    if not message or SENSITIVE_LOG_PATTERN.search(message):
+        return "[redacted]"
+    return message[:500]
+
+
+def _log_chat_processing_failure(
+    error,
+    stage,
+    request_id,
+    chat_request_id=None,
+):
+    logger.warning(
+        "Chat processing failed operation=process_chat_message stage=%s "
+        "exception_class=%s "
+        "provider_status=%s request_id=%s chat_request_id=%s "
+        "gemini_model=%s gemini_api_key_configured=%s safe_message=%s",
+        getattr(error, "chat_stage", stage),
+        type(error).__name__,
+        getattr(error, "status_code", None),
+        request_id,
+        chat_request_id,
+        getattr(error, "gemini_model", None),
+        getattr(error, "gemini_api_key_configured", None),
+        _safe_exception_message(error),
+    )
 
 
 def _json(value):
@@ -538,7 +575,11 @@ def process_chat_message(request_id, message, current_user: CurrentUser):
         raise ChatError(403, "FAMILY_REQUIRED", "המשתמש אינו משויך למשפחה.")
 
     lease_token = str(uuid4())
-    claim = _claim_request(current_user, request_id, message, lease_token)
+    try:
+        claim = _claim_request(current_user, request_id, message, lease_token)
+    except Exception as error:
+        _log_chat_processing_failure(error, "claim", request_id)
+        raise
     outcome = claim["outcome"]
     if outcome == "completed":
         return claim["response"]
@@ -566,7 +607,16 @@ def process_chat_message(request_id, message, current_user: CurrentUser):
         )
 
     chat_request_id = claim["id"]
-    completed_action = _get_completed_action(chat_request_id)
+    try:
+        completed_action = _get_completed_action(chat_request_id)
+    except Exception as error:
+        _log_chat_processing_failure(
+            error,
+            "claim_recovery",
+            request_id,
+            chat_request_id,
+        )
+        raise
     if completed_action:
         return _finalize_completed_action(
             chat_request_id,
@@ -576,8 +626,18 @@ def process_chat_message(request_id, message, current_user: CurrentUser):
             completed_action,
         )
 
-    history = _load_model_history(current_user)
+    try:
+        history = _load_model_history(current_user)
+    except Exception as error:
+        _log_chat_processing_failure(
+            error,
+            "history",
+            request_id,
+            chat_request_id,
+        )
+        raise
     mutation_was_executed = False
+    gemini_usage = GeminiUsageTotals()
 
     def dispatch_mutation(action_type, arguments):
         nonlocal mutation_was_executed
@@ -598,6 +658,7 @@ def process_chat_message(request_id, message, current_user: CurrentUser):
         mutation_was_executed = True
         return executed["result"]
 
+    gemini_succeeded = False
     try:
         _renew_lease(chat_request_id, lease_token)
         reply = generate_agent_response(
@@ -605,7 +666,9 @@ def process_chat_message(request_id, message, current_user: CurrentUser):
             current_user,
             history,
             dispatch_mutation,
+            usage_accumulator=gemini_usage,
         )
+        gemini_succeeded = True
         _renew_lease(chat_request_id, lease_token)
         return _finalize_request(
             chat_request_id,
@@ -616,12 +679,11 @@ def process_chat_message(request_id, message, current_user: CurrentUser):
     except ChatError:
         raise
     except Exception as error:
-        logger.warning(
-            "Chat processing failed",
-            extra={
-                "operation": "process_chat_message",
-                "exception_type": type(error).__name__,
-            },
+        _log_chat_processing_failure(
+            error,
+            "finalization",
+            request_id,
+            chat_request_id,
         )
         completed_action = _get_completed_action(chat_request_id)
         if completed_action:
@@ -645,3 +707,11 @@ def process_chat_message(request_id, message, current_user: CurrentUser):
                 2,
             ) from error
         raise safe_error from error
+    finally:
+        log_gemini_usage(
+            logger,
+            request_id,
+            GEMINI_MODEL,
+            gemini_usage,
+            gemini_succeeded,
+        )

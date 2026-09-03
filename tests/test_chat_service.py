@@ -17,6 +17,7 @@ def load_chat_service():
     database_stub._cancel_reservation_on_connection = Mock()
     ai_stub = types.ModuleType("ai_service")
     ai_stub.generate_agent_response = Mock(return_value="תשובה")
+    ai_stub.GEMINI_MODEL = "gemini-3.1-flash-lite"
     path = Path(__file__).resolve().parents[1] / "chat_service.py"
     spec = importlib.util.spec_from_file_location("chat_service_under_test", path)
     module = importlib.util.module_from_spec(spec)
@@ -104,6 +105,49 @@ class ChatOrchestrationTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "AI_UNAVAILABLE")
         mark_failed.assert_called_once()
 
+    def test_chat_request_logs_accumulated_usage_without_message_content(self):
+        def generate(
+            _message,
+            _user,
+            _history,
+            _dispatcher,
+            usage_accumulator=None,
+        ):
+            usage_accumulator.add_response(types.SimpleNamespace(
+                usage_metadata=types.SimpleNamespace(
+                    prompt_token_count=12,
+                    candidates_token_count=4,
+                    total_token_count=16,
+                )
+            ))
+            return "מוכן"
+
+        with patch.object(chat, "_claim_request", return_value={
+            "outcome": "claimed",
+            "id": 11,
+        }), patch.object(chat, "_get_completed_action", return_value=None), \
+             patch.object(chat, "_load_model_history", return_value=[]), \
+             patch.object(chat, "_renew_lease"), \
+             patch.object(chat, "generate_agent_response", side_effect=generate), \
+             patch.object(
+                 chat,
+                 "_finalize_request",
+                 side_effect=lambda _id, _lease, _user, response: response,
+             ), self.assertLogs(chat.logger, level="INFO") as captured:
+            chat.process_chat_message(
+                self.request_id,
+                "private family message",
+                self.user,
+            )
+
+        usage_log = next(
+            line for line in captured.output if "operation=gemini_usage" in line
+        )
+        self.assertIn("input_tokens=12", usage_log)
+        self.assertIn("output_tokens=4", usage_log)
+        self.assertIn("total_tokens=16", usage_log)
+        self.assertNotIn("private family message", usage_log)
+
     def test_failure_after_committed_mutation_uses_deterministic_fallback(self):
         action = {
             "action_type": "create_reservation",
@@ -123,7 +167,13 @@ class ChatOrchestrationTests(unittest.TestCase):
     def test_only_one_mutation_is_dispatched_per_request(self):
         mutation_results = []
 
-        def model(_message, _user, _history, dispatcher):
+        def model(
+            _message,
+            _user,
+            _history,
+            dispatcher,
+            usage_accumulator=None,
+        ):
             mutation_results.append(dispatcher("cancel_reservation", {"reservation_id": 5}))
             mutation_results.append(dispatcher("cancel_reservation", {"reservation_id": 6}))
             return "בוצע"
@@ -165,6 +215,49 @@ class ChatOrchestrationTests(unittest.TestCase):
                 chat.process_chat_message(self.request_id, "עדכן", self.user)
         self.assertEqual(raised.exception.status_code, 503)
         self.assertEqual(raised.exception.code, "CHAT_RECOVERY_REQUIRED")
+
+    def test_safe_failure_logging_includes_stage_without_credentials(self):
+        error = RuntimeError("Authorization: Bearer private-access-token")
+        error.chat_stage = "gemini_initial_call"
+        error.gemini_model = "gemini-3.1-flash-lite"
+        error.gemini_api_key_configured = True
+
+        with self.assertLogs(chat.logger, level="WARNING") as captured:
+            chat._log_chat_processing_failure(
+                error,
+                "finalization",
+                self.request_id,
+                11,
+            )
+
+        log_line = captured.output[0]
+        self.assertIn("operation=process_chat_message", log_line)
+        self.assertIn("stage=gemini_initial_call", log_line)
+        self.assertIn("exception_class=RuntimeError", log_line)
+        self.assertIn("request_id=0da80a79-74f1-496f-9bd0-dd4ef43d38a7", log_line)
+        self.assertIn("chat_request_id=11", log_line)
+        self.assertIn("safe_message=[redacted]", log_line)
+        self.assertNotIn("private-access-token", log_line)
+
+    def test_safe_provider_message_keeps_non_sensitive_status(self):
+        provider_error_type = type(
+            "ClientError",
+            (RuntimeError,),
+            {"__module__": "google.genai.errors"},
+        )
+        error = provider_error_type(
+            "429 RESOURCE_EXHAUSTED: prepayment credits depleted"
+        )
+
+        with self.assertLogs(chat.logger, level="WARNING") as captured:
+            chat._log_chat_processing_failure(
+                error,
+                "gemini_initial_call",
+                self.request_id,
+                11,
+            )
+
+        self.assertIn("RESOURCE_EXHAUSTED", captured.output[0])
 
 
 class RecordingTransaction:

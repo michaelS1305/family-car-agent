@@ -6,6 +6,7 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
+from gemini_usage import GeminiUsageTotals
 from identity import CurrentUser
 from tests.test_database_atomic_creation import database
 
@@ -463,8 +464,27 @@ class MutationInvokingModel:
                     ])
                 )],
                 text="",
+                usage_metadata=types.SimpleNamespace(
+                    prompt_token_count=100,
+                    candidates_token_count=10,
+                    thoughts_token_count=5,
+                    cached_content_token_count=0,
+                    tool_use_prompt_token_count=0,
+                    total_token_count=115,
+                ),
             )
-        return types.SimpleNamespace(candidates=[], text="עודכן")
+        return types.SimpleNamespace(
+            candidates=[],
+            text="עודכן",
+            usage_metadata=types.SimpleNamespace(
+                prompt_token_count=140,
+                candidates_token_count=20,
+                thoughts_token_count=0,
+                cached_content_token_count=0,
+                tool_use_prompt_token_count=8,
+                total_token_count=168,
+            ),
+        )
 
 
 class AIToolBoundaryTests(unittest.TestCase):
@@ -542,6 +562,15 @@ class AIToolBoundaryTests(unittest.TestCase):
         ):
             getattr(self.database_stub, name).assert_not_called()
 
+    def test_system_instruction_adds_efficiency_without_removing_guardrail(self):
+        instruction = self.service.SYSTEM_INSTRUCTION
+
+        self.assertIn("DOMAIN BOUNDARY:", instruction)
+        self.assertIn("not a general-purpose assistant", instruction)
+        self.assertIn("RESPONSE EFFICIENCY:", instruction)
+        self.assertIn("If one sentence is enough, use one sentence.", instruction)
+        self.assertIn("Accuracy and safety take priority", instruction)
+
     def test_mutation_is_manually_dispatched_without_trusting_model_identity(self):
         model = MutationInvokingModel()
         self.service.client.models = model
@@ -549,6 +578,7 @@ class AIToolBoundaryTests(unittest.TestCase):
             "success": True,
             "code": "RESERVATION_UPDATED",
         })
+        usage = GeminiUsageTotals()
 
         with patch.object(self.service, "ZoneInfo", return_value=timezone.utc):
             reply = self.service.generate_agent_response(
@@ -556,6 +586,7 @@ class AIToolBoundaryTests(unittest.TestCase):
                 CurrentUser(user_id=1, name="A1", family_id=10),
                 [("user", "שאלה קודמת"), ("assistant", "תשובה קודמת")],
                 dispatcher,
+                usage_accumulator=usage,
             )
 
         self.assertEqual(reply, "עודכן")
@@ -569,6 +600,12 @@ class AIToolBoundaryTests(unittest.TestCase):
         )
         self.assertTrue(model.config["automatic_function_calling"]["disable"])
         self.assertEqual(model.calls, 2)
+        self.assertEqual(usage.calls_with_metadata, 2)
+        self.assertEqual(usage.input_tokens, 240)
+        self.assertEqual(usage.output_tokens, 30)
+        self.assertEqual(usage.thinking_tokens, 5)
+        self.assertEqual(usage.tool_use_prompt_tokens, 8)
+        self.assertEqual(usage.total_tokens, 283)
 
 
 if __name__ == "__main__":
