@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import {
   CHAT_HEADER,
   CHAT_COMPOSER_LAYOUT,
+  CHAT_PENDING_UI,
   carStatusPresentation,
   draftAfterFailedSend,
   draftAfterSendStarts,
@@ -16,6 +18,15 @@ import {
   shouldRefreshCarStatus,
   shouldSubmitComposerKey,
 } from '../src/chat/chatUi.ts'
+
+const mainAppSource = readFileSync(
+  new URL('../src/components/MainAppScreen.tsx', import.meta.url),
+  'utf8',
+)
+const appCssSource = readFileSync(
+  new URL('../src/App.css', import.meta.url),
+  'utf8',
+)
 
 test('composer clears immediately for a new send but preserves an unrelated draft', () => {
   assert.equal(draftAfterSendStarts('אותה הודעה', 'אותה הודעה'), '')
@@ -72,6 +83,37 @@ test('composer field and circular send action use separate visual containers', (
     CHAT_COMPOSER_LAYOUT.fieldClassName,
     CHAT_COMPOSER_LAYOUT.sendClassName,
   )
+  assert.equal(CHAT_COMPOSER_LAYOUT.targetHeightPx, 52)
+  assert.equal(CHAT_COMPOSER_LAYOUT.actionCount, 1)
+})
+
+test('pending presentation uses three quiet typing dots without text labels', () => {
+  assert.equal(CHAT_PENDING_UI.showUserPendingLabel, false)
+  assert.equal(CHAT_PENDING_UI.typingDotCount, 3)
+  assert.equal(CHAT_PENDING_UI.typingLabel, 'העוזר מכין תשובה')
+  assert.equal(mainAppSource.includes('שולח…'), false)
+  assert.equal(mainAppSource.includes('חושב'), false)
+  assert.match(mainAppSource, /sending && \([\s\S]*chat-typing-dots/)
+  assert.match(mainAppSource, /onFinish: \(\) => setSending\(false\)/)
+})
+
+test('chat layout keeps one send action over an edge-to-edge scroll container', () => {
+  const submitButtons = mainAppSource.match(/type="submit"/g) ?? []
+  assert.equal(submitButtons.length, CHAT_COMPOSER_LAYOUT.actionCount)
+  assert.match(appCssSource, /\.chat-thread \{[\s\S]*?position: absolute;[\s\S]*?overflow-y: auto;/)
+  assert.match(appCssSource, /\.main-chat-screen::after \{[\s\S]*?backdrop-filter: blur/)
+  assert.match(appCssSource, /\.chat-composer-field \{[\s\S]*?min-height: 52px;/)
+  assert.match(appCssSource, /\.chat-send-button \{[\s\S]*?width: 52px;[\s\S]*?height: 52px;/)
+  assert.match(appCssSource, /@media \(prefers-reduced-motion: reduce\)/)
+})
+
+test('header order and realtime status integration remain present', () => {
+  const menuPosition = mainAppSource.indexOf('chat-menu-button')
+  const titlePosition = mainAppSource.indexOf('main-chat-title')
+  const statusPosition = mainAppSource.indexOf('car-status-pill')
+  assert.ok(menuPosition >= 0 && menuPosition < titlePosition)
+  assert.ok(titlePosition < statusPosition)
+  assert.match(mainAppSource, /createCarStatusRealtimeSync/)
 })
 
 test('messages in the same minute share one local time group', () => {

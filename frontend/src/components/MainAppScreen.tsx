@@ -19,6 +19,7 @@ import {
 import {
   CHAT_HEADER,
   CHAT_COMPOSER_LAYOUT,
+  CHAT_PENDING_UI,
   carStatusPresentation,
   draftAfterFailedSend,
   draftAfterSendStarts,
@@ -395,7 +396,6 @@ export function MainAppScreen({ user, accessToken, authUserId }: {
                     >
                       {message.content}
                     </div>
-                    {message.pending && <span className="chat-message-status">שולח…</span>}
                     {message.failed && (
                       <div className="chat-message-failure" role="status">
                         <span>לא נשלח</span>
@@ -413,7 +413,15 @@ export function MainAppScreen({ user, accessToken, authUserId }: {
             ))}
           </section>
         ))}
-        {sending && <div className="chat-typing" role="status">חושב<span aria-hidden="true">…</span></div>}
+        {sending && (
+          <div className="chat-typing" role="status" aria-label={CHAT_PENDING_UI.typingLabel}>
+            <span className="chat-typing-dots" aria-hidden="true">
+              {Array.from({ length: CHAT_PENDING_UI.typingDotCount }, (_, index) => (
+                <i key={index} />
+              ))}
+            </span>
+          </div>
+        )}
       </section>
 
       <p className="visually-hidden" aria-live="polite" aria-atomic="true">{liveAssistantText}</p>
