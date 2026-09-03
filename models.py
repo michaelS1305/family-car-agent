@@ -20,6 +20,10 @@ class CarPlaySetupStatusRequest(BaseModel):
     status: Literal["completed", "skipped"]
 
 
+class CarStatusResponse(BaseModel):
+    status: Literal["available", "occupied"]
+
+
 class CreateFamilyAddressRequest(BaseModel):
     home_address: str
 

@@ -68,6 +68,7 @@ models_stub = stub_module(
     CarConnection=type("CarConnection", (), {}),
     CarPlaySetupResponse=type("CarPlaySetupResponse", (), {}),
     CarPlaySetupStatusRequest=type("CarPlaySetupStatusRequest", (), {}),
+    CarStatusResponse=type("CarStatusResponse", (), {}),
     ChatRequest=type("ChatRequest", (), {}),
     CreateFamilyAddressRequest=type("CreateFamilyAddressRequest", (), {}),
     CreateFamilyRequest=type("CreateFamilyRequest", (), {}),
@@ -83,8 +84,10 @@ database_stub = stub_module(
 )
 car_stub = stub_module(
     "car_service",
+    CarStatusError=type("CarStatusError", (Exception,), {}),
     connect_user=Mock(),
     disconnect_user=Mock(),
+    get_car_status=Mock(return_value="available"),
 )
 
 
@@ -344,6 +347,28 @@ class ChatRouteTests(unittest.TestCase):
         )
         chat_stub.get_chat_history.assert_called_once_with(current_user, 30)
         self.assertEqual(response, {"messages": []})
+
+
+class CarStatusRouteTests(unittest.TestCase):
+    def setUp(self):
+        car_stub.get_car_status.reset_mock(return_value=True, side_effect=True)
+        car_stub.get_car_status.return_value = "available"
+
+    def test_route_is_protected_scoped_and_not_cached(self):
+        response = fastapi_stub.Response()
+        current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
+
+        result = main.car_status(response, current_user)
+        parameters = inspect.signature(main.car_status).parameters
+
+        self.assertEqual(tuple(parameters), ("response", "current_user"))
+        self.assertIs(
+            parameters["current_user"].default.dependency,
+            auth_stub.get_current_user,
+        )
+        self.assertEqual(result, {"status": "available"})
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        car_stub.get_car_status.assert_called_once_with(current_user)
 
 
 class CarPlaySetupRouteTests(unittest.TestCase):

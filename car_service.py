@@ -6,6 +6,27 @@ from database import (
 )
 from math import radians, sin, cos, sqrt, atan2
 
+from identity import CurrentUser
+
+
+class CarStatusError(Exception):
+    def __init__(self, code, message, status_code):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+
+
+def get_car_status(current_user: CurrentUser):
+    if current_user.family_id is None:
+        raise CarStatusError(
+            "USER_WITHOUT_FAMILY",
+            "The mapped user does not belong to a family",
+            403,
+        )
+
+    return "occupied" if get_active_driver(current_user.family_id) else "available"
+
 
 def connect_user(shortcut_token):
     user = get_user_by_token(shortcut_token)

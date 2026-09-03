@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   ApiRequestError,
   createFamily,
+  getCarStatus,
   getCurrentUser,
   OnboardingApiError,
   resolveCreateFamilyAddress,
@@ -77,6 +78,43 @@ test('CarPlay status update sends only the requested status and bearer identity'
     'Content-Type': 'application/json',
     Authorization: 'Bearer access-token',
   })
+})
+
+test('car status fetch sends only bearer identity and accepts the small status contract', async () => {
+  let receivedUrl = ''
+  let receivedRequest: RequestInit | undefined
+  const result = await getCarStatus('access-token', {
+    baseUrl: 'http://backend.test/',
+    fetcher: async (url, request) => {
+      receivedUrl = String(url)
+      receivedRequest = request
+      return jsonResponse(200, { status: 'occupied' })
+    },
+  })
+
+  assert.deepEqual(result, { status: 'occupied' })
+  assert.equal(receivedUrl, 'http://backend.test/api/car/status')
+  assert.equal(receivedRequest?.method, 'GET')
+  assert.deepEqual(receivedRequest?.headers, {
+    Accept: 'application/json',
+    Authorization: 'Bearer access-token',
+  })
+  assert.equal(receivedRequest?.body, undefined)
+})
+
+test('car status rejects unavailable or malformed backend responses', async () => {
+  await assert.rejects(
+    getCarStatus('access-token', {
+      fetcher: async () => jsonResponse(200, { status: 'elsewhere' }),
+    }),
+    (error: unknown) => error instanceof ApiRequestError && error.kind === 'invalid-response',
+  )
+  await assert.rejects(
+    getCarStatus('access-token', {
+      fetcher: async () => jsonResponse(503, { detail: 'offline' }),
+    }),
+    (error: unknown) => error instanceof ApiRequestError && error.kind === 'server',
+  )
 })
 
 test('403 means the authenticated user has no internal mapping', async () => {

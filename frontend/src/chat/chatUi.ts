@@ -8,9 +8,38 @@ export const CHAT_HEADER = {
   title: 'Family Car Agent',
   menuLabel: 'פתיחת תפריט — בקרוב',
   menuLines: 3,
-  // Placeholder until an existing API contract exposes live car availability.
-  carStatus: { label: 'מצב לא זמין', tone: 'unknown' },
 } as const
+
+export const CHAT_COMPOSER_LAYOUT = {
+  fieldClassName: 'chat-composer-field',
+  sendClassName: 'chat-send-button',
+} as const
+
+export type CarStatusUiState = 'loading' | 'available' | 'occupied' | 'unknown'
+
+export function carStatusPresentation(status: CarStatusUiState) {
+  const presentations = {
+    loading: { label: 'בודק…', tone: 'loading' },
+    available: { label: 'פנוי', tone: 'available' },
+    occupied: { label: 'תפוס', tone: 'occupied' },
+    unknown: { label: 'לא ידוע', tone: 'unknown' },
+  } as const
+  return presentations[status]
+}
+
+export function shouldRefreshCarStatus({
+  isVisible,
+  now,
+  lastRefreshAt,
+  minimumInterval = 1_500,
+}: {
+  isVisible: boolean
+  now: number
+  lastRefreshAt: number
+  minimumInterval?: number
+}) {
+  return isVisible && now - lastRefreshAt >= minimumInterval
+}
 
 export function draftAfterSendStarts(currentDraft: string, sentMessage: string) {
   return currentDraft.trim() === sentMessage ? '' : currentDraft
@@ -29,6 +58,12 @@ export type MessageTimeGroup<T> = {
   label: string
   dateTime?: string
   messages: T[]
+}
+
+export type MessageDayGroup<T> = {
+  key: string
+  label: string
+  minuteGroups: MessageTimeGroup<T>[]
 }
 
 const messageTimeFormatter = new Intl.DateTimeFormat('he-IL', {
@@ -59,6 +94,52 @@ export function groupMessagesByMinute<T extends { created_at: string }>(
       messages: [message],
     })
     return groups
+  }, [])
+}
+
+function localDateKey(date: Date) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-')
+}
+
+export function formatMessageDayLabel(date: Date, now = new Date()) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  const daysAgo = Math.round((today.getTime() - target.getTime()) / 86_400_000)
+  if (daysAgo === 0) return 'היום'
+  if (daysAgo === 1) return 'אתמול'
+  return new Intl.DateTimeFormat('he-IL', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(date)
+}
+
+export function groupMessagesByDay<T extends { created_at: string }>(
+  messages: T[],
+  now = new Date(),
+): MessageDayGroup<T>[] {
+  return messages.reduce<MessageDayGroup<T>[]>((days, message, index) => {
+    const date = new Date(message.created_at)
+    const validTimestamp = Number.isFinite(date.getTime())
+    const key = validTimestamp ? localDateKey(date) : `invalid-${index}`
+    const previous = days.at(-1)
+    if (previous?.key === key) {
+      previous.minuteGroups = groupMessagesByMinute([
+        ...previous.minuteGroups.flatMap((group) => group.messages),
+        message,
+      ])
+      return days
+    }
+    days.push({
+      key,
+      label: validTimestamp ? formatMessageDayLabel(date, now) : '',
+      minuteGroups: groupMessagesByMinute([message]),
+    })
+    return days
   }, [])
 }
 

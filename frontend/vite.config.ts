@@ -7,7 +7,12 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['images/family-car-agent-logo.png'],
+      includeAssets: [
+        'images/family-car-agent-logo.png',
+        'icons/family-car-agent-192.png',
+        'icons/family-car-agent-512.png',
+        'icons/family-car-agent-apple-touch-180.png',
+      ],
       manifest: {
         name: 'Family Car Agent',
         short_name: 'Family Car',
@@ -20,8 +25,14 @@ export default defineConfig({
         theme_color: '#28705c',
         icons: [
           {
-            src: '/images/family-car-agent-logo.png',
-            sizes: '1254x1254',
+            src: '/icons/family-car-agent-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: '/icons/family-car-agent-512.png',
+            sizes: '512x512',
             type: 'image/png',
             purpose: 'any',
           },
