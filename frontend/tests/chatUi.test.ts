@@ -87,6 +87,15 @@ test('composer field and circular send action use separate visual containers', (
   assert.equal(CHAT_COMPOSER_LAYOUT.actionCount, 1)
 })
 
+test('send action and user bubbles share the same chat surface token', () => {
+  assert.match(appCssSource, /\.main-chat-screen \{[\s\S]*?--chat-user-surface: #263241;/)
+  assert.match(appCssSource, /\.chat-bubble-user \{[\s\S]*?background: var\(--chat-user-surface\);/)
+  assert.match(appCssSource, /\.chat-send-button \{[\s\S]*?background: var\(--chat-user-surface\);/)
+  assert.match(appCssSource, /\.chat-send-button:not\(:disabled\):hover \{[\s\S]*?filter: brightness\(1\.08\);/)
+  assert.match(appCssSource, /\.chat-send-button:not\(:disabled\):active \{[\s\S]*?filter: brightness\(0\.94\);/)
+  assert.match(appCssSource, /\.chat-send-button:disabled \{[\s\S]*?background: var\(--chat-user-surface\);/)
+})
+
 test('pending presentation uses three quiet typing dots without text labels', () => {
   assert.equal(CHAT_PENDING_UI.showUserPendingLabel, false)
   assert.equal(CHAT_PENDING_UI.typingDotCount, 3)
