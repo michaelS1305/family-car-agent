@@ -111,7 +111,7 @@ function RotarySelector({ onConfirm }: { onConfirm: (category: DashboardCategory
       <div className="rotary-glass-disc" aria-hidden="true" />
       <div className="rotary-selection-glow" aria-hidden="true" />
       {DASHBOARD_CATEGORIES.map((category, index) => {
-        const position = categoryPosition(index)
+        const position = categoryPosition(index, 34)
         const selected = index === selectedIndex
         return (
           <div
@@ -227,10 +227,11 @@ export function DashboardScreen({
       </header>
 
       <p className="dashboard-greeting">היי, {userName}</p>
+      <p className="dashboard-instruction">סובב את המתג לשירות מבוקש</p>
 
       <div className="dashboard-selector-area">
         <RotarySelector onConfirm={setConfirmedCategory} />
-        <p className="dashboard-confirmation" aria-live="polite">
+        <p className="visually-hidden" aria-live="polite">
           {confirmedCategory ? `נבחר: ${confirmedCategory.label}` : '\u00a0'}
         </p>
       </div>
