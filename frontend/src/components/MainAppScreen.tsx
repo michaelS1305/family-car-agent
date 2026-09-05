@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -33,6 +34,8 @@ import {
 } from '../chat/chatUi'
 import { createCarStatusRealtimeSync } from '../carStatus/carStatusRealtime'
 import { getSupabaseClient } from '../lib/supabase'
+import { DashboardScreen } from './DashboardScreen'
+import { APP_VERSION } from '../appVersion'
 
 const suggestions = [
   'מי עם הרכב?',
@@ -93,10 +96,11 @@ function isRetryableWithSameRequest(error: unknown) {
   )
 }
 
-export function MainAppScreen({ user, accessToken, authUserId }: {
+export function MainAppScreen({ user, accessToken, authUserId, onLogout }: {
   user: InternalUser
   accessToken: string
   authUserId: string
+  onLogout: () => Promise<void>
 }) {
   const [draftMessage, setDraftMessage] = useState('')
   const [messages, setMessages] = useState<DisplayMessage[]>([])
@@ -106,13 +110,19 @@ export function MainAppScreen({ user, accessToken, authUserId }: {
   const [sending, setSending] = useState(false)
   const [carStatus, setCarStatus] = useState<CarStatusUiState>('loading')
   const [liveAssistantText, setLiveAssistantText] = useState('')
+  const [dashboardOpen, setDashboardOpen] = useState(false)
   const threadRef = useRef<HTMLElement | null>(null)
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const requestRunnerRef = useRef(createChatRequestRunner())
   const initialHistoryPositionedRef = useRef(false)
   const nearBottomRef = useRef(true)
   const scrollIntentRef = useRef<'auto' | 'smooth' | null>(null)
   const composingRef = useRef(false)
+  const closeDashboard = useCallback(() => {
+    setDashboardOpen(false)
+    window.requestAnimationFrame(() => menuButtonRef.current?.focus({ preventScroll: true }))
+  }, [])
 
   useEffect(() => {
     document.documentElement.classList.add('chat-shell-active')
@@ -333,8 +343,8 @@ export function MainAppScreen({ user, accessToken, authUserId }: {
 
   return (
     <main className="main-chat-screen" dir="rtl">
-      <header className="main-chat-header">
-        <button className="chat-menu-button" type="button" aria-label={CHAT_HEADER.menuLabel}>
+      <header className="main-chat-header" aria-hidden={dashboardOpen} inert={dashboardOpen}>
+        <button ref={menuButtonRef} className="chat-menu-button" type="button" aria-label={CHAT_HEADER.menuLabel} onClick={() => setDashboardOpen(true)}>
           <span className="chat-menu-icon" aria-hidden="true">
             {Array.from({ length: CHAT_HEADER.menuLines }, (_, index) => <i key={index} />)}
           </span>
@@ -351,6 +361,8 @@ export function MainAppScreen({ user, accessToken, authUserId }: {
         ref={threadRef}
         aria-busy={historyLoading || sending}
         aria-label="השיחה"
+        aria-hidden={dashboardOpen}
+        inert={dashboardOpen}
         onScroll={(event) => { nearBottomRef.current = isNearScrollBottom(event.currentTarget) }}
       >
         {historyLoading && <div className="chat-loading" role="status">טוענים את השיחה…</div>}
@@ -424,9 +436,9 @@ export function MainAppScreen({ user, accessToken, authUserId }: {
         )}
       </section>
 
-      <p className="visually-hidden" aria-live="polite" aria-atomic="true">{liveAssistantText}</p>
+      <p className="visually-hidden" aria-live="polite" aria-atomic="true" aria-hidden={dashboardOpen}>{liveAssistantText}</p>
 
-      <form className="chat-composer" onSubmit={(event) => {
+      <form className="chat-composer" aria-hidden={dashboardOpen} inert={dashboardOpen} onSubmit={(event) => {
         event.preventDefault()
         void submit()
       }}>
@@ -456,6 +468,14 @@ export function MainAppScreen({ user, accessToken, authUserId }: {
           <span aria-hidden="true">←</span>
         </button>
       </form>
+
+      <DashboardScreen
+        open={dashboardOpen}
+        userName={user.name}
+        version={APP_VERSION}
+        onClose={closeDashboard}
+        onLogout={onLogout}
+      />
     </main>
   )
 }
