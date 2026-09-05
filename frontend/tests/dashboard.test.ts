@@ -59,9 +59,16 @@ test('hamburger opens the dashboard and its close control returns to chat', () =
 
 test('greeting and logout reuse authenticated app state and the existing auth flow', () => {
   assert.match(dashboardSource, /היי, \{userName\}/)
+  assert.match(dashboardSource, /סובב את המתג לשירות מבוקש/)
   assert.doesNotMatch(dashboardSource, /מיכאל/)
   assert.match(dashboardSource, /loggingOut \? 'מתנתקים…' : 'התנתקות'/)
   assert.match(appSource, /onLogout=\{\(\) => invalidateAuthSession\(''\)\}/)
+})
+
+test('dashboard keeps confirmation accessible without a visible selected-status line', () => {
+  assert.doesNotMatch(dashboardSource, /className="dashboard-confirmation"/)
+  assert.match(dashboardSource, /className="visually-hidden" aria-live="polite"/)
+  assert.match(dashboardSource, /confirmedCategory \? `נבחר: \$\{confirmedCategory\.label\}`/)
 })
 
 test('application version is injected from package metadata', () => {

@@ -868,7 +868,7 @@
   height: 100dvh;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   overflow: hidden;
   padding:
     max(4px, calc(env(safe-area-inset-top) - 4px))
@@ -949,6 +949,15 @@
   line-height: 1.25;
 }
 
+.dashboard-instruction {
+  margin: 8px 0 0;
+  color: #74808d;
+  font-size: clamp(0.86rem, 3.6vw, 0.98rem);
+  font-weight: 520;
+  line-height: 1.4;
+  text-align: center;
+}
+
 .dashboard-selector-area {
   min-height: 0;
   display: grid;
@@ -991,14 +1000,21 @@
   z-index: 1;
   inset: 2.5%;
   border-radius: 50%;
-  background: conic-gradient(
-    from -27deg,
-    rgba(208, 229, 249, 0.64),
-    rgba(232, 243, 253, 0.16) 54deg,
-    transparent 58deg 360deg
-  );
+  background:
+    radial-gradient(circle at 50% 9%, rgba(255, 255, 255, 0.62), transparent 21%),
+    conic-gradient(
+      from -27deg,
+      rgba(255, 255, 255, 0.34) 0deg,
+      rgba(238, 244, 248, 0.26) 18deg,
+      rgba(255, 255, 255, 0.5) 34deg,
+      rgba(218, 228, 236, 0.18) 53deg,
+      transparent 58deg 360deg
+    );
   -webkit-mask-image: radial-gradient(circle, transparent 0 43%, #000 44% 100%);
   mask-image: radial-gradient(circle, transparent 0 43%, #000 44% 100%);
+  -webkit-backdrop-filter: blur(9px) saturate(110%);
+  backdrop-filter: blur(9px) saturate(110%);
+  filter: drop-shadow(0 7px 12px rgba(54, 70, 86, 0.06));
   transform: rotate(var(--rotary-angle));
   transition: transform 220ms cubic-bezier(0.22, 0.72, 0.25, 1);
   pointer-events: none;
@@ -1007,7 +1023,7 @@
 .rotary-category {
   position: absolute;
   z-index: 3;
-  width: clamp(72px, 24%, 102px);
+  width: clamp(66px, 22%, 96px);
   display: grid;
   justify-items: center;
   gap: 5px;
@@ -1029,6 +1045,7 @@
   max-width: 100%;
   font-size: clamp(0.78rem, 3.5vw, 1rem);
   font-weight: 620;
+  text-wrap: balance;
 }
 
 .rotary-category.is-selected {
@@ -1157,14 +1174,6 @@
   opacity: 0.62;
 }
 
-.dashboard-confirmation {
-  min-height: 20px;
-  margin: 10px 0 0;
-  color: #728079;
-  font-size: 0.82rem;
-  font-weight: 620;
-}
-
 .dashboard-footer {
   display: grid;
   justify-items: center;
@@ -1258,13 +1267,15 @@
     padding: 0;
   }
 
+  .dashboard-instruction {
+    margin-top: 4px;
+    font-size: 0.82rem;
+  }
+
   .rotary-selector {
     width: clamp(250px, min(82vw, 49dvh), 330px);
   }
 
-  .dashboard-confirmation {
-    margin-top: 4px;
-  }
 }
 
 @media (max-width: 430px) {
