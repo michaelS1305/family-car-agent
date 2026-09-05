@@ -1005,57 +1005,23 @@
   inset: 2.5%;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 50% 8%, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.16) 20%, transparent 34%),
+    radial-gradient(circle at 50% 9%, rgba(255, 255, 255, 0.62), transparent 21%),
     conic-gradient(
       from -27deg,
-      rgba(255, 255, 255, 0.58) 0deg,
-      rgba(236, 239, 242, 0.42) 16deg,
-      rgba(255, 255, 255, 0.66) 33deg,
-      rgba(211, 217, 223, 0.3) 53deg,
+      rgba(255, 255, 255, 0.34) 0deg,
+      rgba(238, 244, 248, 0.26) 18deg,
+      rgba(255, 255, 255, 0.5) 34deg,
+      rgba(218, 228, 236, 0.18) 53deg,
       transparent 58deg 360deg
     );
   -webkit-mask-image: radial-gradient(circle, transparent 0 43%, #000 44% 100%);
   mask-image: radial-gradient(circle, transparent 0 43%, #000 44% 100%);
-  -webkit-backdrop-filter: blur(13px) saturate(116%) brightness(1.04);
-  backdrop-filter: blur(13px) saturate(116%) brightness(1.04);
-  filter:
-    drop-shadow(0 8px 13px rgba(54, 65, 77, 0.1))
-    drop-shadow(0 -1px 1px rgba(255, 255, 255, 0.76));
+  -webkit-backdrop-filter: blur(9px) saturate(110%);
+  backdrop-filter: blur(9px) saturate(110%);
+  filter: drop-shadow(0 7px 12px rgba(54, 70, 86, 0.06));
   transform: rotate(var(--rotary-angle));
   transition: transform 220ms cubic-bezier(0.22, 0.72, 0.25, 1);
   pointer-events: none;
-}
-
-.rotary-selection-glow::before,
-.rotary-selection-glow::after {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  content: '';
-  pointer-events: none;
-}
-
-.rotary-selection-glow::before {
-  background: conic-gradient(
-    from -27deg,
-    rgba(255, 255, 255, 0.9) 0deg,
-    rgba(255, 255, 255, 0.2) 2deg,
-    transparent 5deg 51deg,
-    rgba(72, 84, 96, 0.1) 54deg,
-    transparent 58deg 360deg
-  );
-}
-
-.rotary-selection-glow::after {
-  background: conic-gradient(
-    from -27deg,
-    transparent 0deg 12deg,
-    rgba(255, 255, 255, 0.12) 18deg,
-    rgba(255, 255, 255, 0.72) 28deg,
-    rgba(255, 255, 255, 0.14) 39deg,
-    transparent 47deg 360deg
-  );
-  opacity: 0.9;
 }
 
 .rotary-category {
