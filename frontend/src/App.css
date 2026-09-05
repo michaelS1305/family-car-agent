@@ -374,7 +374,7 @@
 .main-chat-header {
   position: absolute;
   z-index: 10;
-  top: max(6px, env(safe-area-inset-top));
+  top: max(4px, calc(env(safe-area-inset-top) - 4px));
   right: max(18px, env(safe-area-inset-right));
   left: max(18px, env(safe-area-inset-left));
   width: auto;

@@ -52,8 +52,8 @@ test('chat header stays centered without a greeting or placeholder car status', 
 })
 
 test('car status maps real, loading, and failed states to accessible Hebrew labels', () => {
-  assert.deepEqual(carStatusPresentation('available'), { label: 'פנוי', tone: 'available' })
-  assert.deepEqual(carStatusPresentation('occupied'), { label: 'תפוס', tone: 'occupied' })
+  assert.deepEqual(carStatusPresentation('available'), { label: 'רכב פנוי', tone: 'available' })
+  assert.deepEqual(carStatusPresentation('occupied'), { label: 'רכב תפוס', tone: 'occupied' })
   assert.deepEqual(carStatusPresentation('loading'), { label: 'בודק…', tone: 'loading' })
   assert.deepEqual(carStatusPresentation('unknown'), { label: 'לא ידוע', tone: 'unknown' })
 })
