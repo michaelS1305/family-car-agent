@@ -1,7 +1,9 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
+  type RefObject,
   type KeyboardEvent,
   type PointerEvent,
 } from 'react'
@@ -44,7 +46,13 @@ function CategoryIcon({ icon }: { icon: DashboardCategory['icon'] }) {
   return <svg {...common}><rect x="5" y="7" width="22" height="20" rx="3" /><path d="M10 4v6M22 4v6M5 13h22M10 18h4M18 18h4M10 22h4" /></svg>
 }
 
-function RotarySelector({ onConfirm }: { onConfirm: (category: DashboardCategory) => void }) {
+function RotarySelector({
+  confirmButtonRef,
+  onConfirm,
+}: {
+  confirmButtonRef: RefObject<HTMLButtonElement | null>
+  onConfirm: (category: DashboardCategory) => void
+}) {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [dragging, setDragging] = useState(false)
   const selectorRef = useRef<HTMLDivElement | null>(null)
@@ -159,15 +167,53 @@ function RotarySelector({ onConfirm }: { onConfirm: (category: DashboardCategory
         <path d="m65 61 4 4 4-4" />
       </svg>
       <button
+        ref={confirmButtonRef}
         type="button"
         className="rotary-knob"
-        aria-label={`אישור בחירת ${selectedCategory.label}`}
+        aria-label={`פתיחת ${selectedCategory.label}`}
         onClick={() => onConfirm(confirmDashboardCategory(selectedIndex))}
       >
         <span className="rotary-notch" aria-hidden="true" />
         <strong>OK</strong>
       </button>
     </div>
+  )
+}
+
+function CategoryPlaceholderScreen({
+  category,
+  open,
+  onBack,
+}: {
+  category: DashboardCategory
+  open: boolean
+  onBack: () => void
+}) {
+  const backButtonRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    if (open) backButtonRef.current?.focus({ preventScroll: true })
+  }, [open])
+
+  return (
+    <section
+      className={`category-placeholder-screen${open ? ' is-open' : ''}`}
+      dir="rtl"
+      role="dialog"
+      aria-modal="true"
+      aria-label={category.label}
+      aria-hidden={!open}
+      inert={!open}
+    >
+      <header className="dashboard-header category-placeholder-header">
+        <button ref={backButtonRef} type="button" onClick={onBack} aria-label="חזרה ללוח הבקרה">
+          <span aria-hidden="true">×</span>
+        </button>
+        <h1>Family Car Agent</h1>
+        <span aria-hidden="true" />
+      </header>
+      <h2>{category.label}</h2>
+    </section>
   )
 }
 
@@ -185,18 +231,46 @@ export function DashboardScreen({
   onLogout: () => Promise<void>
 }) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
-  const [confirmedCategory, setConfirmedCategory] = useState<DashboardCategory | null>(null)
+  const confirmButtonRef = useRef<HTMLButtonElement | null>(null)
+  const categoryOpenFrameRef = useRef<number | null>(null)
+  const [activeCategory, setActiveCategory] = useState<DashboardCategory | null>(null)
+  const [categoryOpen, setCategoryOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+
+  const closeCategory = useCallback(() => {
+    if (categoryOpenFrameRef.current !== null) {
+      window.cancelAnimationFrame(categoryOpenFrameRef.current)
+      categoryOpenFrameRef.current = null
+    }
+    setCategoryOpen(false)
+    window.requestAnimationFrame(() => confirmButtonRef.current?.focus({ preventScroll: true }))
+  }, [])
+
+  const openCategory = useCallback((category: DashboardCategory) => {
+    if (categoryOpenFrameRef.current !== null) window.cancelAnimationFrame(categoryOpenFrameRef.current)
+    setActiveCategory(category)
+    setCategoryOpen(false)
+    categoryOpenFrameRef.current = window.requestAnimationFrame(() => {
+      setCategoryOpen(true)
+      categoryOpenFrameRef.current = null
+    })
+  }, [])
+
+  useEffect(() => () => {
+    if (categoryOpenFrameRef.current !== null) window.cancelAnimationFrame(categoryOpenFrameRef.current)
+  }, [])
 
   useEffect(() => {
     if (!open) return
-    closeButtonRef.current?.focus({ preventScroll: true })
+    if (!categoryOpen) closeButtonRef.current?.focus({ preventScroll: true })
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key !== 'Escape') return
+      if (categoryOpen) closeCategory()
+      else onClose()
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, open])
+  }, [categoryOpen, closeCategory, onClose, open])
 
   const handleLogout = async () => {
     if (loggingOut) return
@@ -218,31 +292,37 @@ export function DashboardScreen({
       aria-hidden={!open}
       inert={!open}
     >
-      <header className="dashboard-header">
-        <button ref={closeButtonRef} type="button" onClick={onClose} aria-label="חזרה לצ׳אט">
-          <span aria-hidden="true">×</span>
-        </button>
-        <strong>Family Car Agent</strong>
-        <span aria-hidden="true" />
-      </header>
+      <div className="dashboard-content" inert={categoryOpen}>
+        <header className="dashboard-header">
+          <button ref={closeButtonRef} type="button" onClick={onClose} aria-label="חזרה לצ׳אט">
+            <span aria-hidden="true">×</span>
+          </button>
+          <strong>Family Car Agent</strong>
+          <span aria-hidden="true" />
+        </header>
 
-      <p className="dashboard-greeting">היי, {userName}</p>
-      <p className="dashboard-instruction">סובב את המתג לשירות מבוקש</p>
+        <p className="dashboard-greeting">היי, {userName}</p>
+        <p className="dashboard-instruction">סובב את המתג לשירות מבוקש</p>
 
-      <div className="dashboard-selector-area">
-        <RotarySelector onConfirm={setConfirmedCategory} />
-        <p className="visually-hidden" aria-live="polite">
-          {confirmedCategory ? `נבחר: ${confirmedCategory.label}` : '\u00a0'}
-        </p>
+        <div className="dashboard-selector-area">
+          <RotarySelector
+            confirmButtonRef={confirmButtonRef}
+            onConfirm={openCategory}
+          />
+        </div>
+
+        <footer className="dashboard-footer">
+          <button type="button" className="dashboard-logout" disabled={loggingOut} onClick={() => void handleLogout()}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10" /></svg>
+            <span>{loggingOut ? 'מתנתקים…' : 'התנתקות'}</span>
+          </button>
+          <small>v{version}</small>
+        </footer>
       </div>
 
-      <footer className="dashboard-footer">
-        <button type="button" className="dashboard-logout" disabled={loggingOut} onClick={() => void handleLogout()}>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10" /></svg>
-          <span>{loggingOut ? 'מתנתקים…' : 'התנתקות'}</span>
-        </button>
-        <small>v{version}</small>
-      </footer>
+      {activeCategory ? (
+        <CategoryPlaceholderScreen category={activeCategory} open={categoryOpen} onBack={closeCategory} />
+      ) : null}
     </section>
   )
 }

@@ -48,7 +48,9 @@ test('rotation snaps deterministically and selects the nearest category', () => 
   assert.equal(categoryIndexForRotation(72), 1)
   assert.equal(categoryIndexForRotation(-72), 4)
   assert.equal(moveRotarySelection(72, 1), 144)
-  assert.equal(confirmDashboardCategory(4)?.label, 'מרכז הזמנות')
+  DASHBOARD_CATEGORIES.forEach((category, index) => {
+    assert.equal(confirmDashboardCategory(index)?.label, category.label)
+  })
 })
 
 test('hamburger opens the dashboard and its close control returns to chat', () => {
@@ -65,10 +67,9 @@ test('greeting and logout reuse authenticated app state and the existing auth fl
   assert.match(appSource, /onLogout=\{\(\) => invalidateAuthSession\(''\)\}/)
 })
 
-test('dashboard keeps confirmation accessible without a visible selected-status line', () => {
+test('dashboard has no visible selected-status line', () => {
   assert.doesNotMatch(dashboardSource, /className="dashboard-confirmation"/)
-  assert.match(dashboardSource, /className="visually-hidden" aria-live="polite"/)
-  assert.match(dashboardSource, /confirmedCategory \? `נבחר: \$\{confirmedCategory\.label\}`/)
+  assert.doesNotMatch(dashboardSource, /נבחר:/)
 })
 
 test('application version is injected from package metadata', () => {
@@ -81,7 +82,28 @@ test('rotary has one accessible slider and one real OK confirmation button', () 
   assert.equal((dashboardSource.match(/role="slider"/g) ?? []).length, 1)
   assert.match(dashboardSource, /aria-valuetext=\{selectedCategory\.label\}/)
   assert.match(dashboardSource, /className="rotary-knob"[\s\S]*?onClick=\{\(\) => onConfirm/)
+  assert.match(dashboardSource, /aria-label=\{`פתיחת \$\{selectedCategory\.label\}`\}/)
   assert.match(dashboardSource, /<strong>OK<\/strong>/)
+})
+
+test('one reusable placeholder opens every configured category without duplicated content', () => {
+  for (const category of DASHBOARD_CATEGORIES) {
+    assert.ok(category.label.length > 0)
+  }
+  assert.match(dashboardSource, /function CategoryPlaceholderScreen/)
+  assert.match(dashboardSource, /<h1>Family Car Agent<\/h1>/)
+  assert.match(dashboardSource, /<h2>\{category\.label\}<\/h2>/)
+  assert.match(dashboardSource, /setActiveCategory\(category\)[\s\S]*?requestAnimationFrame[\s\S]*?setCategoryOpen\(true\)/)
+  assert.doesNotMatch(dashboardSource, /בקרוב|coming soon|סטטיסטיקה/i)
+})
+
+test('category back preserves the mounted rotary and restores focus to OK', () => {
+  assert.match(dashboardSource, /<div className="dashboard-content" inert=\{categoryOpen\}>/)
+  assert.match(dashboardSource, /<RotarySelector[\s\S]*?<CategoryPlaceholderScreen/)
+  assert.match(dashboardSource, /aria-label="חזרה ללוח הבקרה"/)
+  assert.match(dashboardSource, /setCategoryOpen\(false\)/)
+  assert.match(dashboardSource, /confirmButtonRef\.current\?\.focus/)
+  assert.match(dashboardSource, /if \(categoryOpen\) closeCategory\(\)/)
 })
 
 test('dashboard transition and rotary motion respect reduced motion', () => {
