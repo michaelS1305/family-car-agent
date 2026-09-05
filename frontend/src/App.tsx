@@ -1226,6 +1226,7 @@ function App() {
         user={currentUser}
         accessToken={session.access_token}
         authUserId={session.user.id}
+        onLogout={() => invalidateAuthSession('')}
       />
     )
   }
