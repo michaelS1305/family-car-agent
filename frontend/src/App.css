@@ -835,7 +835,7 @@
   box-shadow: 0 8px 22px rgba(38, 50, 65, 0.18);
   font-size: 1.2rem;
   cursor: pointer;
-  transition: filter 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
+  transition: filter 140ms ease, box-shadow 140ms ease;
 }
 
 .chat-send-button:not(:disabled):hover {
@@ -848,10 +848,14 @@
 
 .chat-send-button:disabled {
   background: var(--chat-user-surface);
-  opacity: 0.42;
+  opacity: 1;
   filter: none;
   cursor: not-allowed;
-  box-shadow: none;
+  box-shadow: 0 4px 12px rgba(38, 50, 65, 0.12);
+}
+
+.chat-send-button:disabled span {
+  opacity: 0.48;
 }
 
 .chat-menu-button:focus-visible,

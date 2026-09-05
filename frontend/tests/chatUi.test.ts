@@ -93,7 +93,8 @@ test('send action and user bubbles share the same chat surface token', () => {
   assert.match(appCssSource, /\.chat-send-button \{[\s\S]*?background: var\(--chat-user-surface\);/)
   assert.match(appCssSource, /\.chat-send-button:not\(:disabled\):hover \{[\s\S]*?filter: brightness\(1\.08\);/)
   assert.match(appCssSource, /\.chat-send-button:not\(:disabled\):active \{[\s\S]*?filter: brightness\(0\.94\);/)
-  assert.match(appCssSource, /\.chat-send-button:disabled \{[\s\S]*?background: var\(--chat-user-surface\);/)
+  assert.match(appCssSource, /\.chat-send-button:disabled \{[\s\S]*?background: var\(--chat-user-surface\);[\s\S]*?opacity: 1;/)
+  assert.match(appCssSource, /\.chat-send-button:disabled span \{[\s\S]*?opacity: 0\.48;/)
 })
 
 test('pending presentation uses three quiet typing dots without text labels', () => {
