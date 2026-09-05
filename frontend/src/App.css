@@ -351,6 +351,26 @@
   background: #fffefc;
 }
 
+.main-chat-screen::before {
+  position: absolute;
+  z-index: 8;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: calc(max(20px, env(safe-area-inset-top)) + 78px);
+  content: '';
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 254, 252, 0.3),
+    rgba(255, 254, 252, 0)
+  );
+  -webkit-backdrop-filter: blur(5px) saturate(112%);
+  backdrop-filter: blur(5px) saturate(112%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 58%, transparent);
+  mask-image: linear-gradient(to bottom, #000 58%, transparent);
+}
+
 .main-chat-screen::after {
   position: absolute;
   z-index: 7;
