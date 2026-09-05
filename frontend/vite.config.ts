@@ -21,8 +21,8 @@ export default defineConfig({
         dir: 'rtl',
         start_url: '/',
         display: 'standalone',
-        background_color: '#f7faf8',
-        theme_color: '#28705c',
+        background_color: '#fffefc',
+        theme_color: '#fffefc',
         icons: [
           {
             src: '/icons/family-car-agent-192.png',

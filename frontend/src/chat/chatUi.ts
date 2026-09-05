@@ -28,8 +28,8 @@ export type CarStatusUiState = 'loading' | 'available' | 'occupied' | 'unknown'
 export function carStatusPresentation(status: CarStatusUiState) {
   const presentations = {
     loading: { label: 'בודק…', tone: 'loading' },
-    available: { label: 'פנוי', tone: 'available' },
-    occupied: { label: 'תפוס', tone: 'occupied' },
+    available: { label: 'רכב פנוי', tone: 'available' },
+    occupied: { label: 'רכב תפוס', tone: 'occupied' },
     unknown: { label: 'לא ידוע', tone: 'unknown' },
   } as const
   return presentations[status]
