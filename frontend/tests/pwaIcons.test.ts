@@ -61,3 +61,15 @@ test('standalone iPhone display opts into the full viewport with a matching canv
   assert.match(appCss, /\.chat-thread \{[\s\S]*?position: absolute;[\s\S]*?inset: 0;/)
   assert.match(appCss, /\.chat-thread \{[\s\S]*?-webkit-mask-image: linear-gradient\([\s\S]*?transparent 0,/)
 })
+
+test('top progressive glass mirrors the bottom treatment without blocking controls', async () => {
+  const appCss = await readFile(projectFile('src/App.css'), 'utf8')
+
+  assert.match(appCss, /\.main-chat-screen::before \{[\s\S]*?z-index: 8;[\s\S]*?top: 0;/)
+  assert.match(appCss, /\.main-chat-screen::before \{[\s\S]*?height: calc\(max\(20px, env\(safe-area-inset-top\)\) \+ 78px\);/)
+  assert.match(appCss, /\.main-chat-screen::before \{[\s\S]*?pointer-events: none;/)
+  assert.match(appCss, /\.main-chat-screen::before \{[\s\S]*?-webkit-backdrop-filter: blur\(5px\) saturate\(112%\);/)
+  assert.match(appCss, /\.main-chat-screen::before \{[\s\S]*?-webkit-mask-image: linear-gradient\(to bottom, #000 58%, transparent\);/)
+  assert.match(appCss, /\.main-chat-screen::after \{[\s\S]*?bottom: 0;[\s\S]*?backdrop-filter: blur\(5px\) saturate\(112%\);/)
+  assert.match(appCss, /\.main-chat-header \{[\s\S]*?z-index: 10;/)
+})
