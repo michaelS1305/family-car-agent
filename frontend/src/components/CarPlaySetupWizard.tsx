@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { prepareCarPlaySetup, type CarPlaySetup } from '../api/apiClient'
+import { prepareCarPlaySetup, type CarPlaySetup, type PushConfig } from '../api/apiClient'
 import {
   carPlaySetupActionSteps,
   carPlaySetupLastStep,
+  carPlayPushStep,
   clearCarPlaySetupDraft,
   copyConnectionCode,
   loadCarPlaySetupStep,
@@ -10,6 +11,12 @@ import {
   previousCarPlaySetupStep,
   saveCarPlaySetupStep,
 } from '../carplay/carPlaySetupDraft'
+import {
+  activatePushNotifications,
+  currentNotificationPermission,
+  detectPushCapability,
+  preloadPushConfiguration,
+} from '../push/pushNotifications'
 import connectShortcutImage from '../assets/carplay/01-connect-shortcut.jpeg'
 import connectCodeImage from '../assets/carplay/02-connect-code.jpeg'
 import disconnectShortcutImage from '../assets/carplay/03-disconnect-shortcut.jpeg'
@@ -38,7 +45,18 @@ type StepContent = {
   callout?: string
   shortcut?: 'connect' | 'disconnect'
   code?: 'full' | 'compact'
+  notification?: true
 }
+
+type PushStepStatus =
+  | 'idle'
+  | 'loading'
+  | 'ready'
+  | 'activating'
+  | 'enabled'
+  | 'denied'
+  | 'unsupported'
+  | 'failed'
 
 const steps: StepContent[] = [
   {
@@ -147,6 +165,12 @@ const steps: StepContent[] = [
     imageAlt: 'מסך הקיצורים שלי עבור ניתוק CarPlay',
   },
   {
+    title: 'עדכונים על הרכב',
+    action: 'רוצה לקבל עדכון כשהרכב נלקח או מתפנה?',
+    secondary: 'כך כל בני המשפחה יכולים להישאר מעודכנים גם כשהאפליקציה סגורה.',
+    notification: true,
+  },
+  {
     title: 'הכול מוכן 🎉',
     action: 'החיבור ל-CarPlay הוגדר.',
     instructions: ['בפעם הראשונה שבה CarPlay יתחבר או יתנתק, ייתכן שהאייפון יבקש אישור להרצת הקיצור. בחר באפשרות שמאפשרת להריץ אותו תמיד או באופן אוטומטי, כדי שמכאן והלאה לא תצטרך לעשות דבר.'],
@@ -177,6 +201,9 @@ export function CarPlaySetupWizard({ accessToken, authUserId, onBack, onStatusCh
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
   const [isSavingStatus, setIsSavingStatus] = useState(false)
+  const [pushConfig, setPushConfig] = useState<PushConfig | null>(null)
+  const [pushStatus, setPushStatus] = useState<PushStepStatus>('idle')
+  const [pushLoadAttempt, setPushLoadAttempt] = useState(0)
   const current = steps[step]
 
   useEffect(() => {
@@ -193,6 +220,37 @@ export function CarPlaySetupWizard({ accessToken, authUserId, onBack, onStatusCh
   useEffect(() => {
     saveCarPlaySetupStep(authUserId, step)
   }, [authUserId, step])
+
+  useEffect(() => {
+    if (step !== carPlayPushStep) return
+    let active = true
+    void Promise.resolve().then(async () => {
+      if (!active) return
+      setPushConfig(null)
+      setPushStatus('loading')
+      if (detectPushCapability() !== 'supported') {
+        setPushStatus('unsupported')
+        return
+      }
+      if (currentNotificationPermission() === 'denied') {
+        setPushStatus('denied')
+        return
+      }
+      try {
+        const config = await preloadPushConfiguration(accessToken)
+        if (!active) return
+        if (!config.enabled || !config.public_vapid_key) {
+          setPushStatus('failed')
+          return
+        }
+        setPushConfig(config)
+        setPushStatus('ready')
+      } catch {
+        if (active) setPushStatus('failed')
+      }
+    })
+    return () => { active = false }
+  }, [accessToken, pushLoadAttempt, step])
 
   const saveStatus = async (status: 'completed' | 'skipped') => {
     if (isSavingStatus) return
@@ -236,6 +294,28 @@ export function CarPlaySetupWizard({ accessToken, authUserId, onBack, onStatusCh
     }
   }
 
+  const activatePush = () => {
+    if (!pushConfig || pushStatus === 'activating') return
+    setPushStatus('activating')
+    void activatePushNotifications(accessToken, pushConfig)
+      .then((result) => {
+        if (result.status === 'enabled') setPushStatus('enabled')
+        else if (result.status === 'denied') setPushStatus('denied')
+        else if (result.status === 'unsupported') setPushStatus('unsupported')
+        else setPushStatus('failed')
+      })
+      .catch(() => setPushStatus('failed'))
+  }
+
+  const retryPush = () => {
+    if (pushConfig) {
+      activatePush()
+      return
+    }
+    setPushStatus('loading')
+    setPushLoadAttempt((attempt) => attempt + 1)
+  }
+
   if (!setup) {
     return (
       <main className="identity-state-screen carplay-setup-loading" dir="rtl">
@@ -252,13 +332,15 @@ export function CarPlaySetupWizard({ accessToken, authUserId, onBack, onStatusCh
   }
 
   const isFinished = step === carPlaySetupLastStep
+  const isIntro = step === 0
+  const isNotificationStep = step === carPlayPushStep
   const progressStep = Math.min(Math.max(step, 0), carPlaySetupActionSteps)
   const shortcutUrl = current.shortcut === 'connect'
     ? setup.connect_shortcut_url
     : setup.disconnect_shortcut_url
 
   return (
-    <main className={`carplay-wizard${isFinished ? ' finished' : ''}`} dir="rtl">
+    <main className={`carplay-wizard${isFinished ? ' finished' : ''}${isIntro ? ' is-intro' : ''}${isNotificationStep ? ' is-notification' : ''}`} dir="rtl">
       {!isFinished && (
         <header className="carplay-wizard-navigation">
           <button type="button" onClick={moveBack} className={step === 0 ? 'is-hidden' : undefined}>אחורה</button>
@@ -275,7 +357,9 @@ export function CarPlaySetupWizard({ accessToken, authUserId, onBack, onStatusCh
           >
             {step === 0
               ? (isSavingStatus ? 'שומר...' : 'כבר הגדרתי')
-              : 'המשך'}
+              : (isNotificationStep && (pushStatus === 'idle' || pushStatus === 'ready' || pushStatus === 'loading' || pushStatus === 'activating')
+                  ? 'לא עכשיו'
+                  : 'המשך')}
           </button>
         </header>
       )}
@@ -302,6 +386,39 @@ export function CarPlaySetupWizard({ accessToken, authUserId, onBack, onStatusCh
         )}
         {current.callout && <p className="carplay-callout">{current.callout}</p>}
         {error && <p className="carplay-copy-error" role="alert">{error}</p>}
+
+        {current.notification && (
+          <div className="carplay-push-action">
+            {(pushStatus === 'idle' || pushStatus === 'loading') && (
+              <p className="carplay-push-status" role="status">מכינים את ההתראות…</p>
+            )}
+            {pushStatus === 'ready' && (
+              <button type="button" className="primary-button" onClick={activatePush}>
+                הפעלת התראות
+              </button>
+            )}
+            {pushStatus === 'activating' && (
+              <button type="button" className="primary-button" disabled>
+                מפעילים…
+              </button>
+            )}
+            {pushStatus === 'enabled' && (
+              <p className="carplay-push-status is-success" role="status">ההתראות הופעלו ✓</p>
+            )}
+            {pushStatus === 'denied' && (
+              <p className="carplay-push-status" role="status">ההתראות לא הופעלו. אפשר להמשיך כרגיל.</p>
+            )}
+            {pushStatus === 'unsupported' && (
+              <p className="carplay-push-status" role="status">התראות אינן נתמכות במכשיר או במצב הנוכחי. אפשר להמשיך כרגיל.</p>
+            )}
+            {pushStatus === 'failed' && (
+              <div className="carplay-push-retry" role="status">
+                <p>לא הצלחנו להפעיל את ההתראות כרגע. אפשר לנסות שוב או להמשיך.</p>
+                <button type="button" className="secondary-button" onClick={retryPush}>נסה שוב</button>
+              </div>
+            )}
+          </div>
+        )}
 
         {step === 0 && (
           <button

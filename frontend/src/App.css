@@ -104,6 +104,7 @@
 
 .carplay-wizard {
   width: 100%;
+  min-height: 100vh;
   min-height: 100svh;
   padding:
     max(18px, env(safe-area-inset-top))
@@ -112,6 +113,22 @@
     max(18px, env(safe-area-inset-left));
   color: #263241;
   background: #fffefc;
+}
+
+.carplay-wizard.is-intro {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.carplay-wizard.is-intro .carplay-wizard-navigation {
+  flex: 0 0 auto;
+}
+
+.carplay-wizard.is-intro .carplay-wizard-card {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .carplay-wizard-navigation {
@@ -329,6 +346,42 @@
   margin: 34px auto 0;
   border-radius: 15px;
   font-size: 0.9rem;
+}
+
+.carplay-wizard.is-intro .carplay-start-button {
+  margin-top: auto;
+}
+
+.carplay-push-action {
+  width: min(100%, 340px);
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  margin: clamp(42px, 9vh, 88px) auto 0;
+}
+
+.carplay-push-action .primary-button,
+.carplay-push-action .secondary-button {
+  width: min(100%, 260px);
+  min-height: 48px;
+}
+
+.carplay-push-status,
+.carplay-push-retry p {
+  margin: 0;
+  color: #5e6b65;
+  line-height: 1.6;
+}
+
+.carplay-push-status.is-success {
+  color: #2f6857;
+  font-weight: 750;
+}
+
+.carplay-push-retry {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
 }
 
 .carplay-wizard.finished .carplay-wizard-card {

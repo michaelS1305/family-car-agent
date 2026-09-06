@@ -3,6 +3,7 @@ import {
   registerPushSubscription,
   removePushSubscription,
   type BrowserPushSubscription,
+  type PushConfig,
 } from '../api/apiClient.ts'
 
 export type PushCapability = 'supported' | 'unsupported'
@@ -19,6 +20,10 @@ export function detectPushCapability(): PushCapability {
 
 export function currentNotificationPermission(): NotificationPermission | 'unsupported' {
   return detectPushCapability() === 'supported' ? Notification.permission : 'unsupported'
+}
+
+export function preloadPushConfiguration(accessToken: string) {
+  return getPushConfig(accessToken)
 }
 
 export function urlBase64ToUint8Array(value: string) {
@@ -40,24 +45,36 @@ function serializeSubscription(subscription: PushSubscription): BrowserPushSubsc
   }
 }
 
-export async function activatePushNotifications(accessToken: string) {
-  if (detectPushCapability() !== 'supported') return { status: 'unsupported' as const }
-  const config = await getPushConfig(accessToken)
-  if (!config.enabled || !config.public_vapid_key) return { status: 'disabled' as const }
+export function activatePushNotifications(accessToken: string, config: PushConfig) {
+  if (detectPushCapability() !== 'supported') {
+    return Promise.resolve({ status: 'unsupported' as const })
+  }
+  const publicVapidKey = config.public_vapid_key
+  if (!config.enabled || !publicVapidKey) {
+    return Promise.resolve({ status: 'disabled' as const })
+  }
+  if (Notification.permission === 'denied') {
+    return Promise.resolve({ status: 'denied' as const })
+  }
 
+  // Keep the permission request in the direct click/tap call stack. In
+  // particular, do not await configuration or any other network request first.
   const permission = Notification.permission === 'granted'
-    ? 'granted'
-    : await Notification.requestPermission()
-  if (permission !== 'granted') return { status: 'denied' as const }
+    ? Promise.resolve<NotificationPermission>('granted')
+    : Notification.requestPermission()
 
-  const registration = await navigator.serviceWorker.ready
-  const existing = await registration.pushManager.getSubscription()
-  const subscription = existing ?? await registration.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(config.public_vapid_key),
+  return permission.then(async (result) => {
+    if (result !== 'granted') return { status: 'denied' as const }
+
+    const registration = await navigator.serviceWorker.ready
+    const existing = await registration.pushManager.getSubscription()
+    const subscription = existing ?? await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicVapidKey),
+    })
+    await registerPushSubscription(accessToken, serializeSubscription(subscription))
+    return { status: 'enabled' as const }
   })
-  await registerPushSubscription(accessToken, serializeSubscription(subscription))
-  return { status: 'enabled' as const }
 }
 
 export async function disableCurrentDevicePush(accessToken: string) {
