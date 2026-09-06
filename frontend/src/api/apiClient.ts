@@ -13,6 +13,20 @@ export type CarStatusResponse = {
   status: CarStatus
 }
 
+export type ActiveCarUsage = {
+  name: string
+  started_at: string
+}
+
+export type CompletedCarUsage = ActiveCarUsage & {
+  ended_at: string
+}
+
+export type CarHistory = {
+  active_usage: ActiveCarUsage | null
+  recent_usage: CompletedCarUsage[]
+}
+
 export type FamilyRole = 'parent' | 'child' | null
 
 export type FamilyMember = {
@@ -868,6 +882,58 @@ export async function getCarStatus(
     throw new ApiRequestError('invalid-response', 'The car status response is invalid')
   }
   return { status: body.status }
+}
+
+function isActiveCarUsage(value: unknown): value is ActiveCarUsage {
+  if (!value || typeof value !== 'object') return false
+  const usage = value as Partial<ActiveCarUsage>
+  return typeof usage.name === 'string' && typeof usage.started_at === 'string'
+}
+
+function isCompletedCarUsage(value: unknown): value is CompletedCarUsage {
+  return isActiveCarUsage(value)
+    && typeof (value as Partial<CompletedCarUsage>).ended_at === 'string'
+}
+
+export async function getCarHistory(
+  accessToken: string,
+  options: RequestOptions = {},
+): Promise<CarHistory> {
+  const fetcher = options.fetcher ?? fetch
+  let response: Response
+  try {
+    response = await fetcher(getApiUrl('/api/car/history', options.baseUrl), {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      signal: options.signal,
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ApiRequestError('network', 'לא הצלחנו לטעון את היסטוריית הרכב.')
+  }
+  if (!response.ok) {
+    throw new ApiRequestError('server', 'לא הצלחנו לטעון את היסטוריית הרכב.', response.status)
+  }
+  let body: Partial<CarHistory>
+  try {
+    body = await response.json() as Partial<CarHistory>
+  } catch {
+    throw new ApiRequestError('invalid-response', 'Car history response is not valid JSON')
+  }
+  if (
+    !(body.active_usage === null || isActiveCarUsage(body.active_usage))
+    || !Array.isArray(body.recent_usage)
+    || !body.recent_usage.every(isCompletedCarUsage)
+  ) {
+    throw new ApiRequestError('invalid-response', 'Car history response is invalid')
+  }
+  return {
+    active_usage: body.active_usage,
+    recent_usage: body.recent_usage,
+  }
 }
 
 export async function prepareCarPlaySetup(

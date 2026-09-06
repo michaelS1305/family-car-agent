@@ -11,6 +11,7 @@ from models import (
     CarConnection,
     CarPlaySetupResponse,
     CarPlaySetupStatusRequest,
+    CarHistoryResponse,
     CarStatusResponse,
     ChatRequest,
     CreateFamilyAddressRequest,
@@ -32,6 +33,7 @@ from database import (
     init_db,
 )
 from car_service import CarStatusError, connect_user, disconnect_user, get_car_status
+from history_service import CarHistoryError, get_car_history
 from chat_service import ChatError, get_chat_history, process_chat_message
 from carplay_setup_service import (
     CarPlaySetupError,
@@ -258,6 +260,21 @@ def car_status(
             detail={"code": error.code, "message": error.message},
         ) from error
     return {"status": status}
+
+
+@app.get("/api/car/history", response_model=CarHistoryResponse, status_code=200)
+def car_history(
+    response: Response,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return get_car_history(current_user)
+    except CarHistoryError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"code": error.code, "message": error.message},
+        ) from error
 
 
 @app.post(

@@ -575,6 +575,102 @@ def get_user_reservations(user_id, family_id):
         return cursor.fetchall()
 
 
+def get_car_usage_history(family_id, completed_limit=50):
+    """Return the canonical active usage and defensively paired completed usages.
+
+    The active predicate intentionally mirrors get_active_driver(). Completed
+    sessions keep only the latest connect before its matching disconnect, so a
+    malformed duplicate-connect sequence cannot fabricate duplicate sessions.
+    """
+    with pool.connection() as conn:
+        return conn.execute(
+            """
+            WITH family_events AS (
+                SELECT id, driver_name, user_id, status, event_time
+                FROM car_events
+                WHERE family_id = %s
+            ),
+            canonical_active AS (
+                SELECT c.id, c.driver_name, c.user_id, c.event_time
+                FROM family_events AS c
+                WHERE c.status = 'connected'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM family_events AS d
+                      WHERE d.status = 'disconnected'
+                        AND d.id > c.id
+                        AND (
+                            (c.user_id IS NOT NULL AND d.user_id = c.user_id)
+                            OR
+                            (c.user_id IS NULL AND d.driver_name = c.driver_name)
+                        )
+                  )
+                ORDER BY c.id DESC
+                LIMIT 1
+            ),
+            completed_candidates AS (
+                SELECT
+                    c.id,
+                    c.driver_name,
+                    c.user_id,
+                    c.event_time AS started_at,
+                    d.id AS ended_event_id,
+                    d.event_time AS ended_at
+                FROM family_events AS c
+                JOIN LATERAL (
+                    SELECT next_disconnect.id, next_disconnect.event_time
+                    FROM family_events AS next_disconnect
+                    WHERE next_disconnect.status = 'disconnected'
+                      AND next_disconnect.id > c.id
+                      AND (
+                          (c.user_id IS NOT NULL AND next_disconnect.user_id = c.user_id)
+                          OR
+                          (c.user_id IS NULL AND next_disconnect.driver_name = c.driver_name)
+                      )
+                    ORDER BY next_disconnect.id ASC
+                    LIMIT 1
+                ) AS d ON TRUE
+                WHERE c.status = 'connected'
+            ),
+            completed AS (
+                SELECT candidate.*
+                FROM completed_candidates AS candidate
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM family_events AS newer_connect
+                    WHERE newer_connect.status = 'connected'
+                      AND newer_connect.id > candidate.id
+                      AND newer_connect.id < candidate.ended_event_id
+                      AND (
+                          (candidate.user_id IS NOT NULL AND newer_connect.user_id = candidate.user_id)
+                          OR
+                          (candidate.user_id IS NULL AND newer_connect.driver_name = candidate.driver_name)
+                      )
+                )
+                ORDER BY candidate.id DESC
+                LIMIT %s
+            )
+            SELECT
+                active.driver_name,
+                active.event_time AS started_at,
+                NULL::text AS ended_at,
+                TRUE AS is_active,
+                active.id AS sort_id
+            FROM canonical_active AS active
+            UNION ALL
+            SELECT
+                completed.driver_name,
+                completed.started_at,
+                completed.ended_at,
+                FALSE AS is_active,
+                completed.id AS sort_id
+            FROM completed
+            ORDER BY is_active DESC, sort_id DESC
+            """,
+            (family_id, completed_limit),
+        ).fetchall()
+
+
 def list_family_reservations(
     family_id,
     current_user_id,

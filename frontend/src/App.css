@@ -1706,6 +1706,129 @@
   outline-offset: 2px;
 }
 
+.history-screen {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.history-screen-scroll {
+  width: min(100%, 640px);
+  min-height: 0;
+  margin: 0 auto;
+  padding: 18px 2px max(28px, env(safe-area-inset-bottom));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.history-screen-title {
+  margin-bottom: 24px;
+}
+
+.history-content {
+  display: grid;
+  gap: 30px;
+}
+
+.history-current {
+  display: grid;
+  gap: 7px;
+  padding: 17px 18px;
+  border: 1px solid rgba(65, 82, 101, 0.1);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 8px 24px rgba(38, 50, 65, 0.04);
+  -webkit-backdrop-filter: blur(12px) saturate(112%);
+  backdrop-filter: blur(12px) saturate(112%);
+}
+
+.history-current > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #5f6f7e;
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.history-current i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #5f9c71;
+}
+
+.history-current.is-active i {
+  background: #b95d5d;
+}
+
+.history-current strong {
+  color: #263241;
+  font-size: 1.08rem;
+}
+
+.history-current p {
+  margin: 0;
+  color: #75808c;
+  font-size: 0.83rem;
+  line-height: 1.45;
+}
+
+.history-completed h3 {
+  margin: 0 0 12px;
+  color: #667382;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.history-list {
+  display: grid;
+  gap: 10px;
+}
+
+.history-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(65, 82, 101, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.54);
+  box-shadow: 0 6px 20px rgba(38, 50, 65, 0.035);
+}
+
+.history-card strong {
+  color: #2d3947;
+  font-size: 0.96rem;
+}
+
+.history-card span {
+  grid-column: 1;
+  color: #77828e;
+  font-size: 0.79rem;
+}
+
+.history-card time {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: #526273;
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.history-empty {
+  margin: 16px 0 0;
+  color: #788491;
+  text-align: center;
+}
+
+.history-screen button:focus-visible {
+  outline: 3px solid rgba(40, 112, 92, 0.34);
+  outline-offset: 2px;
+}
+
 @media (max-width: 390px) {
   .reservation-filters {
     grid-template-columns: 1fr;
