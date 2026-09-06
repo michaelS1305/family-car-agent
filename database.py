@@ -58,6 +58,7 @@ class InvalidJoinStepError(Exception):
 
 
 PWA_FAMILY_CREATION_LOCK_ID = 1178686273
+RESERVATION_LOCK_NAMESPACE = 1178686274
 
 JOIN_SESSION_COLUMNS = """
     auth_user_id,
@@ -572,6 +573,155 @@ def get_user_reservations(user_id, family_id):
         )
 
         return cursor.fetchall()
+
+
+def list_family_reservations(
+    family_id,
+    current_user_id,
+    time_filter,
+    scope,
+    boundary_time,
+):
+    time_operator = ">" if time_filter == "future" else "<="
+    scope_sql = "AND r.user_id = %s" if scope == "mine" else ""
+    parameters = [current_user_id, family_id, boundary_time]
+    if scope == "mine":
+        parameters.append(current_user_id)
+
+    with pool.connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT
+                u.name,
+                r.start_time,
+                r.end_time,
+                r.user_id = %s AS is_mine
+            FROM reservations AS r
+            JOIN users AS u ON u.id = r.user_id
+            WHERE u.family_id = %s
+              AND r.status = 'active'
+              AND r.end_time::timestamp {time_operator} %s::timestamp
+              {scope_sql}
+            ORDER BY r.start_time::timestamp ASC
+            """,
+            tuple(parameters),
+        ).fetchall()
+
+
+def create_current_user_reservation(user_id, family_id, start_time, end_time):
+    with pool.connection() as conn:
+        with conn.transaction():
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s)",
+                (RESERVATION_LOCK_NAMESPACE, family_id),
+            )
+            return _create_reservation_on_connection(
+                conn,
+                user_id,
+                start_time,
+                end_time,
+                expected_family_id=family_id,
+            )
+
+
+def update_current_user_reservation(
+    user_id,
+    family_id,
+    original_start_time,
+    original_end_time,
+    boundary_time,
+    start_time,
+    end_time,
+):
+    with pool.connection() as conn:
+        with conn.transaction():
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s)",
+                (RESERVATION_LOCK_NAMESPACE, family_id),
+            )
+            reservation = conn.execute(
+                """
+                SELECT r.id
+                FROM reservations AS r
+                JOIN users AS u ON u.id = r.user_id
+                WHERE r.user_id = %s
+                  AND u.family_id = %s
+                  AND r.status = 'active'
+                  AND r.start_time = %s
+                  AND r.end_time = %s
+                  AND r.end_time::timestamp > %s::timestamp
+                FOR UPDATE OF r
+                """,
+                (
+                    user_id,
+                    family_id,
+                    original_start_time,
+                    original_end_time,
+                    boundary_time,
+                ),
+            ).fetchone()
+            if reservation is None:
+                return {
+                    "success": False,
+                    "code": "RESERVATION_NOT_FOUND_OR_UNAVAILABLE",
+                    "message": "Reservation not found or unavailable",
+                }
+            return _update_reservation_on_connection(
+                conn,
+                reservation[0],
+                user_id,
+                family_id,
+                start_time,
+                end_time,
+            )
+
+
+def cancel_current_user_reservation(
+    user_id,
+    family_id,
+    original_start_time,
+    original_end_time,
+    boundary_time,
+):
+    with pool.connection() as conn:
+        with conn.transaction():
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s)",
+                (RESERVATION_LOCK_NAMESPACE, family_id),
+            )
+            reservation = conn.execute(
+                """
+                SELECT r.id
+                FROM reservations AS r
+                JOIN users AS u ON u.id = r.user_id
+                WHERE r.user_id = %s
+                  AND u.family_id = %s
+                  AND r.status = 'active'
+                  AND r.start_time = %s
+                  AND r.end_time = %s
+                  AND r.end_time::timestamp > %s::timestamp
+                FOR UPDATE OF r
+                """,
+                (
+                    user_id,
+                    family_id,
+                    original_start_time,
+                    original_end_time,
+                    boundary_time,
+                ),
+            ).fetchone()
+            if reservation is None:
+                return {
+                    "success": False,
+                    "code": "RESERVATION_NOT_FOUND_OR_UNAVAILABLE",
+                    "message": "Reservation not found or unavailable",
+                }
+            return _cancel_reservation_on_connection(
+                conn,
+                reservation[0],
+                user_id,
+                family_id,
+            )
 
 def _cancel_reservation_on_connection(conn, reservation_id, user_id, family_id):
     updated = conn.execute(

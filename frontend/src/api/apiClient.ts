@@ -30,6 +30,21 @@ export type FamilyProfile = {
   members: FamilyMember[]
 }
 
+export type ReservationTimeFilter = 'future' | 'past'
+export type ReservationScopeFilter = 'all' | 'mine'
+
+export type Reservation = {
+  owner_name: string
+  start_time: string
+  end_time: string
+  is_mine: boolean
+}
+
+export type ReservationInterval = {
+  start_time: string
+  end_time: string
+}
+
 export type CurrentUserResult =
   | { status: 'mapped'; user: InternalUser }
   | { status: 'unmapped' }
@@ -227,6 +242,17 @@ function isFamilyProfile(value: unknown): value is FamilyProfile {
   )
 }
 
+function isReservation(value: unknown): value is Reservation {
+  if (!value || typeof value !== 'object') return false
+  const reservation = value as Partial<Reservation>
+  return (
+    typeof reservation.owner_name === 'string'
+    && typeof reservation.start_time === 'string'
+    && typeof reservation.end_time === 'string'
+    && typeof reservation.is_mine === 'boolean'
+  )
+}
+
 function getCurrentUserUrl(explicitBaseUrl?: string) {
   const configuredBaseUrl = explicitBaseUrl ?? import.meta.env.VITE_API_BASE_URL
   const baseUrl = configuredBaseUrl?.trim().replace(/\/+$/, '') ?? ''
@@ -299,6 +325,134 @@ export function updateFamilyMemberRole(
       body: JSON.stringify({ role }),
     },
     isFamilyMember,
+    options,
+  )
+}
+
+async function reservationRequest<T>(
+  path: string,
+  accessToken: string,
+  init: RequestInit,
+  validate: (value: unknown) => value is T,
+  options: RequestOptions,
+): Promise<T> {
+  const fetcher = options.fetcher ?? fetch
+  let response: Response
+  try {
+    response = await fetcher(getApiUrl(path, options.baseUrl), {
+      ...init,
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+        ...init.headers,
+      },
+      signal: options.signal,
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ApiRequestError('network', 'לא הצלחנו להתחבר לשירות ההזמנות.')
+  }
+  if (!response.ok) {
+    let message = 'לא הצלחנו להשלים את הפעולה.'
+    try {
+      const body = await response.json() as { detail?: { message?: unknown } }
+      if (typeof body.detail?.message === 'string') message = body.detail.message
+    } catch {
+      // Use the safe fallback message.
+    }
+    throw new ApiRequestError('server', message, response.status)
+  }
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch {
+    throw new ApiRequestError('invalid-response', 'Reservation response is not valid JSON')
+  }
+  if (!validate(body)) {
+    throw new ApiRequestError('invalid-response', 'Reservation response is invalid')
+  }
+  return body
+}
+
+export function getReservations(
+  accessToken: string,
+  time: ReservationTimeFilter = 'future',
+  scope: ReservationScopeFilter = 'all',
+  options: RequestOptions = {},
+) {
+  const query = new URLSearchParams({ time, scope })
+  return reservationRequest(
+    `/api/reservations?${query.toString()}`,
+    accessToken,
+    { method: 'GET' },
+    (value): value is Reservation[] => Array.isArray(value) && value.every(isReservation),
+    options,
+  )
+}
+
+export function createReservation(
+  accessToken: string,
+  interval: ReservationInterval,
+  options: RequestOptions = {},
+) {
+  return reservationRequest(
+    '/api/reservations',
+    accessToken,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        start_time: interval.start_time,
+        end_time: interval.end_time,
+      }),
+    },
+    isReservation,
+    options,
+  )
+}
+
+export function updateReservation(
+  accessToken: string,
+  original: ReservationInterval,
+  interval: ReservationInterval,
+  options: RequestOptions = {},
+) {
+  return reservationRequest(
+    '/api/reservations',
+    accessToken,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        original_start_time: original.start_time,
+        original_end_time: original.end_time,
+        ...interval,
+      }),
+    },
+    isReservation,
+    options,
+  )
+}
+
+export function cancelReservation(
+  accessToken: string,
+  original: ReservationInterval,
+  options: RequestOptions = {},
+) {
+  return reservationRequest(
+    '/api/reservations/cancel',
+    accessToken,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        original_start_time: original.start_time,
+        original_end_time: original.end_time,
+      }),
+    },
+    (value): value is { cancelled: true } => (
+      !!value && typeof value === 'object' && (value as { cancelled?: unknown }).cancelled === true
+    ),
     options,
   )
 }

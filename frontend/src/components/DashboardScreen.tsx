@@ -19,6 +19,7 @@ import {
 } from '../dashboard/rotarySelector'
 import { DashboardCategoryIcon } from './DashboardCategoryIcon'
 import { FamilyScreen } from './FamilyScreen'
+import { ReservationCenterScreen } from './ReservationCenterScreen'
 
 function RotarySelector({
   confirmButtonRef,
@@ -296,10 +297,14 @@ export function DashboardScreen({
         </footer>
       </div>
 
-      {activeCategory ? activeCategory.id === 'family' ? (
-        <FamilyScreen accessToken={accessToken} open={categoryOpen} onBack={closeCategory} />
-      ) : (
-        <CategoryPlaceholderScreen category={activeCategory} open={categoryOpen} onBack={closeCategory} />
+      {activeCategory ? (
+        activeCategory.id === 'family' ? (
+          <FamilyScreen accessToken={accessToken} open={categoryOpen} onBack={closeCategory} />
+        ) : activeCategory.id === 'reservations' ? (
+          <ReservationCenterScreen accessToken={accessToken} open={categoryOpen} onBack={closeCategory} />
+        ) : (
+          <CategoryPlaceholderScreen category={activeCategory} open={categoryOpen} onBack={closeCategory} />
+        )
       ) : null}
     </section>
   )

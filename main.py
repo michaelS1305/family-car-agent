@@ -23,6 +23,10 @@ from models import (
     JoinFamilyCodeRequest,
     JoinFamilyCompleteRequest,
     JoinFamilyNameRequest,
+    ReservationCancelRequest,
+    ReservationIntervalRequest,
+    ReservationResponse,
+    ReservationUpdateRequest,
 )
 from database import (
     init_db,
@@ -54,6 +58,13 @@ from join_family_service import (
     submit_join_family_address,
     submit_join_family_code,
     submit_join_family_name,
+)
+from reservation_service import (
+    ReservationCenterError,
+    cancel_reservation_for_current_user,
+    create_reservation_for_current_user,
+    list_reservations,
+    update_reservation_for_current_user,
 )
 
 def _environment_flag_is_true(name: str) -> bool:
@@ -131,6 +142,72 @@ def set_family_role(
         return set_family_member_role(current_user, member_ref, request.role)
     except FamilyProfileError as error:
         _raise_family_profile_error(error)
+
+
+def _raise_reservation_center_error(error):
+    raise HTTPException(
+        status_code=error.status_code,
+        detail={"code": error.code, "message": error.message},
+    ) from error
+
+
+@app.get("/api/reservations", response_model=list[ReservationResponse], status_code=200)
+def get_reservations(
+    time: str = "future",
+    scope: str = "all",
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return list_reservations(current_user, time, scope)
+    except ReservationCenterError as error:
+        _raise_reservation_center_error(error)
+
+
+@app.post("/api/reservations", response_model=ReservationResponse, status_code=201)
+def create_reservation_route(
+    request: ReservationIntervalRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return create_reservation_for_current_user(
+            current_user,
+            request.start_time,
+            request.end_time,
+        )
+    except ReservationCenterError as error:
+        _raise_reservation_center_error(error)
+
+
+@app.patch("/api/reservations", response_model=ReservationResponse, status_code=200)
+def update_reservation_route(
+    request: ReservationUpdateRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return update_reservation_for_current_user(
+            current_user,
+            request.original_start_time,
+            request.original_end_time,
+            request.start_time,
+            request.end_time,
+        )
+    except ReservationCenterError as error:
+        _raise_reservation_center_error(error)
+
+
+@app.post("/api/reservations/cancel", status_code=200)
+def cancel_reservation_route(
+    request: ReservationCancelRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return cancel_reservation_for_current_user(
+            current_user,
+            request.original_start_time,
+            request.original_end_time,
+        )
+    except ReservationCenterError as error:
+        _raise_reservation_center_error(error)
 
 
 def _raise_chat_error(error):
