@@ -14,6 +14,7 @@ assistant.
 - Automatic connect/disconnect events using a private connection code
 - Google Maps address resolution and home-location validation
 - App-native Gemini tools with user-specific conversation history
+- Best-effort Web Push infrastructure for canonical family-car transitions
 
 The Main App currently provides the chat-first interface shell. The authenticated
 PWA chat API is the next integration step.
@@ -117,6 +118,10 @@ Backend environment variables:
 - `SUPABASE_URL`
 - `GOOGLE_MAPS_API_KEY`
 - `GEMINI_API_KEY`
+- `WEB_PUSH_ENABLED=false`
+- `VAPID_PUBLIC_KEY`
+- `VAPID_PRIVATE_KEY`
+- `VAPID_SUBJECT`
 - `RUN_DB_INIT=false`
 - `CORS_ALLOWED_ORIGINS=https://your-frontend-domain`
 
@@ -129,6 +134,11 @@ Frontend environment variables:
 `RUN_DB_INIT` is disabled unless its value is exactly `true`, case-insensitive.
 Production schema changes should be explicit migrations rather than startup DDL.
 Wildcard CORS origins are rejected.
+
+Web Push remains disabled unless `WEB_PUSH_ENABLED=true`. The VAPID private key
+is backend-only; the authenticated Push configuration endpoint exposes only the
+public key. Push subscription activation is intentionally not wired to visible
+UI yet.
 
 ## Verification
 

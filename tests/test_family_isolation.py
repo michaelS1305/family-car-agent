@@ -329,13 +329,13 @@ class DatabaseFamilyIsolationTests(unittest.TestCase):
         self.assertEqual(database.get_recent_conversation(3), [("user", "B private")])
 
 
-def load_car_service(database_stub):
+def load_car_service(database_stub, push_service_stub):
     path = Path(__file__).resolve().parents[1] / "car_service.py"
     spec = importlib.util.spec_from_file_location("isolated_car_service", path)
     module = importlib.util.module_from_spec(spec)
     with patch.dict(
         sys.modules,
-        {"database": database_stub},
+        {"database": database_stub, "push_service": push_service_stub},
     ):
         spec.loader.exec_module(module)
     return module
@@ -345,10 +345,19 @@ class CarAndNotificationIsolationTests(unittest.TestCase):
     def setUp(self):
         self.database_stub = types.ModuleType("database")
         self.database_stub.get_active_driver = Mock(return_value=None)
-        self.database_stub.insert_car_event = Mock(return_value={"message": "ok"})
+        self.database_stub.connect_car_atomically = Mock(
+            return_value={
+                "transition": "connected",
+                "event_id": 101,
+                "event_time": "2026-09-06T10:00:00",
+            }
+        )
+        self.database_stub.disconnect_car_atomically = Mock()
         self.database_stub.get_user_by_token = Mock()
         self.database_stub.get_family_by_id = Mock()
-        self.service = load_car_service(self.database_stub)
+        self.push_service_stub = types.ModuleType("push_service")
+        self.push_service_stub.dispatch_car_transition_notification = Mock()
+        self.service = load_car_service(self.database_stub, self.push_service_stub)
 
     def test_connect_derives_family_from_token_user_both_directions(self):
         for token, user in (
@@ -357,18 +366,86 @@ class CarAndNotificationIsolationTests(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.database_stub.get_user_by_token.return_value = user
-                self.database_stub.insert_car_event.reset_mock()
+                self.database_stub.connect_car_atomically.reset_mock()
+                self.push_service_stub.dispatch_car_transition_notification.reset_mock()
                 self.service.connect_user(token)
-                self.database_stub.insert_car_event.assert_called_once_with(
-                    user[0], user[1], "connected", user[2]
+                self.database_stub.connect_car_atomically.assert_called_once_with(
+                    user[0], user[1], user[2]
+                )
+                self.push_service_stub.dispatch_car_transition_notification.assert_called_once_with(
+                    family_id=user[2],
+                    actor_user_id=user[0],
+                    actor_name=user[1],
+                    event_id=101,
+                    transition="connected",
                 )
 
-    def test_car_events_have_no_notification_side_effect(self):
+    def test_notification_dispatch_uses_canonical_family_and_actor(self):
         self.database_stub.get_user_by_token.return_value = (1, "A1", 10)
 
         self.service.connect_user("token-a")
 
-        self.assertFalse(hasattr(self.service, "notify_family"))
+        self.push_service_stub.dispatch_car_transition_notification.assert_called_once_with(
+            family_id=10,
+            actor_user_id=1,
+            actor_name="A1",
+            event_id=101,
+            transition="connected",
+        )
+
+    def test_duplicate_connect_produces_no_notification(self):
+        self.database_stub.get_user_by_token.return_value = (1, "A1", 10)
+        self.database_stub.connect_car_atomically.return_value = {
+            "transition": "none",
+            "reason": "already_active",
+            "current_driver": "A1",
+        }
+
+        result = self.service.connect_user("token-a")
+
+        self.assertEqual(result["message"], "User is already the current driver")
+        self.push_service_stub.dispatch_car_transition_notification.assert_not_called()
+
+    def test_valid_final_disconnect_notifies_only_after_atomic_transition(self):
+        self.database_stub.get_user_by_token.return_value = (1, "A1", 10)
+        self.database_stub.get_active_driver.return_value = ("A1", 1)
+        self.database_stub.get_family_by_id.return_value = (
+            10, "Family", "code", 31.0, 35.0
+        )
+        self.database_stub.disconnect_car_atomically.return_value = {
+            "transition": "disconnected",
+            "reason": None,
+            "event_id": 102,
+            "event_time": "2026-09-06T11:00:00",
+        }
+
+        result = self.service.disconnect_user("token-a", 31.0, 35.0)
+
+        self.assertEqual(result["message"], "הרכב שוחרר בהצלחה")
+        self.database_stub.disconnect_car_atomically.assert_called_once_with(1, 10)
+        self.push_service_stub.dispatch_car_transition_notification.assert_called_once_with(
+            family_id=10,
+            actor_user_id=1,
+            actor_name="A1",
+            event_id=102,
+            transition="disconnected",
+        )
+
+    def test_disconnect_race_that_is_already_available_produces_no_notification(self):
+        self.database_stub.get_user_by_token.return_value = (1, "A1", 10)
+        self.database_stub.get_active_driver.return_value = ("A1", 1)
+        self.database_stub.get_family_by_id.return_value = (
+            10, "Family", "code", 31.0, 35.0
+        )
+        self.database_stub.disconnect_car_atomically.return_value = {
+            "transition": "none",
+            "reason": "already_available",
+        }
+
+        result = self.service.disconnect_user("token-a", 31.0, 35.0)
+
+        self.assertEqual(result, {"message": "הרכב כבר פנוי"})
+        self.push_service_stub.dispatch_car_transition_notification.assert_not_called()
 
 
 def load_ai_service(database_stub, model):

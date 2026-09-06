@@ -1,12 +1,14 @@
 from database import (
+    connect_car_atomically,
+    disconnect_car_atomically,
     get_active_driver,
-    insert_car_event,
     get_user_by_token,
     get_family_by_id,
 )
 from math import radians, sin, cos, sqrt, atan2
 
 from identity import CurrentUser
+from push_service import dispatch_car_transition_notification
 
 
 class CarStatusError(Exception):
@@ -43,34 +45,25 @@ def connect_user(shortcut_token):
             "message": "User family not found"
         }
 
-    active_driver = get_active_driver(family_id)
+    transition = connect_car_atomically(user[0], user[1], family_id)
+    if transition["transition"] == "none":
+        return {
+            "message": "User is already the current driver",
+            "current_driver": transition["current_driver"],
+        }
 
-    if active_driver:
-        active_driver_name = active_driver[0]
-        active_driver_user_id = active_driver[1]
-
-        if active_driver_user_id == user[0]:
-            return {
-                "message": "User is already the current driver",
-                "current_driver": active_driver_name
-            }
-
-        # Handover: close the previous driver's active session.
-        insert_car_event(
-            active_driver_user_id,
-            active_driver_name,
-            "disconnected",
-            family_id
-        )
-
-    result = insert_car_event(
-        user[0],
-        user[1],
-        "connected",
-        family_id
+    dispatch_car_transition_notification(
+        family_id=family_id,
+        actor_user_id=user[0],
+        actor_name=user[1],
+        event_id=transition["event_id"],
+        transition="connected",
     )
-
-    return result
+    return {
+        "message": "Car connected",
+        "user": user[1],
+        "event_time": transition["event_time"],
+    }
 
 
 def disconnect_user(shortcut_token, latitude=None, longitude=None):
@@ -137,17 +130,33 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
             "distance_from_home": round(distance)
         }
 
-    result = insert_car_event(
-        user[0],
-        user[1],
-        "disconnected",
-        family_id
+    transition = disconnect_car_atomically(user[0], family_id)
+    if transition["transition"] == "none":
+        if transition["reason"] == "already_available":
+            return {"message": "הרכב כבר פנוי"}
+        if transition["reason"] == "different_driver":
+            return {
+                "message": "Only the current driver can disconnect",
+                "current_driver": transition["current_driver"],
+            }
+        return {"message": "הרכב לא התפנה"}
+
+    dispatch_car_transition_notification(
+        family_id=family_id,
+        actor_user_id=user[0],
+        actor_name=user[1],
+        event_id=transition["event_id"],
+        transition="disconnected",
     )
 
     return {
         "message": "הרכב שוחרר בהצלחה",
         "distance_from_home": round(distance),
-        "result": result
+        "result": {
+            "message": "Car disconnected",
+            "user": user[1],
+            "event_time": transition["event_time"],
+        },
     }
 
 

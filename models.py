@@ -1,6 +1,7 @@
 from typing import Literal
 from datetime import datetime
 from uuid import UUID
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -23,6 +24,63 @@ class CarPlaySetupStatusRequest(BaseModel):
 
 class CarStatusResponse(BaseModel):
     status: Literal["available", "occupied"]
+
+
+def _validate_push_endpoint(value):
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc or len(value) > 4096:
+        raise ValueError("endpoint must be a valid HTTPS URL")
+    return value
+
+
+class PushConfigResponse(BaseModel):
+    enabled: bool
+    public_vapid_key: str | None
+
+
+class PushSubscriptionKeys(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    p256dh: str
+    auth: str
+
+    @field_validator("p256dh", "auth")
+    @classmethod
+    def validate_key(cls, value):
+        if not 1 <= len(value) <= 1024:
+            raise ValueError("push subscription key length is invalid")
+        return value
+
+
+class PushSubscriptionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint: str
+    expiration_time: int | None = None
+    keys: PushSubscriptionKeys
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, value):
+        return _validate_push_endpoint(value)
+
+    @field_validator("expiration_time")
+    @classmethod
+    def validate_expiration_time(cls, value):
+        if value is not None and not 0 <= value <= 253_402_300_799_999:
+            raise ValueError("expiration_time is outside the supported range")
+        return value
+
+
+class PushSubscriptionRemoveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint: str
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, value):
+        return _validate_push_endpoint(value)
 
 
 class ActiveCarUsageResponse(BaseModel):

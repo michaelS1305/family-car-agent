@@ -13,6 +13,20 @@ export type CarStatusResponse = {
   status: CarStatus
 }
 
+export type PushConfig = {
+  enabled: boolean
+  public_vapid_key: string | null
+}
+
+export type BrowserPushSubscription = {
+  endpoint: string
+  expiration_time: number | null
+  keys: {
+    p256dh: string
+    auth: string
+  }
+}
+
 export type ActiveCarUsage = {
   name: string
   started_at: string
@@ -981,6 +995,94 @@ export async function updateCarPlaySetupStatus(
     '/api/carplay/setup/status',
     accessToken,
     { status },
+    options,
+  )
+}
+
+async function pushRequest(
+  path: string,
+  accessToken: string,
+  init: RequestInit,
+  options: RequestOptions,
+) {
+  const fetcher = options.fetcher ?? fetch
+  let response: Response
+  try {
+    response = await fetcher(getApiUrl(path, options.baseUrl), {
+      ...init,
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+        ...init.headers,
+      },
+      signal: options.signal,
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ApiRequestError('network', 'שירות ההתראות אינו זמין כרגע.')
+  }
+  if (!response.ok) {
+    throw new ApiRequestError('server', 'שירות ההתראות אינו זמין כרגע.', response.status)
+  }
+  return response
+}
+
+export async function getPushConfig(
+  accessToken: string,
+  options: RequestOptions = {},
+): Promise<PushConfig> {
+  const response = await pushRequest(
+    '/api/push/config',
+    accessToken,
+    { method: 'GET' },
+    options,
+  )
+  let body: Partial<PushConfig>
+  try {
+    body = await response.json() as Partial<PushConfig>
+  } catch {
+    throw new ApiRequestError('invalid-response', 'Push configuration response is invalid')
+  }
+  if (
+    typeof body.enabled !== 'boolean'
+    || !(body.public_vapid_key === null || typeof body.public_vapid_key === 'string')
+    || (body.enabled && !body.public_vapid_key)
+  ) {
+    throw new ApiRequestError('invalid-response', 'Push configuration response is invalid')
+  }
+  return body as PushConfig
+}
+
+export async function registerPushSubscription(
+  accessToken: string,
+  subscription: BrowserPushSubscription,
+  options: RequestOptions = {},
+) {
+  await pushRequest(
+    '/api/push/subscriptions',
+    accessToken,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(subscription),
+    },
+    options,
+  )
+}
+
+export async function removePushSubscription(
+  accessToken: string,
+  endpoint: string,
+  options: RequestOptions = {},
+) {
+  await pushRequest(
+    '/api/push/subscriptions/remove',
+    accessToken,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint }),
+    },
     options,
   )
 }
