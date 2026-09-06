@@ -14,6 +14,9 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
       registerType: 'autoUpdate',
       includeAssets: [
         'images/family-car-agent-logo.png',
@@ -22,6 +25,7 @@ export default defineConfig({
         'icons/family-car-agent-apple-touch-180.png',
       ],
       manifest: {
+        id: '/',
         name: 'Family Car Agent',
         short_name: 'Family Car',
         description: 'ניהול חכם של הרכב המשפחתי המשותף',

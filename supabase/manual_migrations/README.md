@@ -11,3 +11,13 @@ For the family-role rollout, run the files in filename order:
 
 Both migrations fail on unmet data assumptions instead of inferring or repairing a
 family creator. Keep `RUN_DB_INIT=false` in production.
+
+`2026090603_push_subscriptions.sql` is an independent Web Push migration and was
+executed successfully in production. After its original execution, all privileges
+on `public.push_subscriptions` were manually revoked from `anon` and
+`authenticated`; the audited remaining grantees are `postgres` and `service_role`.
+The migration file now includes that same `REVOKE` before `COMMIT`, so a fresh
+execution creates the intended backend-only access state directly. Do not rerun
+the migration in production: the table and audited privilege state already exist.
+
+`2026090602_family_creator_contract.sql` remains pending and unexecuted.

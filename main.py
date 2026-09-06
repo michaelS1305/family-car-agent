@@ -24,6 +24,9 @@ from models import (
     JoinFamilyCodeRequest,
     JoinFamilyCompleteRequest,
     JoinFamilyNameRequest,
+    PushConfigResponse,
+    PushSubscriptionRemoveRequest,
+    PushSubscriptionRequest,
     ReservationCancelRequest,
     ReservationIntervalRequest,
     ReservationResponse,
@@ -67,6 +70,12 @@ from reservation_service import (
     create_reservation_for_current_user,
     list_reservations,
     update_reservation_for_current_user,
+)
+from push_service import (
+    PushServiceError,
+    get_public_push_config,
+    register_push_subscription,
+    unregister_push_subscription,
 )
 
 def _environment_flag_is_true(name: str) -> bool:
@@ -151,6 +160,43 @@ def _raise_reservation_center_error(error):
         status_code=error.status_code,
         detail={"code": error.code, "message": error.message},
     ) from error
+
+
+def _raise_push_error(error):
+    raise HTTPException(
+        status_code=error.status_code,
+        detail={"code": error.code, "message": error.message},
+    ) from error
+
+
+@app.get("/api/push/config", response_model=PushConfigResponse, status_code=200)
+def push_config(current_user: CurrentUser = Depends(get_current_user)):
+    try:
+        return get_public_push_config(current_user)
+    except PushServiceError as error:
+        _raise_push_error(error)
+
+
+@app.post("/api/push/subscriptions", status_code=200)
+def register_push(
+    request: PushSubscriptionRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return register_push_subscription(current_user, request)
+    except PushServiceError as error:
+        _raise_push_error(error)
+
+
+@app.post("/api/push/subscriptions/remove", status_code=200)
+def unregister_push(
+    request: PushSubscriptionRemoveRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return unregister_push_subscription(current_user, request.endpoint)
+    except PushServiceError as error:
+        _raise_push_error(error)
 
 
 @app.get("/api/reservations", response_model=list[ReservationResponse], status_code=200)

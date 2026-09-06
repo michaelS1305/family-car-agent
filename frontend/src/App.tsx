@@ -45,6 +45,7 @@ import {
 import { createJoinRequestRunner } from './onboarding/joinFamilyRequests'
 import { createJoinFamilyCompleter } from './onboarding/joinFamilySubmission'
 import { humanNameError, isValidHumanName } from './onboarding/nameValidation'
+import { cleanupPushBeforeLogout } from './push/pushNotifications'
 
 type Flow = 'welcome' | OnboardingFlow
 type FormData = OnboardingFormData
@@ -1226,7 +1227,10 @@ function App() {
         user={currentUser}
         accessToken={session.access_token}
         authUserId={session.user.id}
-        onLogout={() => invalidateAuthSession('')}
+        onLogout={async () => {
+          await cleanupPushBeforeLogout(session.access_token)
+          await invalidateAuthSession('')
+        }}
       />
     )
   }

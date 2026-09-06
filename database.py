@@ -3,7 +3,7 @@ import logging
 from psycopg_pool import ConnectionPool
 from psycopg.errors import ForeignKeyViolation, UniqueViolation
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from onboarding_rules import (
     NAME_SQL_TRANSLATE_SOURCE,
@@ -59,6 +59,7 @@ class InvalidJoinStepError(Exception):
 
 PWA_FAMILY_CREATION_LOCK_ID = 1178686273
 RESERVATION_LOCK_NAMESPACE = 1178686274
+CAR_TRANSITION_LOCK_NAMESPACE = 1178686275
 
 JOIN_SESSION_COLUMNS = """
     auth_user_id,
@@ -278,29 +279,116 @@ def set_carplay_setup_status(user_id, setup_status):
             raise UserNotFoundError()
         return updated[0]
 
-def insert_car_event(user_id, driver_name, status, family_id):
-    with pool.connection() as conn:
-        event_time = datetime.now().isoformat()
+def _get_active_driver_on_connection(conn, family_id):
+    return conn.execute(
+        """
+        SELECT c.driver_name, c.user_id
+        FROM car_events c
+        WHERE c.family_id = %s
+          AND c.status = 'connected'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM car_events d
+              WHERE d.family_id = c.family_id
+                AND d.status = 'disconnected'
+                AND d.id > c.id
+                AND (
+                    (c.user_id IS NOT NULL AND d.user_id = c.user_id)
+                    OR
+                    (c.user_id IS NULL AND d.driver_name = c.driver_name)
+                )
+          )
+        ORDER BY c.id DESC
+        LIMIT 1
+        """,
+        (family_id,),
+    ).fetchone()
 
-        conn.execute(
-            """
-            INSERT INTO car_events (
+
+def _insert_car_event_on_connection(conn, user_id, driver_name, status, family_id):
+    event_time = datetime.now().isoformat()
+    row = conn.execute(
+        """
+        INSERT INTO car_events (user_id, driver_name, status, event_time, family_id)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (user_id, driver_name, status, event_time, family_id),
+    ).fetchone()
+    return {"event_id": row[0], "event_time": event_time}
+
+
+def connect_car_atomically(user_id, driver_name, family_id):
+    """Apply one family-scoped connect/handover transition and commit it atomically."""
+    with pool.connection() as conn:
+        with conn.transaction():
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s)",
+                (CAR_TRANSITION_LOCK_NAMESPACE, family_id),
+            )
+            active_driver = _get_active_driver_on_connection(conn, family_id)
+            if active_driver and active_driver[1] == user_id:
+                return {
+                    "transition": "none",
+                    "reason": "already_active",
+                    "current_driver": active_driver[0],
+                }
+
+            if active_driver:
+                _insert_car_event_on_connection(
+                    conn,
+                    active_driver[1],
+                    active_driver[0],
+                    "disconnected",
+                    family_id,
+                )
+
+            connected = _insert_car_event_on_connection(
+                conn,
                 user_id,
                 driver_name,
-                status,
-                event_time,
-                family_id
+                "connected",
+                family_id,
             )
-            VALUES (%s, %s, %s, %s, %s)
-            """,
-            (user_id, driver_name, status, event_time, family_id)
-        )
+            return {
+                "transition": "connected",
+                "event_id": connected["event_id"],
+                "event_time": connected["event_time"],
+            }
 
-        return {
-            "message": f"Car {status}",
-            "user": driver_name,
-            "event_time": event_time
-        }
+
+def disconnect_car_atomically(user_id, family_id):
+    """Disconnect only the canonical active driver under the family lock."""
+    with pool.connection() as conn:
+        with conn.transaction():
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s)",
+                (CAR_TRANSITION_LOCK_NAMESPACE, family_id),
+            )
+            active_driver = _get_active_driver_on_connection(conn, family_id)
+            if not active_driver:
+                return {"transition": "none", "reason": "already_available"}
+            if active_driver[1] != user_id:
+                return {
+                    "transition": "none",
+                    "reason": "different_driver",
+                    "current_driver": active_driver[0],
+                }
+
+            disconnected = _insert_car_event_on_connection(
+                conn,
+                user_id,
+                active_driver[0],
+                "disconnected",
+                family_id,
+            )
+            final_driver = _get_active_driver_on_connection(conn, family_id)
+            return {
+                "transition": "disconnected" if final_driver is None else "none",
+                "reason": None if final_driver is None else "still_occupied",
+                "event_id": disconnected["event_id"],
+                "event_time": disconnected["event_time"],
+            }
 
 def get_latest_event(family_id):
     with pool.connection() as conn:
@@ -358,6 +446,102 @@ def get_active_driver(family_id):
         )
 
         return cursor.fetchone()
+
+
+class PushSubscriptionOwnershipError(Exception):
+    pass
+
+
+def upsert_push_subscription(
+    user_id,
+    endpoint,
+    p256dh,
+    auth,
+    expiration_time_milliseconds=None,
+):
+    expiration_time = None
+    if expiration_time_milliseconds is not None:
+        expiration_time = datetime.fromtimestamp(
+            expiration_time_milliseconds / 1000,
+            tz=timezone.utc,
+        )
+
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO push_subscriptions (
+                user_id, endpoint, p256dh, auth, expiration_time
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (endpoint) DO UPDATE
+            SET p256dh = EXCLUDED.p256dh,
+                auth = EXCLUDED.auth,
+                expiration_time = EXCLUDED.expiration_time,
+                updated_at = NOW()
+            WHERE push_subscriptions.user_id = EXCLUDED.user_id
+            RETURNING id
+            """,
+            (user_id, endpoint, p256dh, auth, expiration_time),
+        ).fetchone()
+        if row is None:
+            raise PushSubscriptionOwnershipError()
+        return row[0]
+
+
+def remove_push_subscription(user_id, endpoint):
+    with pool.connection() as conn:
+        conn.execute(
+            "DELETE FROM push_subscriptions WHERE user_id = %s AND endpoint = %s",
+            (user_id, endpoint),
+        )
+
+
+def get_family_push_subscriptions(family_id, excluded_user_id):
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth, ps.updated_at
+            FROM push_subscriptions ps
+            JOIN users u ON u.id = ps.user_id
+            WHERE u.family_id = %s
+              AND u.auth_user_id IS NOT NULL
+              AND u.id <> %s
+              AND (ps.expiration_time IS NULL OR ps.expiration_time > NOW())
+            ORDER BY ps.id
+            """,
+            (family_id, excluded_user_id),
+        ).fetchall()
+        return [
+            {
+                "id": row[0],
+                "endpoint": row[1],
+                "p256dh": row[2],
+                "auth": row[3],
+                "updated_at": row[4],
+            }
+            for row in rows
+        ]
+
+
+def remove_dead_push_subscription(subscription):
+    with pool.connection() as conn:
+        conn.execute(
+            """
+            DELETE FROM push_subscriptions
+            WHERE id = %s
+              AND endpoint = %s
+              AND p256dh = %s
+              AND auth = %s
+              AND updated_at = %s
+            """,
+            (
+                subscription["id"],
+                subscription["endpoint"],
+                subscription["p256dh"],
+                subscription["auth"],
+                subscription["updated_at"],
+            ),
+        )
 
 def get_user_by_token(shortcut_token):
     with pool.connection() as conn:

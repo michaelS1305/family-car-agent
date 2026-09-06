@@ -64,7 +64,7 @@ test('greeting and logout reuse authenticated app state and the existing auth fl
   assert.match(dashboardSource, /סובב את המתג לשירות מבוקש/)
   assert.doesNotMatch(dashboardSource, /מיכאל/)
   assert.match(dashboardSource, /loggingOut \? 'מתנתקים…' : 'התנתקות'/)
-  assert.match(appSource, /onLogout=\{\(\) => invalidateAuthSession\(''\)\}/)
+  assert.match(appSource, /await cleanupPushBeforeLogout\(session\.access_token\)[\s\S]*?await invalidateAuthSession\(''\)/)
 })
 
 test('dashboard has no visible selected-status line', () => {

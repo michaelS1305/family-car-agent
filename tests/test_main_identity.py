@@ -84,6 +84,9 @@ models_stub = stub_module(
     JoinFamilyCodeRequest=type("JoinFamilyCodeRequest", (), {}),
     JoinFamilyCompleteRequest=type("JoinFamilyCompleteRequest", (), {}),
     JoinFamilyNameRequest=type("JoinFamilyNameRequest", (), {}),
+    PushConfigResponse=type("PushConfigResponse", (), {}),
+    PushSubscriptionRemoveRequest=type("PushSubscriptionRemoveRequest", (), {}),
+    PushSubscriptionRequest=type("PushSubscriptionRequest", (), {}),
     ReservationCancelRequest=type("ReservationCancelRequest", (), {}),
     ReservationIntervalRequest=type("ReservationIntervalRequest", (), {}),
     ReservationResponse=type("ReservationResponse", (), {}),
@@ -229,6 +232,22 @@ reservation_stub = stub_module(
 )
 
 
+class FakePushServiceError(Exception):
+    def __init__(self, code="PUSH_ERROR", message="Push error", status_code=400):
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+
+
+push_stub = stub_module(
+    "push_service",
+    PushServiceError=FakePushServiceError,
+    get_public_push_config=Mock(return_value={"enabled": False, "public_vapid_key": None}),
+    register_push_subscription=Mock(return_value={"registered": True}),
+    unregister_push_subscription=Mock(return_value={"removed": True}),
+)
+
+
 def load_main_module(environment=None):
     module_path = Path(__file__).resolve().parents[1] / "main.py"
     spec = importlib.util.spec_from_file_location("main_under_test", module_path)
@@ -252,6 +271,7 @@ def load_main_module(environment=None):
                 "family_service": family_profile_stub,
                 "join_family_service": join_family_stub,
                 "reservation_service": reservation_stub,
+                "push_service": push_stub,
             },
         ):
             spec.loader.exec_module(module)
@@ -553,6 +573,51 @@ class CarStatusRouteTests(unittest.TestCase):
         self.assertEqual(result, {"status": "available"})
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         car_stub.get_car_status.assert_called_once_with(current_user)
+
+
+class PushRouteTests(unittest.TestCase):
+    def setUp(self):
+        push_stub.get_public_push_config.reset_mock(return_value=True, side_effect=True)
+        push_stub.register_push_subscription.reset_mock(return_value=True, side_effect=True)
+        push_stub.unregister_push_subscription.reset_mock(return_value=True, side_effect=True)
+        push_stub.get_public_push_config.return_value = {
+            "enabled": False,
+            "public_vapid_key": None,
+        }
+        push_stub.register_push_subscription.return_value = {"registered": True}
+        push_stub.unregister_push_subscription.return_value = {"removed": True}
+
+    def test_all_push_routes_are_protected_by_current_user(self):
+        for function, parameter_name in (
+            (main.push_config, "current_user"),
+            (main.register_push, "current_user"),
+            (main.unregister_push, "current_user"),
+        ):
+            with self.subTest(function=function.__name__):
+                parameter = inspect.signature(function).parameters[parameter_name]
+                self.assertIs(parameter.default.dependency, auth_stub.get_current_user)
+
+    def test_registration_and_removal_cannot_choose_browser_identity(self):
+        current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
+        registration = types.SimpleNamespace(
+            endpoint="https://push.example/device",
+            keys=types.SimpleNamespace(p256dh="key", auth="auth"),
+            user_id=999,
+            family_id=888,
+        )
+        removal = types.SimpleNamespace(
+            endpoint="https://push.example/device",
+            user_id=999,
+            family_id=888,
+        )
+
+        main.register_push(registration, current_user)
+        main.unregister_push(removal, current_user)
+
+        push_stub.register_push_subscription.assert_called_once_with(current_user, registration)
+        push_stub.unregister_push_subscription.assert_called_once_with(
+            current_user, "https://push.example/device"
+        )
 
 
 class CarHistoryRouteTests(unittest.TestCase):
