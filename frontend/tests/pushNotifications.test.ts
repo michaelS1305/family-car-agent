@@ -7,10 +7,13 @@ import {
   currentNotificationPermission,
   detectPushCapability,
   disableCurrentDevicePush,
+  preloadPushConfiguration,
   urlBase64ToUint8Array,
 } from '../src/push/pushNotifications.ts'
 
 type GlobalName = 'window' | 'navigator' | 'Notification' | 'fetch'
+
+const enabledPushConfig = { enabled: true, public_vapid_key: 'AQID' }
 
 function installGlobal(name: GlobalName, value: unknown) {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, name)
@@ -101,8 +104,35 @@ test('activation requests permission only when explicitly invoked and stops on d
   const environment = pushEnvironment({ permissionResult: 'denied' })
   try {
     assert.equal(environment.calls.permission, 0)
-    assert.deepEqual(await activatePushNotifications('access-token'), { status: 'denied' })
+    const activation = activatePushNotifications('access-token', enabledPushConfig)
     assert.equal(environment.calls.permission, 1)
+    assert.deepEqual(await activation, { status: 'denied' })
+    assert.equal(environment.calls.ready, 0)
+  } finally {
+    environment.restore()
+  }
+})
+
+test('configuration preload performs no permission or subscription action', async () => {
+  const environment = pushEnvironment()
+  try {
+    assert.deepEqual(await preloadPushConfiguration('access-token'), enabledPushConfig)
+    assert.equal(environment.calls.permission, 0)
+    assert.equal(environment.calls.ready, 0)
+    assert.equal(environment.calls.subscribe, 0)
+  } finally {
+    environment.restore()
+  }
+})
+
+test('already denied permission is not requested again', async () => {
+  const environment = pushEnvironment({ permission: 'denied' })
+  try {
+    assert.deepEqual(
+      await activatePushNotifications('access-token', enabledPushConfig),
+      { status: 'denied' },
+    )
+    assert.equal(environment.calls.permission, 0)
     assert.equal(environment.calls.ready, 0)
   } finally {
     environment.restore()
@@ -121,7 +151,10 @@ test('activation waits for service worker, reuses subscription and registers wit
     return jsonResponse(200, { registered: true })
   })
   try {
-    assert.deepEqual(await activatePushNotifications('access-token'), { status: 'enabled' })
+    assert.deepEqual(
+      await activatePushNotifications('access-token', enabledPushConfig),
+      { status: 'enabled' },
+    )
     assert.equal(environment.calls.permission, 0)
     assert.equal(environment.calls.ready, 1)
     assert.equal(environment.calls.subscribe, 0)
@@ -136,6 +169,42 @@ test('activation waits for service worker, reuses subscription and registers wit
   } finally {
     restoreFetch()
     environment.restore()
+  }
+})
+
+test('permission request begins before any awaited registration work', async () => {
+  const order: string[] = []
+  const environment = pushEnvironment({
+    permissionResult: 'granted',
+    order,
+  })
+  const restoreNotification = installGlobal('Notification', {
+    permission: 'default',
+    requestPermission: () => {
+      order.push('permission')
+      return Promise.resolve('granted')
+    },
+  })
+  try {
+    const activation = activatePushNotifications('access-token', enabledPushConfig)
+    assert.deepEqual(order, ['permission'])
+    await activation
+    assert.equal(order[0], 'permission')
+  } finally {
+    restoreNotification()
+    environment.restore()
+  }
+})
+
+test('unsupported activation is non-blocking and performs no permission request', async () => {
+  const restoreWindow = installGlobal('window', undefined)
+  try {
+    assert.deepEqual(
+      await activatePushNotifications('access-token', enabledPushConfig),
+      { status: 'unsupported' },
+    )
+  } finally {
+    restoreWindow()
   }
 })
 

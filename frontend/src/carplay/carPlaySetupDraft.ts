@@ -1,8 +1,9 @@
-export const carPlaySetupLastStep = 15
-export const carPlaySetupActionSteps = 14
+export const carPlayPushStep = 15
+export const carPlaySetupLastStep = 16
+export const carPlaySetupActionSteps = 15
 
 export type CarPlaySetupDraft = {
-  version: 2
+  version: 3
   authUserId: string
   currentStep: number
 }
@@ -19,12 +20,29 @@ function isDraft(value: unknown): value is CarPlaySetupDraft {
   if (!value || typeof value !== 'object') return false
   const draft = value as Partial<CarPlaySetupDraft>
   return (
-    draft.version === 2
+    draft.version === 3
     && typeof draft.authUserId === 'string'
     && draft.authUserId.length > 0
     && Number.isInteger(draft.currentStep)
     && Number(draft.currentStep) >= 0
     && Number(draft.currentStep) <= carPlaySetupLastStep
+  )
+}
+
+function isLegacyDraft(value: unknown): value is Omit<CarPlaySetupDraft, 'version'> & { version: 2 } {
+  if (!value || typeof value !== 'object') return false
+  const draft = value as {
+    version?: unknown
+    authUserId?: unknown
+    currentStep?: unknown
+  }
+  return (
+    draft.version === 2
+    && typeof draft.authUserId === 'string'
+    && draft.authUserId.length > 0
+    && Number.isInteger(draft.currentStep)
+    && Number(draft.currentStep) >= 0
+    && Number(draft.currentStep) <= carPlayPushStep
   )
 }
 
@@ -38,6 +56,11 @@ export function loadCarPlaySetupStep(
     const parsed: unknown = JSON.parse(raw)
     if (isDraft(parsed) && parsed.authUserId === authUserId) {
       return parsed.currentStep
+    }
+    if (isLegacyDraft(parsed) && parsed.authUserId === authUserId) {
+      const migratedStep = parsed.currentStep
+      saveCarPlaySetupStep(authUserId, migratedStep, storage)
+      return migratedStep
     }
     storage?.removeItem(storageKey)
   } catch {
@@ -60,7 +83,7 @@ export function saveCarPlaySetupStep(
   }
   try {
     storage?.setItem(storageKey, JSON.stringify({
-      version: 2,
+      version: 3,
       authUserId,
       currentStep,
     } satisfies CarPlaySetupDraft))
