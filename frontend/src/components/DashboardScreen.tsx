@@ -21,6 +21,7 @@ import { DashboardCategoryIcon } from './DashboardCategoryIcon'
 import { FamilyScreen } from './FamilyScreen'
 import { ReservationCenterScreen } from './ReservationCenterScreen'
 import { HistoryScreen } from './HistoryScreen'
+import { VehiclesScreen } from './VehiclesScreen'
 
 function RotarySelector({
   confirmButtonRef,
@@ -312,6 +313,8 @@ export function DashboardScreen({
             refreshVersion={carDataRefreshVersion}
             onBack={closeCategory}
           />
+        ) : activeCategory.id === 'cars' ? (
+          <VehiclesScreen open={categoryOpen} onBack={closeCategory} />
         ) : (
           <CategoryPlaceholderScreen category={activeCategory} open={categoryOpen} onBack={closeCategory} />
         )
