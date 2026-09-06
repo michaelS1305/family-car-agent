@@ -1,4 +1,5 @@
 from typing import Literal
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -43,6 +44,44 @@ class FamilyRoleUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: Literal["parent", "child"] | None
+
+
+class ReservationResponse(BaseModel):
+    owner_name: str
+    start_time: str
+    end_time: str
+    is_mine: bool
+
+
+class ReservationIntervalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_time: datetime
+    end_time: datetime
+
+
+class ReservationUpdateRequest(ReservationIntervalRequest):
+    original_start_time: str
+    original_end_time: str
+
+    @field_validator("original_start_time", "original_end_time")
+    @classmethod
+    def validate_original_time(cls, value):
+        datetime.fromisoformat(value)
+        return value
+
+
+class ReservationCancelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    original_start_time: str
+    original_end_time: str
+
+    @field_validator("original_start_time", "original_end_time")
+    @classmethod
+    def validate_original_time(cls, value):
+        datetime.fromisoformat(value)
+        return value
 
 
 class CreateFamilyAddressRequest(BaseModel):

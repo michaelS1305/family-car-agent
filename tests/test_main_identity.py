@@ -83,6 +83,10 @@ models_stub = stub_module(
     JoinFamilyCodeRequest=type("JoinFamilyCodeRequest", (), {}),
     JoinFamilyCompleteRequest=type("JoinFamilyCompleteRequest", (), {}),
     JoinFamilyNameRequest=type("JoinFamilyNameRequest", (), {}),
+    ReservationCancelRequest=type("ReservationCancelRequest", (), {}),
+    ReservationIntervalRequest=type("ReservationIntervalRequest", (), {}),
+    ReservationResponse=type("ReservationResponse", (), {}),
+    ReservationUpdateRequest=type("ReservationUpdateRequest", (), {}),
 )
 database_stub = stub_module(
     "database",
@@ -193,6 +197,23 @@ join_family_stub = stub_module(
 )
 
 
+class FakeReservationCenterError(Exception):
+    def __init__(self, code="RESERVATION_ERROR", message="Reservation error", status_code=400):
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+
+
+reservation_stub = stub_module(
+    "reservation_service",
+    ReservationCenterError=FakeReservationCenterError,
+    cancel_reservation_for_current_user=Mock(return_value={"cancelled": True}),
+    create_reservation_for_current_user=Mock(),
+    list_reservations=Mock(return_value=[]),
+    update_reservation_for_current_user=Mock(),
+)
+
+
 def load_main_module(environment=None):
     module_path = Path(__file__).resolve().parents[1] / "main.py"
     spec = importlib.util.spec_from_file_location("main_under_test", module_path)
@@ -214,6 +235,7 @@ def load_main_module(environment=None):
                 "family_creation_service": family_creation_stub,
                 "family_service": family_profile_stub,
                 "join_family_service": join_family_stub,
+                "reservation_service": reservation_stub,
             },
         ):
             spec.loader.exec_module(module)
@@ -373,6 +395,72 @@ class FamilyProfileRouteTests(unittest.TestCase):
             "parent",
         )
         self.assertEqual(result["role"], "parent")
+
+
+class ReservationCenterRouteTests(unittest.TestCase):
+    def setUp(self):
+        reservation_stub.list_reservations.reset_mock(return_value=True, side_effect=True)
+        reservation_stub.create_reservation_for_current_user.reset_mock(return_value=True, side_effect=True)
+        reservation_stub.update_reservation_for_current_user.reset_mock(return_value=True, side_effect=True)
+        reservation_stub.cancel_reservation_for_current_user.reset_mock(return_value=True, side_effect=True)
+        reservation_stub.list_reservations.return_value = []
+        reservation_stub.create_reservation_for_current_user.return_value = {"created": True}
+        reservation_stub.update_reservation_for_current_user.return_value = {"updated": True}
+        reservation_stub.cancel_reservation_for_current_user.return_value = {"cancelled": True}
+
+    def test_list_is_authenticated_and_passes_only_filters_and_current_user(self):
+        current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
+        result = main.get_reservations("future", "all", current_user)
+        parameters = inspect.signature(main.get_reservations).parameters
+
+        self.assertIs(parameters["current_user"].default.dependency, auth_stub.get_current_user)
+        reservation_stub.list_reservations.assert_called_once_with(current_user, "future", "all")
+        self.assertEqual(result, [])
+
+    def test_create_cannot_receive_browser_identity(self):
+        current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
+        request = types.SimpleNamespace(
+            start_time="start",
+            end_time="end",
+            user_id=999,
+            family_id=888,
+        )
+        main.create_reservation_route(request, current_user)
+
+        reservation_stub.create_reservation_for_current_user.assert_called_once_with(
+            current_user,
+            "start",
+            "end",
+        )
+
+    def test_update_and_cancel_use_current_user_and_time_locator(self):
+        current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
+        update_request = types.SimpleNamespace(
+            original_start_time="old-start",
+            original_end_time="old-end",
+            start_time="new-start",
+            end_time="new-end",
+        )
+        cancel_request = types.SimpleNamespace(
+            original_start_time="old-start",
+            original_end_time="old-end",
+        )
+
+        main.update_reservation_route(update_request, current_user)
+        main.cancel_reservation_route(cancel_request, current_user)
+
+        reservation_stub.update_reservation_for_current_user.assert_called_once_with(
+            current_user,
+            "old-start",
+            "old-end",
+            "new-start",
+            "new-end",
+        )
+        reservation_stub.cancel_reservation_for_current_user.assert_called_once_with(
+            current_user,
+            "old-start",
+            "old-end",
+        )
 
 
 class ChatRouteTests(unittest.TestCase):
