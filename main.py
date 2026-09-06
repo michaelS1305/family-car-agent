@@ -1,4 +1,5 @@
 import os
+from uuid import UUID
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Response
@@ -14,6 +15,9 @@ from models import (
     ChatRequest,
     CreateFamilyAddressRequest,
     CreateFamilyRequest,
+    FamilyMemberResponse,
+    FamilyResponse,
+    FamilyRoleUpdateRequest,
     JoinFamilyAddressConfirmationRequest,
     JoinFamilyAddressRequest,
     JoinFamilyCodeRequest,
@@ -35,6 +39,11 @@ from family_creation_service import (
     FamilyCreationError,
     create_family_for_auth_user,
     resolve_create_family_address,
+)
+from family_service import (
+    FamilyProfileError,
+    get_family_for_current_user,
+    set_family_member_role,
 )
 from identity import AuthenticatedSupabaseUser, CurrentUser
 from join_family_service import (
@@ -70,7 +79,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_allowed_origins(),
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -91,6 +100,37 @@ def get_me(current_user: CurrentUser = Depends(get_current_user)):
         "family_id": current_user.family_id,
         "carplay_setup_status": current_user.carplay_setup_status,
     }
+
+
+def _raise_family_profile_error(error):
+    raise HTTPException(
+        status_code=error.status_code,
+        detail={"code": error.code, "message": error.message},
+    ) from error
+
+
+@app.get("/api/family", response_model=FamilyResponse, status_code=200)
+def get_family(current_user: CurrentUser = Depends(get_current_user)):
+    try:
+        return get_family_for_current_user(current_user)
+    except FamilyProfileError as error:
+        _raise_family_profile_error(error)
+
+
+@app.patch(
+    "/api/family/members/{member_ref}/role",
+    response_model=FamilyMemberResponse,
+    status_code=200,
+)
+def set_family_role(
+    member_ref: UUID,
+    request: FamilyRoleUpdateRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return set_family_member_role(current_user, member_ref, request.role)
+    except FamilyProfileError as error:
+        _raise_family_profile_error(error)
 
 
 def _raise_chat_error(error):

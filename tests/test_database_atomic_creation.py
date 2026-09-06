@@ -180,38 +180,58 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         )
 
     def test_success_uses_one_connection_and_one_transaction(self):
+        user_cursor = Mock(name="user_cursor")
+        user_cursor.fetchone.return_value = (17,)
         family_cursor = Mock(name="family_cursor")
         family_cursor.fetchone.return_value = (7,)
-        self.connection.execute.side_effect = [family_cursor, Mock(name="user_cursor")]
+        update_cursor = Mock(name="update_cursor")
+        update_cursor.fetchone.return_value = (17,)
+        self.connection.execute.side_effect = [user_cursor, family_cursor, update_cursor]
 
         family_id = self.call_atomic_creation()
 
         self.assertEqual(family_id, 7)
         database.pool.connection.assert_called_once_with()
         self.connection.transaction.assert_called_once_with()
-        self.assertEqual(self.connection.execute.call_count, 2)
+        self.assertEqual(self.connection.execute.call_count, 3)
         self.assertTrue(self.transaction_context.committed)
         self.assertFalse(self.transaction_context.rolled_back)
 
-        user_insert = self.connection.execute.call_args_list[1]
+        user_insert = self.connection.execute.call_args_list[0]
         self.assertIn("INSERT INTO users", user_insert.args[0])
         self.assertEqual(
             user_insert.args[1],
-            ("מיכאל", 7, None),
+            ("מיכאל", None),
         )
+        family_insert = self.connection.execute.call_args_list[1]
+        self.assertIn("created_by_user_id", family_insert.args[0])
+        self.assertEqual(family_insert.args[1][-1], 17)
+        self.assertIn("UPDATE users", self.connection.execute.call_args_list[2].args[0])
 
-    def test_user_insert_failure_rolls_back_family_insert(self):
-        family_cursor = Mock(name="family_cursor")
-        family_cursor.fetchone.return_value = (7,)
-        self.connection.execute.side_effect = [
-            family_cursor,
-            RuntimeError("user insert failed"),
-        ]
+    def test_family_insert_failure_rolls_back_first_user_insert(self):
+        user_cursor = Mock(name="user_cursor")
+        user_cursor.fetchone.return_value = (17,)
+        self.connection.execute.side_effect = [user_cursor, RuntimeError("family insert failed")]
 
-        with self.assertRaisesRegex(RuntimeError, "user insert failed"):
+        with self.assertRaisesRegex(RuntimeError, "family insert failed"):
             self.call_atomic_creation()
 
         self.assertEqual(self.connection.execute.call_count, 2)
+        self.assertTrue(self.transaction_context.rolled_back)
+        self.assertFalse(self.transaction_context.committed)
+
+    def test_creator_assignment_failure_rolls_back_user_and_family(self):
+        user_cursor = Mock(name="user_cursor")
+        user_cursor.fetchone.return_value = (17,)
+        family_cursor = Mock(name="family_cursor")
+        family_cursor.fetchone.return_value = (7,)
+        update_cursor = Mock(name="update_cursor")
+        update_cursor.fetchone.return_value = None
+        self.connection.execute.side_effect = [user_cursor, family_cursor, update_cursor]
+
+        with self.assertRaisesRegex(RuntimeError, "assign family creator"):
+            self.call_atomic_creation()
+
         self.assertTrue(self.transaction_context.rolled_back)
         self.assertFalse(self.transaction_context.committed)
 
@@ -219,14 +239,17 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         class DuplicateFamilyCodeError(Exception):
             pass
 
-        self.connection.execute.side_effect = DuplicateFamilyCodeError(
-            "duplicate family code"
-        )
+        user_cursor = Mock(name="user_cursor")
+        user_cursor.fetchone.return_value = (17,)
+        self.connection.execute.side_effect = [
+            user_cursor,
+            DuplicateFamilyCodeError("duplicate family code"),
+        ]
 
         with self.assertRaisesRegex(DuplicateFamilyCodeError, "duplicate family code"):
             self.call_atomic_creation()
 
-        self.connection.execute.assert_called_once()
+        self.assertEqual(self.connection.execute.call_count, 2)
         self.assertIn("INSERT INTO families", self.connection.execute.call_args.args[0])
         self.assertTrue(self.transaction_context.rolled_back)
         self.assertFalse(self.transaction_context.committed)
@@ -241,13 +264,18 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         location_cursor.fetchone.return_value = None
         family_cursor = Mock(name="family_cursor")
         family_cursor.fetchone.return_value = (7,)
+        user_cursor = Mock(name="user_cursor")
+        user_cursor.fetchone.return_value = (17,)
+        update_cursor = Mock(name="update_cursor")
+        update_cursor.fetchone.return_value = (17,)
         self.connection.execute.side_effect = [
             lock_cursor,
             mapped_cursor,
             code_cursor,
             location_cursor,
+            user_cursor,
             family_cursor,
-            Mock(name="user_cursor"),
+            update_cursor,
         ]
 
         family_id = database.create_family_with_first_user(
@@ -266,11 +294,12 @@ class AtomicFamilyCreationTests(unittest.TestCase):
             "pg_advisory_xact_lock",
             self.connection.execute.call_args_list[0].args[0],
         )
-        user_insert = self.connection.execute.call_args_list[-1]
+        user_insert = self.connection.execute.call_args_list[-3]
         self.assertEqual(
             user_insert.args[1],
-            ("מיכאל", 7, "auth-user-uuid"),
+            ("מיכאל", "auth-user-uuid"),
         )
+        self.assertEqual(self.connection.execute.call_args_list[-2].args[1][-1], 17)
         self.assertTrue(self.transaction_context.committed)
 
     def test_pwa_duplicate_auth_user_rolls_back_before_family_insert(self):
@@ -329,8 +358,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         code_cursor.fetchone.return_value = None
         location_cursor = Mock(name="location_cursor")
         location_cursor.fetchone.return_value = None
-        family_cursor = Mock(name="family_cursor")
-        family_cursor.fetchone.return_value = (7,)
         foreign_key_error = database.ForeignKeyViolation("missing auth user")
         foreign_key_error.diag = types.SimpleNamespace(
             constraint_name="users_auth_user_id_fkey"
@@ -340,7 +367,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
             mapped_cursor,
             code_cursor,
             location_cursor,
-            family_cursor,
             foreign_key_error,
         ]
 
@@ -393,6 +419,50 @@ class AuthUserLookupTests(unittest.TestCase):
         user = database.get_user_by_auth_user_id("unknown-auth-user")
 
         self.assertIsNone(user)
+
+
+class FamilyProfileDatabaseTests(unittest.TestCase):
+    def setUp(self):
+        database.pool.connection.reset_mock()
+        self.connection = Mock(name="connection")
+        self.connection_context = RecordingContext(self.connection)
+        self.cursor = Mock(name="cursor")
+        self.connection.execute.return_value = self.cursor
+        database.pool.connection.return_value = self.connection_context
+
+    def test_family_profile_reads_members_only_from_requested_family(self):
+        family_cursor = Mock(name="family_cursor")
+        family_cursor.fetchone.return_value = ("כהן", "כתובת", "482731", 17)
+        members_cursor = Mock(name="members_cursor")
+        members_cursor.fetchall.return_value = [
+            ("public-ref", "מיכאל", None, 17),
+        ]
+        self.connection.execute.side_effect = [family_cursor, members_cursor]
+
+        profile = database.get_family_profile(42)
+
+        self.assertEqual(profile[0][0], "כהן")
+        self.assertEqual(profile[1][0][0], "public-ref")
+        for call in self.connection.execute.call_args_list:
+            self.assertEqual(call.args[1], (42,))
+        self.assertIn("WHERE family_id = %s", self.connection.execute.call_args_list[1].args[0])
+
+    def test_role_update_authorizes_creator_and_target_family_in_one_statement(self):
+        transaction = RecordingContext()
+        self.connection.transaction.return_value = transaction
+        cursor = Mock(name="cursor")
+        cursor.fetchone.return_value = ("public-ref", "נועה", "child", False)
+        self.connection.execute.return_value = cursor
+
+        result = database.update_family_member_role(17, 42, "public-ref", "child")
+
+        self.assertEqual(result, ("public-ref", "נועה", "child", False))
+        sql, parameters = self.connection.execute.call_args.args
+        self.assertIn("created_by_user_id = %s", sql)
+        self.assertIn("member.family_id = family.id", sql)
+        self.assertIn("member.member_public_id = %s", sql)
+        self.assertEqual(parameters, (42, 17, "child", "public-ref"))
+        self.assertTrue(transaction.committed)
         database.pool.connection.assert_called_once_with()
         self.connection.execute.assert_called_once()
 

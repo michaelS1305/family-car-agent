@@ -1278,6 +1278,190 @@
   text-align: center;
 }
 
+.family-screen {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.family-screen-scroll {
+  width: min(100%, 640px);
+  min-height: 0;
+  margin: 0 auto;
+  padding: 18px 2px max(24px, env(safe-area-inset-bottom));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.family-screen-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin: 4px 0 28px;
+  color: #294967;
+}
+
+.category-placeholder-screen .family-screen-title h2 {
+  margin: 0;
+}
+
+.family-screen-title svg {
+  width: 31px;
+  height: 31px;
+}
+
+.family-screen-state,
+.family-screen-error {
+  margin: 38px auto;
+  color: #667382;
+  text-align: center;
+}
+
+.family-screen-error p {
+  margin: 0 0 12px;
+}
+
+.family-screen-error button,
+.family-code-card button {
+  min-height: 44px;
+  padding: 8px 18px;
+  border: 1px solid rgba(48, 73, 96, 0.14);
+  border-radius: 999px;
+  color: #294967;
+  background: rgba(255, 255, 255, 0.7);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.family-details {
+  display: grid;
+  gap: 26px;
+}
+
+.family-details h3 {
+  margin: 0 0 12px;
+  color: #667382;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.family-members {
+  display: grid;
+  gap: 10px;
+}
+
+.family-member,
+.family-info-card {
+  border: 1px solid rgba(65, 82, 101, 0.1);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.56);
+  box-shadow: 0 8px 24px rgba(38, 50, 65, 0.04);
+  -webkit-backdrop-filter: blur(12px) saturate(112%);
+  backdrop-filter: blur(12px) saturate(112%);
+}
+
+.family-member {
+  min-height: 70px;
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 14px;
+}
+
+.family-member-avatar {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #294967;
+  background: rgba(219, 232, 242, 0.72);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.family-member-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.family-member-copy strong {
+  overflow: hidden;
+  font-size: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.family-member-copy small,
+.family-member-copy span {
+  color: #73808d;
+  font-size: 0.78rem;
+}
+
+.family-member-copy small {
+  color: #406b61;
+  font-weight: 650;
+}
+
+.family-role-field select {
+  min-height: 44px;
+  max-width: 112px;
+  padding: 7px 10px;
+  border: 1px solid rgba(48, 73, 96, 0.16);
+  border-radius: 12px;
+  color: #344150;
+  background: rgba(255, 255, 255, 0.74);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.family-role-field select:disabled {
+  opacity: 0.58;
+}
+
+.family-info-card {
+  padding: 17px 18px;
+}
+
+.family-info-card p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.family-code-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.family-code-card h3,
+.family-code-card span {
+  grid-column: 1 / -1;
+}
+
+.family-code-card strong {
+  color: #263241;
+  font-size: 1.45rem;
+  letter-spacing: 0.14em;
+}
+
+.family-code-card span {
+  min-height: 1.2em;
+  color: #507567;
+  font-size: 0.78rem;
+}
+
+.family-screen button:focus-visible,
+.family-screen select:focus-visible {
+  outline: 3px solid rgba(40, 112, 92, 0.34);
+  outline-offset: 2px;
+}
+
 .dashboard-header button:focus-visible,
 .category-placeholder-header button:focus-visible,
 .dashboard-logout:focus-visible,

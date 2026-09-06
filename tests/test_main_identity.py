@@ -28,6 +28,9 @@ class FakeFastAPI:
     def post(self, path, **options):
         return self._route_decorator("POST", path, options)
 
+    def patch(self, path, **options):
+        return self._route_decorator("PATCH", path, options)
+
     def add_middleware(self, middleware, **options):
         self.middleware = (middleware, options)
 
@@ -72,6 +75,9 @@ models_stub = stub_module(
     ChatRequest=type("ChatRequest", (), {}),
     CreateFamilyAddressRequest=type("CreateFamilyAddressRequest", (), {}),
     CreateFamilyRequest=type("CreateFamilyRequest", (), {}),
+    FamilyMemberResponse=type("FamilyMemberResponse", (), {}),
+    FamilyResponse=type("FamilyResponse", (), {}),
+    FamilyRoleUpdateRequest=type("FamilyRoleUpdateRequest", (), {}),
     JoinFamilyAddressConfirmationRequest=type("JoinFamilyAddressConfirmationRequest", (), {}),
     JoinFamilyAddressRequest=type("JoinFamilyAddressRequest", (), {}),
     JoinFamilyCodeRequest=type("JoinFamilyCodeRequest", (), {}),
@@ -150,6 +156,21 @@ family_creation_stub = stub_module(
 )
 
 
+class FakeFamilyProfileError(Exception):
+    def __init__(self, code="FAMILY_ERROR", message="Family error", status_code=403):
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+
+
+family_profile_stub = stub_module(
+    "family_service",
+    FamilyProfileError=FakeFamilyProfileError,
+    get_family_for_current_user=Mock(),
+    set_family_member_role=Mock(),
+)
+
+
 class FakeJoinFamilyError(Exception):
     def __init__(self, code="JOIN_ERROR", message="Join error", status_code=400):
         self.code = code
@@ -191,6 +212,7 @@ def load_main_module(environment=None):
                 "carplay_setup_service": carplay_setup_stub,
                 "auth_service": auth_stub,
                 "family_creation_service": family_creation_stub,
+                "family_service": family_profile_stub,
                 "join_family_service": join_family_stub,
             },
         ):
@@ -248,6 +270,10 @@ class StartupConfigurationTests(unittest.TestCase):
                 "https://pwa.example.com",
             ],
         )
+        self.assertEqual(
+            configured_main.app.middleware[1]["allow_methods"],
+            ["GET", "POST", "PATCH"],
+        )
 
     def test_cors_wildcard_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "must not contain wildcards"):
@@ -293,6 +319,60 @@ class ApiMeRouteTests(unittest.TestCase):
         self.assertEqual(tuple(parameters), ("current_user",))
         self.assertNotIn("user_id", parameters)
         self.assertNotIn("family_id", parameters)
+
+
+class FamilyProfileRouteTests(unittest.TestCase):
+    def setUp(self):
+        family_profile_stub.get_family_for_current_user.reset_mock(
+            return_value=True,
+            side_effect=True,
+        )
+        family_profile_stub.set_family_member_role.reset_mock(
+            return_value=True,
+            side_effect=True,
+        )
+        family_profile_stub.get_family_for_current_user.return_value = {
+            "name": "כהן",
+            "home_address": "דימונה, המעפיל, 1209",
+            "family_code": "482731",
+            "can_edit_roles": True,
+            "members": [],
+        }
+        family_profile_stub.set_family_member_role.return_value = {
+            "member_ref": "2d6ae768-3d55-4487-aa55-a71ad28259be",
+            "name": "נועה",
+            "role": "parent",
+            "is_family_admin": False,
+        }
+
+    def test_family_read_is_protected_and_scoped_only_by_current_user(self):
+        current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
+
+        result = main.get_family(current_user)
+        parameters = inspect.signature(main.get_family).parameters
+
+        self.assertEqual(tuple(parameters), ("current_user",))
+        self.assertIs(parameters["current_user"].default.dependency, auth_stub.get_current_user)
+        family_profile_stub.get_family_for_current_user.assert_called_once_with(current_user)
+        self.assertNotIn("family_id", result)
+        self.assertNotIn("created_by_user_id", result)
+
+    def test_role_patch_uses_current_user_and_public_member_reference(self):
+        current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
+        member_ref = "2d6ae768-3d55-4487-aa55-a71ad28259be"
+        request = types.SimpleNamespace(role="parent", user_id=999, family_id=888)
+
+        result = main.set_family_role(member_ref, request, current_user)
+        parameters = inspect.signature(main.set_family_role).parameters
+
+        self.assertEqual(tuple(parameters), ("member_ref", "request", "current_user"))
+        self.assertIs(parameters["current_user"].default.dependency, auth_stub.get_current_user)
+        family_profile_stub.set_family_member_role.assert_called_once_with(
+            current_user,
+            member_ref,
+            "parent",
+        )
+        self.assertEqual(result["role"], "parent")
 
 
 class ChatRouteTests(unittest.TestCase):

@@ -93,6 +93,8 @@ def init_db():
             shortcut_token TEXT UNIQUE,
             telegram_chat_id BIGINT UNIQUE,
             auth_user_id UUID,
+            family_role TEXT NULL,
+            member_public_id UUID NOT NULL DEFAULT gen_random_uuid(),
             carplay_setup_status TEXT NOT NULL DEFAULT 'pending',
             CONSTRAINT users_auth_user_id_unique
                 UNIQUE (auth_user_id),
@@ -101,7 +103,11 @@ def init_db():
                 REFERENCES auth.users(id)
                 ON DELETE SET NULL,
             CONSTRAINT users_carplay_setup_status_check
-                CHECK (carplay_setup_status IN ('pending', 'completed', 'skipped'))
+                CHECK (carplay_setup_status IN ('pending', 'completed', 'skipped')),
+            CONSTRAINT users_family_role_check
+                CHECK (family_role IS NULL OR family_role IN ('parent', 'child')),
+            CONSTRAINT users_member_public_id_key
+                UNIQUE (member_public_id)
         )
         """)
 
@@ -136,7 +142,12 @@ def init_db():
             home_address TEXT NOT NULL,
             home_latitude DOUBLE PRECISION,
             home_longitude DOUBLE PRECISION,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            created_by_user_id INTEGER NOT NULL,
+            CONSTRAINT families_created_by_user_id_fkey
+                FOREIGN KEY (created_by_user_id)
+                REFERENCES users(id)
+                ON DELETE RESTRICT
         )
         """)
 
@@ -736,38 +747,6 @@ def get_recent_conversation(user_id, limit=10):
 
         return list(reversed(messages))
 
-def create_family(name, family_code, home_address, home_latitude=None, home_longitude=None):
-    with pool.connection() as conn:
-        created_at = datetime.now().isoformat()
-
-        cursor = conn.execute(
-            """
-            INSERT INTO families (
-                name,
-                family_code,
-                home_address,
-                home_latitude,
-                home_longitude,
-                created_at
-            )
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                name,
-                family_code,
-                home_address,
-                home_latitude,
-                home_longitude,
-                created_at
-            )
-        )
-
-        family_id = cursor.fetchone()[0]
-
-        return family_id
-
-
 def create_family_with_first_user(
     name,
     family_code,
@@ -815,6 +794,23 @@ def create_family_with_first_user(
 
                 created_at = datetime.now().isoformat()
 
+                user_cursor = conn.execute(
+                    """
+                    INSERT INTO users (
+                        name,
+                        family_id,
+                        auth_user_id
+                    )
+                    VALUES (%s, NULL, %s)
+                    RETURNING id
+                    """,
+                    (
+                        user_name,
+                        auth_user_id,
+                    )
+                )
+                creator_user_id = user_cursor.fetchone()[0]
+
                 cursor = conn.execute(
                     """
                     INSERT INTO families (
@@ -823,9 +819,10 @@ def create_family_with_first_user(
                         home_address,
                         home_latitude,
                         home_longitude,
-                        created_at
+                        created_at,
+                        created_by_user_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -835,26 +832,27 @@ def create_family_with_first_user(
                         home_latitude,
                         home_longitude,
                         created_at,
+                        creator_user_id,
                     )
                 )
 
                 family_id = cursor.fetchone()[0]
 
-                conn.execute(
+                updated_user = conn.execute(
                     """
-                    INSERT INTO users (
-                        name,
-                        family_id,
-                        auth_user_id
-                    )
-                    VALUES (%s, %s, %s)
+                    UPDATE users
+                    SET family_id = %s
+                    WHERE id = %s
+                      AND family_id IS NULL
+                    RETURNING id
                     """,
                     (
-                        user_name,
                         family_id,
-                        auth_user_id,
+                        creator_user_id,
                     )
-                )
+                ).fetchone()
+                if updated_user is None:
+                    raise RuntimeError("Failed to assign family creator to family")
 
             return family_id
     except UniqueViolation as exc:
@@ -1055,6 +1053,68 @@ def get_family_by_id(family_id):
         )
 
         return cursor.fetchone()
+
+
+def get_family_profile(family_id):
+    with pool.connection() as conn:
+        family = conn.execute(
+            """
+            SELECT name, home_address, family_code, created_by_user_id
+            FROM families
+            WHERE id = %s
+            """,
+            (family_id,),
+        ).fetchone()
+        if family is None:
+            return None
+
+        members = conn.execute(
+            """
+            SELECT member_public_id::text, name, family_role, id
+            FROM users
+            WHERE family_id = %s
+            ORDER BY id
+            """,
+            (family_id,),
+        ).fetchall()
+        return family, members
+
+
+def update_family_member_role(
+    caller_user_id,
+    family_id,
+    member_public_id,
+    family_role,
+):
+    with pool.connection() as conn:
+        with conn.transaction():
+            return conn.execute(
+                """
+                WITH authorized_family AS (
+                    SELECT id, created_by_user_id
+                    FROM families
+                    WHERE id = %s
+                      AND created_by_user_id = %s
+                      AND created_by_user_id IS NOT NULL
+                )
+                UPDATE users AS member
+                SET family_role = %s
+                FROM authorized_family AS family
+                WHERE member.member_public_id = %s
+                  AND member.family_id = family.id
+                RETURNING
+                    member.member_public_id::text,
+                    member.name,
+                    member.family_role,
+                    member.id = family.created_by_user_id
+                """,
+                (
+                    family_id,
+                    caller_user_id,
+                    family_role,
+                    member_public_id,
+                ),
+            ).fetchone()
 
 
 def _join_session_from_row(row, was_reset=False):

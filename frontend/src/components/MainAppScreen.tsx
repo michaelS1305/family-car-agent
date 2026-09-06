@@ -472,6 +472,7 @@ export function MainAppScreen({ user, accessToken, authUserId, onLogout }: {
       <DashboardScreen
         open={dashboardOpen}
         userName={user.name}
+        accessToken={accessToken}
         version={APP_VERSION}
         onClose={closeDashboard}
         onLogout={onLogout}
