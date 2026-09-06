@@ -13,6 +13,23 @@ export type CarStatusResponse = {
   status: CarStatus
 }
 
+export type FamilyRole = 'parent' | 'child' | null
+
+export type FamilyMember = {
+  member_ref: string
+  name: string
+  role: FamilyRole
+  is_family_admin: boolean
+}
+
+export type FamilyProfile = {
+  name: string
+  home_address: string
+  family_code: string
+  can_edit_roles: boolean
+  members: FamilyMember[]
+}
+
 export type CurrentUserResult =
   | { status: 'mapped'; user: InternalUser }
   | { status: 'unmapped' }
@@ -186,6 +203,30 @@ function isInternalUser(value: unknown): value is InternalUser {
   )
 }
 
+function isFamilyMember(value: unknown): value is FamilyMember {
+  if (!value || typeof value !== 'object') return false
+  const member = value as Partial<FamilyMember>
+  return (
+    typeof member.member_ref === 'string'
+    && typeof member.name === 'string'
+    && (member.role === null || member.role === 'parent' || member.role === 'child')
+    && typeof member.is_family_admin === 'boolean'
+  )
+}
+
+function isFamilyProfile(value: unknown): value is FamilyProfile {
+  if (!value || typeof value !== 'object') return false
+  const family = value as Partial<FamilyProfile>
+  return (
+    typeof family.name === 'string'
+    && typeof family.home_address === 'string'
+    && typeof family.family_code === 'string'
+    && typeof family.can_edit_roles === 'boolean'
+    && Array.isArray(family.members)
+    && family.members.every(isFamilyMember)
+  )
+}
+
 function getCurrentUserUrl(explicitBaseUrl?: string) {
   const configuredBaseUrl = explicitBaseUrl ?? import.meta.env.VITE_API_BASE_URL
   const baseUrl = configuredBaseUrl?.trim().replace(/\/+$/, '') ?? ''
@@ -196,6 +237,70 @@ function getApiUrl(path: string, explicitBaseUrl?: string) {
   const configuredBaseUrl = explicitBaseUrl ?? import.meta.env?.VITE_API_BASE_URL
   const baseUrl = configuredBaseUrl?.trim().replace(/\/+$/, '') ?? ''
   return `${baseUrl}${path}`
+}
+
+async function familyRequest<T>(
+  path: string,
+  accessToken: string,
+  init: RequestInit,
+  validate: (value: unknown) => value is T,
+  options: RequestOptions,
+): Promise<T> {
+  const fetcher = options.fetcher ?? fetch
+  let response: Response
+  try {
+    response = await fetcher(getApiUrl(path, options.baseUrl), {
+      ...init,
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+        ...init.headers,
+      },
+      signal: options.signal,
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ApiRequestError('network', 'לא הצלחנו לטעון את פרטי המשפחה.')
+  }
+  if (!response.ok) {
+    throw new ApiRequestError('server', 'לא הצלחנו לטעון את פרטי המשפחה.', response.status)
+  }
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch {
+    throw new ApiRequestError('invalid-response', 'Family response is not valid JSON')
+  }
+  if (!validate(body)) {
+    throw new ApiRequestError('invalid-response', 'Family response is invalid')
+  }
+  return body
+}
+
+export function getFamily(
+  accessToken: string,
+  options: RequestOptions = {},
+): Promise<FamilyProfile> {
+  return familyRequest('/api/family', accessToken, { method: 'GET' }, isFamilyProfile, options)
+}
+
+export function updateFamilyMemberRole(
+  accessToken: string,
+  memberRef: string,
+  role: FamilyRole,
+  options: RequestOptions = {},
+): Promise<FamilyMember> {
+  return familyRequest(
+    `/api/family/members/${encodeURIComponent(memberRef)}/role`,
+    accessToken,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    },
+    isFamilyMember,
+    options,
+  )
 }
 
 function isChatMessage(value: unknown): value is ChatMessage {

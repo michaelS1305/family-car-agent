@@ -24,6 +24,27 @@ class CarStatusResponse(BaseModel):
     status: Literal["available", "occupied"]
 
 
+class FamilyMemberResponse(BaseModel):
+    member_ref: UUID
+    name: str
+    role: Literal["parent", "child"] | None
+    is_family_admin: bool
+
+
+class FamilyResponse(BaseModel):
+    name: str
+    home_address: str
+    family_code: str
+    can_edit_roles: bool
+    members: list[FamilyMemberResponse]
+
+
+class FamilyRoleUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["parent", "child"] | None
+
+
 class CreateFamilyAddressRequest(BaseModel):
     home_address: str
 
