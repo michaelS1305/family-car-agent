@@ -25,6 +25,22 @@ class CarStatusResponse(BaseModel):
     status: Literal["available", "occupied"]
 
 
+class ActiveCarUsageResponse(BaseModel):
+    name: str
+    started_at: str
+
+
+class CompletedCarUsageResponse(BaseModel):
+    name: str
+    started_at: str
+    ended_at: str
+
+
+class CarHistoryResponse(BaseModel):
+    active_usage: ActiveCarUsageResponse | None
+    recent_usage: list[CompletedCarUsageResponse]
+
+
 class FamilyMemberResponse(BaseModel):
     member_ref: UUID
     name: str

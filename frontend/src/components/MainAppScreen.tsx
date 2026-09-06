@@ -109,6 +109,7 @@ export function MainAppScreen({ user, accessToken, authUserId, onLogout }: {
   const [historyError, setHistoryError] = useState('')
   const [sending, setSending] = useState(false)
   const [carStatus, setCarStatus] = useState<CarStatusUiState>('loading')
+  const [carDataRefreshVersion, setCarDataRefreshVersion] = useState(0)
   const [liveAssistantText, setLiveAssistantText] = useState('')
   const [dashboardOpen, setDashboardOpen] = useState(false)
   const threadRef = useRef<HTMLElement | null>(null)
@@ -206,26 +207,30 @@ export function MainAppScreen({ user, accessToken, authUserId, onLogout }: {
     }
 
     const familyId = user.family_id
+    const refreshFamilyCarData = () => {
+      if (active) setCarDataRefreshVersion((version) => version + 1)
+      return refreshStatus(true)
+    }
     const realtimeSync = familyId === null
       ? null
       : createCarStatusRealtimeSync({
           client: getSupabaseClient(),
           familyId,
           isVisible: () => document.visibilityState !== 'hidden',
-          refreshStatus: () => refreshStatus(true),
+          refreshStatus: refreshFamilyCarData,
         })
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         realtimeSync?.handleForeground()
-        if (!realtimeSync) void refreshStatus()
+        if (!realtimeSync) void refreshFamilyCarData()
       } else {
         realtimeSync?.handleBackground()
       }
     }
     const handleFocus = () => {
       realtimeSync?.handleForeground()
-      if (!realtimeSync) void refreshStatus()
+      if (!realtimeSync) void refreshFamilyCarData()
     }
 
     void refreshStatus(true)
@@ -474,6 +479,7 @@ export function MainAppScreen({ user, accessToken, authUserId, onLogout }: {
         userName={user.name}
         accessToken={accessToken}
         version={APP_VERSION}
+        carDataRefreshVersion={carDataRefreshVersion}
         onClose={closeDashboard}
         onLogout={onLogout}
       />

@@ -71,6 +71,7 @@ models_stub = stub_module(
     CarConnection=type("CarConnection", (), {}),
     CarPlaySetupResponse=type("CarPlaySetupResponse", (), {}),
     CarPlaySetupStatusRequest=type("CarPlaySetupStatusRequest", (), {}),
+    CarHistoryResponse=type("CarHistoryResponse", (), {}),
     CarStatusResponse=type("CarStatusResponse", (), {}),
     ChatRequest=type("ChatRequest", (), {}),
     CreateFamilyAddressRequest=type("CreateFamilyAddressRequest", (), {}),
@@ -98,6 +99,20 @@ car_stub = stub_module(
     connect_user=Mock(),
     disconnect_user=Mock(),
     get_car_status=Mock(return_value="available"),
+)
+
+
+class FakeCarHistoryError(Exception):
+    def __init__(self, code="HISTORY_ERROR", message="History error", status_code=403):
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+
+
+history_stub = stub_module(
+    "history_service",
+    CarHistoryError=FakeCarHistoryError,
+    get_car_history=Mock(return_value={"active_usage": None, "recent_usage": []}),
 )
 
 
@@ -229,6 +244,7 @@ def load_main_module(environment=None):
                 "models": models_stub,
                 "database": database_stub,
                 "car_service": car_stub,
+                "history_service": history_stub,
                 "chat_service": chat_stub,
                 "carplay_setup_service": carplay_setup_stub,
                 "auth_service": auth_stub,
@@ -537,6 +553,28 @@ class CarStatusRouteTests(unittest.TestCase):
         self.assertEqual(result, {"status": "available"})
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         car_stub.get_car_status.assert_called_once_with(current_user)
+
+
+class CarHistoryRouteTests(unittest.TestCase):
+    def setUp(self):
+        history_stub.get_car_history.reset_mock(return_value=True, side_effect=True)
+        history_stub.get_car_history.return_value = {
+            "active_usage": None,
+            "recent_usage": [],
+        }
+
+    def test_route_is_protected_family_scoped_and_not_cached(self):
+        response = fastapi_stub.Response()
+        current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
+
+        result = main.car_history(response, current_user)
+        parameters = inspect.signature(main.car_history).parameters
+
+        self.assertEqual(tuple(parameters), ("response", "current_user"))
+        self.assertIs(parameters["current_user"].default.dependency, auth_stub.get_current_user)
+        history_stub.get_car_history.assert_called_once_with(current_user)
+        self.assertEqual(result, {"active_usage": None, "recent_usage": []})
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
 
 
 class CarPlaySetupRouteTests(unittest.TestCase):

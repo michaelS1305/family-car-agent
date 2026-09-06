@@ -99,11 +99,13 @@ test('one reusable placeholder remains for non-family categories', () => {
   assert.match(dashboardSource, /<FamilyScreen/)
   assert.match(dashboardSource, /activeCategory\.id === 'reservations'/)
   assert.match(dashboardSource, /<ReservationCenterScreen/)
+  assert.match(dashboardSource, /activeCategory\.id === 'history'/)
+  assert.match(dashboardSource, /<HistoryScreen/)
 })
 
 test('category back preserves the mounted rotary and restores focus to OK', () => {
   assert.match(dashboardSource, /<div className="dashboard-content" inert=\{categoryOpen\}>/)
-  assert.match(dashboardSource, /<RotarySelector[\s\S]*?<FamilyScreen[\s\S]*?<ReservationCenterScreen/)
+  assert.match(dashboardSource, /<RotarySelector[\s\S]*?<FamilyScreen[\s\S]*?<ReservationCenterScreen[\s\S]*?<HistoryScreen/)
   assert.match(dashboardSource, /aria-label="חזרה ללוח הבקרה"/)
   assert.match(dashboardSource, /setCategoryOpen\(false\)/)
   assert.match(dashboardSource, /confirmButtonRef\.current\?\.focus/)

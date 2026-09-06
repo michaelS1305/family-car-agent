@@ -20,6 +20,7 @@ import {
 import { DashboardCategoryIcon } from './DashboardCategoryIcon'
 import { FamilyScreen } from './FamilyScreen'
 import { ReservationCenterScreen } from './ReservationCenterScreen'
+import { HistoryScreen } from './HistoryScreen'
 
 function RotarySelector({
   confirmButtonRef,
@@ -197,6 +198,7 @@ export function DashboardScreen({
   userName,
   accessToken,
   version,
+  carDataRefreshVersion,
   onClose,
   onLogout,
 }: {
@@ -204,6 +206,7 @@ export function DashboardScreen({
   userName: string
   accessToken: string
   version: string
+  carDataRefreshVersion: number
   onClose: () => void
   onLogout: () => Promise<void>
 }) {
@@ -302,6 +305,13 @@ export function DashboardScreen({
           <FamilyScreen accessToken={accessToken} open={categoryOpen} onBack={closeCategory} />
         ) : activeCategory.id === 'reservations' ? (
           <ReservationCenterScreen accessToken={accessToken} open={categoryOpen} onBack={closeCategory} />
+        ) : activeCategory.id === 'history' ? (
+          <HistoryScreen
+            accessToken={accessToken}
+            open={categoryOpen}
+            refreshVersion={carDataRefreshVersion}
+            onBack={closeCategory}
+          />
         ) : (
           <CategoryPlaceholderScreen category={activeCategory} open={categoryOpen} onBack={closeCategory} />
         )
