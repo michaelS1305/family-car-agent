@@ -161,6 +161,7 @@ function RotarySelector({
 export function DashboardScreen({
   open,
   userName,
+  userEmail,
   accessToken,
   version,
   carDataRefreshVersion,
@@ -169,6 +170,7 @@ export function DashboardScreen({
 }: {
   open: boolean
   userName: string
+  userEmail: string
   accessToken: string
   version: string
   carDataRefreshVersion: number
@@ -288,7 +290,9 @@ export function DashboardScreen({
           <SettingsScreen
             open={categoryOpen}
             userName={userName}
+            userEmail={userEmail}
             accessToken={accessToken}
+            version={version}
             onBack={closeCategory}
             onOpenFamily={openFamily}
             onLogout={handleLogout}

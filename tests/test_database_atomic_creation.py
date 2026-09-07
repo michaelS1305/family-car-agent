@@ -466,6 +466,25 @@ class FamilyProfileDatabaseTests(unittest.TestCase):
         database.pool.connection.assert_called_once_with()
         self.connection.execute.assert_called_once()
 
+    def test_address_update_is_atomic_and_creator_scoped(self):
+        transaction = RecordingContext()
+        self.connection.transaction.return_value = transaction
+        self.cursor.fetchone.return_value = ("דימונה, המעפיל, 1210",)
+
+        result = database.update_family_address(
+            17, 42, "דימונה, המעפיל, 1210", 31.072, 35.036,
+        )
+
+        self.assertEqual(result, ("דימונה, המעפיל, 1210",))
+        sql, parameters = self.connection.execute.call_args.args
+        self.assertIn("created_by_user_id = %s", sql)
+        self.assertIn("home_address = %s", sql)
+        self.assertIn("home_latitude = %s", sql)
+        self.assertIn("home_longitude = %s", sql)
+        self.assertEqual(parameters, ("דימונה, המעפיל, 1210", 31.072, 35.036, 42, 17))
+        self.assertNotIn("car_events", sql)
+        self.assertTrue(transaction.committed)
+
     def test_updates_carplay_setup_status_for_internal_user_only(self):
         self.cursor.fetchone.return_value = ("skipped",)
 

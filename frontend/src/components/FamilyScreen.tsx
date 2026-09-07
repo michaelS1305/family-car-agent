@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   getFamily,
+  resolveFamilyAddress,
+  updateFamilyAddress,
   updateFamilyMemberRole,
   type FamilyProfile,
   type FamilyRole,
@@ -28,6 +30,11 @@ export function FamilyScreen({ accessToken, open, onBack }: {
   const [error, setError] = useState('')
   const [updatingMember, setUpdatingMember] = useState<string | null>(null)
   const [copyFeedback, setCopyFeedback] = useState('')
+  const [editingAddress, setEditingAddress] = useState(false)
+  const [addressInput, setAddressInput] = useState('')
+  const [resolvedAddress, setResolvedAddress] = useState<{ display: string; token: string } | null>(null)
+  const [addressBusy, setAddressBusy] = useState(false)
+  const [addressError, setAddressError] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -71,6 +78,45 @@ export function FamilyScreen({ accessToken, open, onBack }: {
       setCopyFeedback('הועתק ✓')
     } catch {
       setCopyFeedback('לא הצלחנו להעתיק')
+    }
+  }
+
+  const startAddressEdit = () => {
+    if (!family?.can_edit_roles) return
+    setAddressInput(family.home_address)
+    setResolvedAddress(null)
+    setAddressError('')
+    setEditingAddress(true)
+  }
+
+  const checkAddress = async () => {
+    if (addressBusy || !addressInput.trim()) return
+    setAddressBusy(true)
+    setAddressError('')
+    try {
+      const resolved = await resolveFamilyAddress(accessToken, addressInput.trim())
+      setResolvedAddress({ display: resolved.display_address, token: resolved.resolution_token })
+    } catch {
+      setAddressError('לא הצלחנו לאמת את הכתובת. בדקו את הפרטים ונסו שוב.')
+    } finally {
+      setAddressBusy(false)
+    }
+  }
+
+  const confirmAddress = async () => {
+    if (addressBusy || !resolvedAddress) return
+    setAddressBusy(true)
+    setAddressError('')
+    try {
+      const updated = await updateFamilyAddress(accessToken, resolvedAddress.token)
+      setFamily((current) => current ? { ...current, home_address: updated.home_address } : current)
+      setEditingAddress(false)
+      setResolvedAddress(null)
+    } catch {
+      setResolvedAddress(null)
+      setAddressError('לא הצלחנו לעדכן את הכתובת. הכתובת הקודמת נשארה ללא שינוי.')
+    } finally {
+      setAddressBusy(false)
     }
   }
 
@@ -145,9 +191,38 @@ export function FamilyScreen({ accessToken, open, onBack }: {
               </div>
             </section>
 
-            <section className="family-info-card">
+            <section className="family-info-card family-address-card">
               <h3>כתובת</h3>
-              <p>{family.home_address}</p>
+              {!editingAddress ? (
+                <>
+                  <p>{family.home_address}</p>
+                  {family.can_edit_roles ? <button type="button" onClick={startAddressEdit}>עריכת כתובת</button> : null}
+                </>
+              ) : (
+                <div className="family-address-editor">
+                  <label htmlFor="family-address-input">כתובת חדשה</label>
+                  <input
+                    id="family-address-input"
+                    value={addressInput}
+                    disabled={addressBusy}
+                    onChange={(event) => {
+                      setAddressInput(event.target.value)
+                      setResolvedAddress(null)
+                      setAddressError('')
+                    }}
+                    placeholder="עיר, רחוב, מספר בית"
+                  />
+                  {resolvedAddress ? (
+                    <div className="family-address-confirmation" role="status">
+                      <span>הכתובת שנמצאה</span>
+                      <strong>{resolvedAddress.display}</strong>
+                      <button type="button" disabled={addressBusy} onClick={() => void confirmAddress()}>אישור שינוי</button>
+                    </div>
+                  ) : <button type="button" disabled={addressBusy || !addressInput.trim()} onClick={() => void checkAddress()}>{addressBusy ? 'בודקים…' : 'בדיקת כתובת'}</button>}
+                  {addressError ? <p className="family-address-error" role="alert">{addressError}</p> : null}
+                  <button type="button" className="family-address-cancel" disabled={addressBusy} onClick={() => { setEditingAddress(false); setResolvedAddress(null); setAddressError('') }}>ביטול</button>
+                </div>
+              )}
             </section>
 
             <section className="family-info-card family-code-card">

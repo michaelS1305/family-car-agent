@@ -6,9 +6,11 @@ import type { OnboardingFlow } from '../auth/onboardingDraft'
 type AuthGateProps = {
   flow?: OnboardingFlow
   onBack?: () => void
+  onOpenPrivacy: () => void
+  onOpenTerms: () => void
 }
 
-export function AuthGate({ flow, onBack }: AuthGateProps) {
+export function AuthGate({ flow, onBack, onOpenPrivacy, onOpenTerms }: AuthGateProps) {
   const { isInitializing, authError, clearAuthError } = useAuth()
   const [isSigningIn, setIsSigningIn] = useState(false)
   const [signInError, setSignInError] = useState('')
@@ -92,6 +94,12 @@ export function AuthGate({ flow, onBack }: AuthGateProps) {
 
           <p className="auth-note">
             פרטי ההתחברות נשמרים ומנוהלים על ידי Supabase Auth.
+          </p>
+          <p className="auth-legal-notice">
+            אנו מעבדים מידע אישי כדי לספק את Family Car Agent. מידע על המטרות,
+            הספקים והזכויות שלך מופיע ב־{' '}
+            <button type="button" onClick={onOpenPrivacy}>מדיניות הפרטיות</button>
+            {' '}וב־<button type="button" onClick={onOpenTerms}>תנאי השימוש</button>.
           </p>
         </div>
       </section>

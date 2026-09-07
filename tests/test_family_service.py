@@ -1,4 +1,5 @@
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 import sys
 import types
@@ -11,13 +12,20 @@ from identity import CurrentUser
 database_stub = types.ModuleType("database")
 database_stub.get_family_profile = Mock()
 database_stub.update_family_member_role = Mock()
+database_stub.get_family_by_location = Mock()
+database_stub.update_family_address = Mock()
 
 
 def load_service():
     module_path = Path(__file__).resolve().parents[1] / "family_service.py"
     spec = importlib.util.spec_from_file_location("family_service_under_test", module_path)
     module = importlib.util.module_from_spec(spec)
-    with patch.dict(sys.modules, {"database": database_stub}):
+    geocoding_stub = types.ModuleType("geocoding_service")
+    geocoding_stub.geocode_address = Mock()
+    with patch.dict(sys.modules, {
+        "database": database_stub,
+        "geocoding_service": geocoding_stub,
+    }):
         spec.loader.exec_module(module)
     return module
 
@@ -27,8 +35,11 @@ service = load_service()
 
 class FamilyServiceTests(unittest.TestCase):
     def setUp(self):
+        service._address_resolutions.clear()
         database_stub.get_family_profile.reset_mock(return_value=True, side_effect=True)
         database_stub.update_family_member_role.reset_mock(return_value=True, side_effect=True)
+        database_stub.get_family_by_location.reset_mock(return_value=True, side_effect=True)
+        database_stub.update_family_address.reset_mock(return_value=True, side_effect=True)
         database_stub.get_family_profile.return_value = (
             ("כהן", "דימונה, המעפיל, 1209", "482731", 17),
             [
@@ -42,6 +53,8 @@ class FamilyServiceTests(unittest.TestCase):
             "parent",
             False,
         )
+        database_stub.get_family_by_location.return_value = None
+        database_stub.update_family_address.return_value = ("דימונה, המעפיל, 1210",)
 
     def current_user(self, user_id=17, family_id=42):
         return CurrentUser(user_id=user_id, name="מיכאל", family_id=family_id)
@@ -131,6 +144,125 @@ class FamilyServiceTests(unittest.TestCase):
         response = service.get_family_for_current_user(self.current_user())
         self.assertTrue(response["can_edit_roles"])
         self.assertEqual(response["members"][0].role, "child")
+
+    @patch.object(service, "geocode_address")
+    def test_creator_resolves_and_atomically_updates_address(self, geocode):
+        geocode.return_value = {
+            "address": "המעפיל 1210, דימונה, ישראל",
+            "latitude": 31.072,
+            "longitude": 35.036,
+        }
+        resolved = service.resolve_family_address_for_current_user(
+            self.current_user(),
+            "דימונה, המעפיל, 1210",
+        )
+        updated = service.update_family_address_for_current_user(
+            self.current_user(),
+            resolved["resolution_token"],
+        )
+        self.assertEqual(updated["home_address"], "דימונה, המעפיל, 1210")
+        database_stub.update_family_address.assert_called_once_with(
+            17, 42, "דימונה, המעפיל, 1210", 31.072, 35.036,
+        )
+
+    @patch.object(service, "geocode_address")
+    def test_non_creator_cannot_resolve_or_update_address(self, geocode):
+        with self.assertRaises(service.FamilyProfileError) as raised:
+            service.resolve_family_address_for_current_user(
+                self.current_user(user_id=18), "דימונה, המעפיל, 1210",
+            )
+        self.assertEqual(raised.exception.status_code, 403)
+        geocode.assert_not_called()
+        database_stub.update_family_address.assert_not_called()
+
+    @patch.object(service, "geocode_address", return_value=None)
+    def test_unresolved_address_is_rejected_without_update(self, _geocode):
+        with self.assertRaises(service.FamilyProfileError) as raised:
+            service.resolve_family_address_for_current_user(
+                self.current_user(), "דימונה, המעפיל, 9999",
+            )
+        self.assertEqual(raised.exception.code, "ADDRESS_NOT_FOUND")
+        database_stub.update_family_address.assert_not_called()
+
+    @patch.object(service, "geocode_address")
+    def test_address_used_by_another_family_is_rejected_before_update(self, geocode):
+        geocode.return_value = {
+            "address": "המעפיל 1210, דימונה, ישראל",
+            "latitude": 31.072,
+            "longitude": 35.036,
+        }
+        database_stub.get_family_by_location.return_value = (99,)
+
+        with self.assertRaises(service.FamilyProfileError) as raised:
+            service.resolve_family_address_for_current_user(
+                self.current_user(), "דימונה, המעפיל, 1210",
+            )
+
+        self.assertEqual(raised.exception.code, "FAMILY_ALREADY_EXISTS_AT_ADDRESS")
+        database_stub.update_family_address.assert_not_called()
+
+    @patch.object(service, "geocode_address")
+    def test_failed_authorized_update_preserves_old_address_and_consumes_resolution(self, geocode):
+        geocode.return_value = {
+            "address": "המעפיל 1210, דימונה, ישראל",
+            "latitude": 31.072,
+            "longitude": 35.036,
+        }
+        database_stub.update_family_address.return_value = None
+        resolved = service.resolve_family_address_for_current_user(
+            self.current_user(), "דימונה, המעפיל, 1210",
+        )
+
+        with self.assertRaises(service.FamilyProfileError) as raised:
+            service.update_family_address_for_current_user(
+                self.current_user(), resolved["resolution_token"],
+            )
+
+        self.assertEqual(raised.exception.code, "FAMILY_ADDRESS_FORBIDDEN")
+        with self.assertRaises(service.FamilyProfileError) as replay:
+            service.update_family_address_for_current_user(
+                self.current_user(), resolved["resolution_token"],
+            )
+        self.assertEqual(replay.exception.code, "ADDRESS_RESOLUTION_EXPIRED")
+
+    @patch.object(service, "geocode_address")
+    def test_expired_address_resolution_fails_closed(self, geocode):
+        geocode.return_value = {
+            "address": "המעפיל 1210, דימונה, ישראל",
+            "latitude": 31.072,
+            "longitude": 35.036,
+        }
+        resolved = service.resolve_family_address_for_current_user(
+            self.current_user(), "דימונה, המעפיל, 1210",
+        )
+        token = resolved["resolution_token"]
+        service._address_resolutions[token] = replace(
+            service._address_resolutions[token],
+            expires_at=0,
+        )
+
+        with self.assertRaises(service.FamilyProfileError) as raised:
+            service.update_family_address_for_current_user(self.current_user(), token)
+
+        self.assertEqual(raised.exception.code, "ADDRESS_RESOLUTION_EXPIRED")
+        database_stub.update_family_address.assert_not_called()
+
+    @patch.object(service, "geocode_address")
+    def test_stale_or_foreign_resolution_fails_closed(self, geocode):
+        geocode.return_value = {
+            "address": "המעפיל 1210, דימונה, ישראל",
+            "latitude": 31.072,
+            "longitude": 35.036,
+        }
+        resolved = service.resolve_family_address_for_current_user(
+            self.current_user(), "דימונה, המעפיל, 1210",
+        )
+        with self.assertRaises(service.FamilyProfileError) as raised:
+            service.update_family_address_for_current_user(
+                self.current_user(user_id=99), resolved["resolution_token"],
+            )
+        self.assertEqual(raised.exception.status_code, 403)
+        database_stub.update_family_address.assert_not_called()
 
 
 if __name__ == "__main__":

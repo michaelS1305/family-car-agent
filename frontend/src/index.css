@@ -22,11 +22,11 @@
 }
 
 html[data-text-size='small'] {
-  --app-font-scale: 0.94;
+  --app-font-scale: 0.875;
 }
 
 html[data-text-size='large'] {
-  --app-font-scale: 1.08;
+  --app-font-scale: 1.125;
 }
 
 html[data-effective-theme='dark'] {

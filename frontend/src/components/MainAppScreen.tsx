@@ -96,8 +96,9 @@ function isRetryableWithSameRequest(error: unknown) {
   )
 }
 
-export function MainAppScreen({ user, accessToken, authUserId, onLogout }: {
+export function MainAppScreen({ user, userEmail, accessToken, authUserId, onLogout }: {
   user: InternalUser
+  userEmail: string
   accessToken: string
   authUserId: string
   onLogout: () => Promise<void>
@@ -477,6 +478,7 @@ export function MainAppScreen({ user, accessToken, authUserId, onLogout }: {
       <DashboardScreen
         open={dashboardOpen}
         userName={user.name}
+        userEmail={userEmail}
         accessToken={accessToken}
         version={APP_VERSION}
         carDataRefreshVersion={carDataRefreshVersion}

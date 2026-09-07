@@ -66,5 +66,7 @@ test('provider follows system changes only through the system preference and sta
   assert.match(html, /dataset\.effectiveTheme/)
   assert.match(css, /html\[data-text-size='small'\]/)
   assert.match(css, /html\[data-text-size='large'\]/)
+  assert.match(css, /html\[data-text-size='small'\][\s\S]*?0\.875/)
+  assert.match(css, /html\[data-text-size='large'\][\s\S]*?1\.125/)
   assert.match(css, /html\[data-effective-theme='dark'\]/)
 })
