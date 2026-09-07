@@ -7,6 +7,7 @@ import {
   currentNotificationPermission,
   detectPushCapability,
   disableCurrentDevicePush,
+  inspectCurrentDevicePushState,
   preloadPushConfiguration,
   urlBase64ToUint8Array,
 } from '../src/push/pushNotifications.ts'
@@ -38,7 +39,7 @@ function pushEnvironment(options: {
   order?: string[]
 } = {}) {
   const calls = { permission: 0, ready: 0, subscribe: 0, unsubscribe: 0, fetches: [] as string[] }
-  const subscription = options.subscription ?? {
+  const subscription = options.subscription === undefined ? {
     endpoint: 'https://push.example/device',
     expirationTime: null,
     toJSON: () => ({ keys: { p256dh: 'browser-public-key', auth: 'browser-auth' } }),
@@ -47,7 +48,7 @@ function pushEnvironment(options: {
       options.order?.push('unsubscribe')
       return true
     },
-  }
+  } : options.subscription
   const pushManager = {
     getSubscription: async () => subscription,
     subscribe: async () => {
@@ -219,6 +220,30 @@ test('explicit disable removes server registration before browser unsubscribe', 
     assert.deepEqual(order, ['remove', 'unsubscribe'])
   } finally {
     environment.restore()
+  }
+})
+
+test('current-device inspection distinguishes subscription, denial and no subscription', async () => {
+  const subscribed = pushEnvironment({ permission: 'granted' })
+  try {
+    assert.equal(await inspectCurrentDevicePushState(), 'subscribed')
+  } finally {
+    subscribed.restore()
+  }
+
+  const unsubscribed = pushEnvironment({ permission: 'granted', subscription: null })
+  try {
+    assert.equal(await inspectCurrentDevicePushState(), 'unsubscribed')
+  } finally {
+    unsubscribed.restore()
+  }
+
+  const denied = pushEnvironment({ permission: 'denied' })
+  try {
+    assert.equal(await inspectCurrentDevicePushState(), 'denied')
+    assert.equal(denied.calls.ready, 0)
+  } finally {
+    denied.restore()
   }
 })
 

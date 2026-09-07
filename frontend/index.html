@@ -10,6 +10,25 @@
     <meta name="theme-color" content="#fffefc" />
     <meta name="description" content="ניהול חכם של הרכב המשפחתי המשותף" />
     <title>Family Car Agent</title>
+    <script>
+      (() => {
+        try {
+          const raw = localStorage.getItem('family-car-agent:preferences')
+          const saved = raw ? JSON.parse(raw) : {}
+          const theme = ['system', 'light', 'dark'].includes(saved.theme) ? saved.theme : 'system'
+          const textSize = ['small', 'normal', 'large'].includes(saved.textSize) ? saved.textSize : 'normal'
+          const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.dataset.theme = theme
+          document.documentElement.dataset.effectiveTheme = dark ? 'dark' : 'light'
+          document.documentElement.dataset.textSize = textSize
+          document.querySelector('meta[name="theme-color"]').content = dark ? '#111820' : '#fffefc'
+        } catch {
+          document.documentElement.dataset.theme = 'system'
+          document.documentElement.dataset.effectiveTheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+          document.documentElement.dataset.textSize = 'normal'
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -22,6 +22,7 @@ import { FamilyScreen } from './FamilyScreen'
 import { ReservationCenterScreen } from './ReservationCenterScreen'
 import { HistoryScreen } from './HistoryScreen'
 import { VehiclesScreen } from './VehiclesScreen'
+import { SettingsScreen } from './SettingsScreen'
 
 function RotarySelector({
   confirmButtonRef,
@@ -157,43 +158,6 @@ function RotarySelector({
   )
 }
 
-function CategoryPlaceholderScreen({
-  category,
-  open,
-  onBack,
-}: {
-  category: DashboardCategory
-  open: boolean
-  onBack: () => void
-}) {
-  const backButtonRef = useRef<HTMLButtonElement | null>(null)
-
-  useEffect(() => {
-    if (open) backButtonRef.current?.focus({ preventScroll: true })
-  }, [open])
-
-  return (
-    <section
-      className={`category-placeholder-screen${open ? ' is-open' : ''}`}
-      dir="rtl"
-      role="dialog"
-      aria-modal="true"
-      aria-label={category.label}
-      aria-hidden={!open}
-      inert={!open}
-    >
-      <header className="dashboard-header category-placeholder-header">
-        <button ref={backButtonRef} type="button" onClick={onBack} aria-label="חזרה ללוח הבקרה">
-          <span aria-hidden="true">×</span>
-        </button>
-        <h1>Family Car Agent</h1>
-        <span aria-hidden="true" />
-      </header>
-      <h2>{category.label}</h2>
-    </section>
-  )
-}
-
 export function DashboardScreen({
   open,
   userName,
@@ -263,6 +227,11 @@ export function DashboardScreen({
     }
   }
 
+  const openFamily = useCallback(() => {
+    const familyCategory = DASHBOARD_CATEGORIES.find(({ id }) => id === 'family')
+    if (familyCategory) openCategory(familyCategory)
+  }, [openCategory])
+
   return (
     <section
       className={`dashboard-screen${open ? ' is-open' : ''}`}
@@ -315,9 +284,16 @@ export function DashboardScreen({
           />
         ) : activeCategory.id === 'cars' ? (
           <VehiclesScreen open={categoryOpen} onBack={closeCategory} />
-        ) : (
-          <CategoryPlaceholderScreen category={activeCategory} open={categoryOpen} onBack={closeCategory} />
-        )
+        ) : activeCategory.id === 'settings' ? (
+          <SettingsScreen
+            open={categoryOpen}
+            userName={userName}
+            accessToken={accessToken}
+            onBack={closeCategory}
+            onOpenFamily={openFamily}
+            onLogout={handleLogout}
+          />
+        ) : null
       ) : null}
     </section>
   )

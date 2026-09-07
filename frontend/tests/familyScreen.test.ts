@@ -11,10 +11,10 @@ const dashboardSource = readFileSync(
   'utf8',
 )
 
-test('family category opens the real screen while other categories keep the placeholder', () => {
+test('family category opens the real screen without a generic placeholder', () => {
   assert.match(dashboardSource, /activeCategory\.id === 'family'/)
   assert.match(dashboardSource, /<FamilyScreen accessToken=\{accessToken\}/)
-  assert.match(dashboardSource, /<CategoryPlaceholderScreen category=\{activeCategory\}/)
+  assert.doesNotMatch(dashboardSource, /<CategoryPlaceholderScreen/)
 })
 
 test('family screen renders real members, address, code and separate admin status', () => {

@@ -1942,6 +1942,485 @@
   outline-offset: 2px;
 }
 
+.settings-screen {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.settings-screen-scroll {
+  width: min(100%, 640px);
+  min-height: 0;
+  margin: 0 auto;
+  padding: 18px 2px max(30px, env(safe-area-inset-bottom));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.settings-screen-title {
+  margin-bottom: 25px;
+}
+
+.settings-sections {
+  display: grid;
+  gap: 25px;
+}
+
+.settings-group h3 {
+  margin: 0 10px 8px;
+  color: #6b7884;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.settings-card {
+  overflow: hidden;
+  border: 1px solid rgba(65, 82, 101, 0.1);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 8px 24px rgba(38, 50, 65, 0.04);
+  -webkit-backdrop-filter: blur(12px) saturate(112%);
+  backdrop-filter: blur(12px) saturate(112%);
+}
+
+.settings-row,
+.settings-control-row {
+  width: 100%;
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 16px;
+  border: 0;
+  color: #344150;
+  background: transparent;
+  font: inherit;
+  text-align: right;
+}
+
+.settings-row:not(:first-child),
+.settings-control-row:not(:first-child),
+.settings-note,
+.settings-inline-error {
+  border-top: 1px solid rgba(65, 82, 101, 0.1);
+}
+
+button.settings-row {
+  min-height: 54px;
+  cursor: pointer;
+}
+
+button.settings-row:not(.settings-row-danger)::after {
+  content: '';
+}
+
+.settings-row-static strong,
+.settings-row-value {
+  color: #71808c;
+  font-size: 0.84rem;
+  font-weight: 580;
+}
+
+.settings-row-danger {
+  color: #9a4642;
+  font-weight: 680;
+}
+
+.settings-row-danger:disabled {
+  opacity: 0.56;
+  cursor: wait;
+}
+
+.settings-control-row {
+  flex-wrap: wrap;
+}
+
+.settings-control-row > span {
+  font-weight: 610;
+}
+
+.settings-segmented {
+  min-width: min(100%, 244px);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border-radius: 12px;
+  background: rgba(224, 230, 234, 0.66);
+}
+
+.settings-segmented button {
+  min-width: 58px;
+  min-height: 38px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 9px;
+  color: #697682;
+  background: transparent;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.settings-segmented button[aria-pressed='true'] {
+  color: #294967;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 2px 8px rgba(38, 50, 65, 0.1);
+}
+
+.settings-note,
+.settings-inline-error {
+  margin: 0;
+  padding: 12px 16px;
+  color: #6c7882;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.settings-notification-row > span {
+  display: grid;
+  gap: 3px;
+}
+
+.settings-notification-row small {
+  color: #76828c;
+  font-size: 0.76rem;
+}
+
+.settings-switch {
+  width: 52px;
+  height: 32px;
+  flex: 0 0 auto;
+  position: relative;
+  padding: 2px;
+  border: 0;
+  border-radius: 999px;
+  background: #c9cfcc;
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+
+.settings-switch i {
+  width: 28px;
+  height: 28px;
+  display: block;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(38, 50, 65, 0.22);
+  transform: translateX(-20px);
+  transition: transform 160ms ease;
+}
+
+.settings-switch[aria-checked='true'] {
+  background: #4f8d77;
+}
+
+.settings-switch[aria-checked='true'] i {
+  transform: translateX(0);
+}
+
+.settings-switch:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #8b4742;
+}
+
+.settings-inline-error p {
+  margin: 0;
+}
+
+.settings-inline-error button {
+  min-width: 70px;
+  min-height: 44px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.settings-screen button:focus-visible {
+  outline: 3px solid rgba(40, 112, 92, 0.34);
+  outline-offset: 2px;
+}
+
+@media (max-width: 430px) {
+  .settings-control-row {
+    align-items: stretch;
+  }
+
+  .settings-control-row > span {
+    width: 100%;
+  }
+
+  .settings-segmented {
+    width: 100%;
+  }
+}
+
+html[data-effective-theme='dark'] .welcome-screen,
+html[data-effective-theme='dark'] .flow-screen,
+html[data-effective-theme='dark'] .success-screen,
+html[data-effective-theme='dark'] .identity-state-screen,
+html[data-effective-theme='dark'] .carplay-wizard,
+html[data-effective-theme='dark'] .main-chat-screen {
+  color: var(--app-text);
+  background: var(--app-canvas);
+}
+
+html[data-effective-theme='dark'] .dashboard-screen,
+html[data-effective-theme='dark'] .category-placeholder-screen {
+  color: var(--app-text);
+  background:
+    radial-gradient(circle at 50% 32%, rgba(73, 104, 130, 0.16), transparent 42%),
+    rgba(17, 24, 32, 0.97);
+}
+
+html[data-effective-theme='dark'] .main-chat-screen {
+  --chat-user-surface: #3d617d;
+}
+
+html[data-effective-theme='dark'] .main-chat-screen::before {
+  background: linear-gradient(to bottom, rgba(17, 24, 32, 0.5), rgba(17, 24, 32, 0));
+}
+
+html[data-effective-theme='dark'] .main-chat-screen::after {
+  background: linear-gradient(to bottom, rgba(17, 24, 32, 0), rgba(17, 24, 32, 0.5));
+}
+
+html[data-effective-theme='dark'] :is(
+  .brand-section h1,
+  .brand-section h2,
+  .step-copy h1,
+  .success-screen h1,
+  .main-chat-title,
+  .chat-bubble-assistant,
+  .chat-suggestions button,
+  .chat-composer textarea,
+  .dashboard-header button,
+  .dashboard-header strong,
+  .dashboard-greeting,
+  .category-placeholder-screen,
+  .family-code-card strong,
+  .family-member-copy strong,
+  .reservation-card strong,
+  .reservation-editor input,
+  .history-current strong,
+  .history-card strong,
+  .vehicles-development-card h3,
+  .settings-row,
+  .settings-control-row
+) {
+  color: var(--app-text);
+}
+
+html[data-effective-theme='dark'] :is(
+  .brand-section p,
+  .step-copy p,
+  .identity-state-screen p,
+  .carplay-secondary-copy,
+  .carplay-primary-instruction,
+  .carplay-instructions,
+  .carplay-final-note,
+  .connection-code-panel span,
+  .final-processing-screen small,
+  .final-processing-message,
+  .progress-label,
+  .field-group label,
+  .success-brand,
+  .success-copy,
+  .chat-empty-state > p,
+  .chat-time-label,
+  .chat-day-separator,
+  .dashboard-instruction,
+  .dashboard-footer small,
+  .family-screen-state,
+  .family-screen-title,
+  .family-member-copy span,
+  .family-code-card span,
+  .reservation-card span,
+  .reservation-card p,
+  .reservation-editor label > span,
+  .reservation-empty,
+  .history-current p,
+  .history-card span,
+  .history-empty,
+  .vehicles-development-card p,
+  .vehicles-development-card svg,
+  .settings-group h3,
+  .settings-row-static strong,
+  .settings-row-value,
+  .settings-notification-row small,
+  .settings-note
+) {
+  color: var(--app-text-muted);
+}
+
+html[data-effective-theme='dark'] .final-processing-message {
+  color: var(--app-text-secondary) !important;
+}
+
+html[data-effective-theme='dark'] :is(.connection-code-panel strong, .family-code-panel strong) {
+  color: #a9cbbb;
+}
+
+html[data-effective-theme='dark'] .rotary-category {
+  color: #9aa8b5;
+}
+
+html[data-effective-theme='dark'] .rotary-category.is-selected,
+html[data-effective-theme='dark'] .family-screen-title {
+  color: #a7c5dc;
+}
+
+html[data-effective-theme='dark'] :is(
+  .auth-card,
+  .address-preview,
+  .family-code-panel,
+  .connection-code-panel,
+  .chat-bubble-assistant,
+  .chat-loading,
+  .chat-typing,
+  .chat-suggestions button,
+  .chat-composer-field,
+  .family-member,
+  .family-info-card,
+  .reservation-card,
+  .reservation-editor,
+  .history-current,
+  .history-card,
+  .vehicles-development-card,
+  .settings-card
+) {
+  border-color: var(--app-border);
+  background: var(--app-surface);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.16);
+}
+
+html[data-effective-theme='dark'] :is(
+  .welcome-actions button,
+  .back-button,
+  .secondary-button,
+  .carplay-wizard-navigation button,
+  .family-role-field select,
+  .reservation-card-actions button,
+  .reservation-delete-confirm button,
+  .reservation-form-actions button.secondary,
+  .reservation-editor input
+) {
+  border-color: var(--app-border);
+  color: var(--app-text);
+  background: var(--app-surface-strong);
+}
+
+html[data-effective-theme='dark'] :is(
+  .primary-button,
+  .reservation-add-button,
+  .reservation-form-actions button
+) {
+  border-color: var(--app-control);
+  color: var(--app-control-text);
+  background: var(--app-control);
+}
+
+html[data-effective-theme='dark'] :is(.main-chat-header, .chat-menu-button, .car-status-pill, .dashboard-header button, .dashboard-logout) {
+  border-color: rgba(221, 233, 240, 0.16);
+  color: var(--app-text);
+  background: rgba(31, 43, 53, 0.48);
+  box-shadow: 0 7px 22px rgba(0, 0, 0, 0.14);
+}
+
+html[data-effective-theme='dark'] .chat-composer-field:focus-within {
+  border-color: #78998d;
+  box-shadow: 0 0 0 3px rgba(126, 190, 169, 0.18);
+}
+
+html[data-effective-theme='dark'] .chat-composer textarea::placeholder {
+  color: #89969f;
+}
+
+html[data-effective-theme='dark'] .chat-day-separator::before,
+html[data-effective-theme='dark'] .chat-day-separator::after {
+  background: rgba(196, 210, 219, 0.18);
+}
+
+html[data-effective-theme='dark'] .chat-history-error,
+html[data-effective-theme='dark'] .auth-error,
+html[data-effective-theme='dark'] .chat-bubble-user.is-failed {
+  border-color: rgba(240, 161, 155, 0.28);
+  color: #f0aaa4;
+  background: rgba(104, 48, 48, 0.42);
+}
+
+html[data-effective-theme='dark'] .settings-segmented,
+html[data-effective-theme='dark'] .reservation-filters > div {
+  border-color: var(--app-border);
+  background: rgba(7, 13, 18, 0.34);
+}
+
+html[data-effective-theme='dark'] .settings-segmented button,
+html[data-effective-theme='dark'] .reservation-filters button {
+  color: var(--app-text-muted);
+}
+
+html[data-effective-theme='dark'] .settings-segmented button[aria-pressed='true'],
+html[data-effective-theme='dark'] .reservation-filters button[aria-pressed='true'] {
+  color: var(--app-text);
+  background: rgba(77, 100, 117, 0.62);
+  box-shadow: 0 2px 9px rgba(0, 0, 0, 0.2);
+}
+
+html[data-effective-theme='dark'] .settings-row:not(:first-child),
+html[data-effective-theme='dark'] .settings-control-row:not(:first-child),
+html[data-effective-theme='dark'] .settings-note,
+html[data-effective-theme='dark'] .settings-inline-error {
+  border-color: var(--app-border);
+}
+
+html[data-effective-theme='dark'] .settings-row-danger,
+html[data-effective-theme='dark'] .settings-inline-error,
+html[data-effective-theme='dark'] .field-error,
+html[data-effective-theme='dark'] .reservation-form-error {
+  color: var(--app-danger);
+}
+
+html[data-effective-theme='dark'] :is(.auth-mark, .success-mark, .final-processing-spinner) {
+  color: #8bc5af;
+  background: rgba(51, 92, 78, 0.34);
+}
+
+html[data-effective-theme='dark'] :is(.carplay-callout, .carplay-final-note) {
+  border-color: rgba(126, 190, 169, 0.2);
+  color: #a8d2c2;
+  background: rgba(43, 75, 66, 0.34);
+}
+
+html[data-effective-theme='dark'] :is(.separator, .carplay-progress-bar) {
+  background: #35414a;
+}
+
+html[data-effective-theme='dark'] .settings-switch {
+  background: #53616a;
+}
+
+html[data-effective-theme='dark'] .settings-switch[aria-checked='true'] {
+  background: #5e9c84;
+}
+
+html[data-effective-theme='dark'] :is(button, input, textarea, select):focus-visible {
+  outline-color: var(--app-focus);
+}
+
 @media (max-width: 390px) {
   .reservation-filters {
     grid-template-columns: 1fr;
