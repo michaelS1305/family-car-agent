@@ -13,6 +13,8 @@ const dashboardSource = readFileSync(
   'utf8',
 )
 const appCssSource = readFileSync(new URL('../src/App.css', import.meta.url), 'utf8')
+const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+const legalSource = readFileSync(new URL('../src/legal/legalDocuments.ts', import.meta.url), 'utf8')
 
 test('settings is a dedicated Dashboard category with the shared identity and icon', () => {
   assert.match(dashboardSource, /activeCategory\.id === 'settings'/)
@@ -23,14 +25,36 @@ test('settings is a dedicated Dashboard category with the shared identity and ic
   assert.doesNotMatch(dashboardSource, /CategoryPlaceholderScreen/)
 })
 
-test('screen contains only the approved grouped settings', () => {
-  for (const title of ['חשבון', 'תצוגה', 'הרשאות', 'התראות']) {
+test('screen contains the approved phase-one groups and exact account order', () => {
+  for (const title of ['חשבון', 'תצוגה', 'הרשאות']) {
     assert.match(settingsSource, new RegExp(`>${title}<`))
+  }
+  const account = ['>שם<', '>המשפחה שלי<', '>אימייל<', '>קוד חיבור ל־CarPlay<']
+  let previous = -1
+  for (const marker of account) {
+    const index = settingsSource.indexOf(marker)
+    assert.ok(index > previous)
+    previous = index
   }
   assert.match(settingsSource, /מצב תצוגה/)
   assert.match(settingsSource, /גודל טקסט/)
-  assert.match(settingsSource, /עדכונים על הרכב/)
-  assert.doesNotMatch(settingsSource, /מצלמה|מיקרופון|מיקום|אנשי קשר/)
+  assert.match(settingsSource, /שליחת התראות/)
+  assert.match(settingsSource, /מיקום/)
+  assert.match(settingsSource, /CarPlay/)
+})
+
+test('account values use a two-column grid and email comes read-only from Supabase session', () => {
+  assert.match(appCssSource, /\.settings-row,[\s\S]*?grid-template-columns:/)
+  assert.doesNotMatch(appCssSource, /button\.settings-row:not\(\.settings-row-danger\)::after/)
+  assert.match(settingsSource, /userEmail: string/)
+  assert.match(appSource, /userEmail=\{session\.user\.email \?\? ''\}/)
+  assert.doesNotMatch(settingsSource, /type="email"|onChange=.*userEmail/)
+})
+
+test('phase one never fetches or reveals the CarPlay connection credential', () => {
+  assert.match(settingsSource, /קוד מוסתר/)
+  assert.match(settingsSource, /חשיפה מאובטחת תתווסף בהמשך/)
+  assert.doesNotMatch(settingsSource, /prepareCarPlaySetup|\/api\/carplay\/setup|shortcut_token|connection_code/)
 })
 
 test('account actions reuse Family navigation and existing bounded logout cleanup', () => {
@@ -70,5 +94,20 @@ test('dark mode covers the existing application surfaces without changing rotary
   assert.match(appCssSource, /html\[data-effective-theme='dark'\] \.main-chat-screen/)
   assert.match(appCssSource, /html\[data-effective-theme='dark'\] \.dashboard-screen/)
   assert.match(appCssSource, /\.family-member[\s\S]*?\.reservation-card[\s\S]*?\.history-current[\s\S]*?\.vehicles-development-card[\s\S]*?\.settings-card/)
-  assert.equal((appCssSource.match(/\.rotary-selection-glow \{/g) ?? []).length, 1)
+  assert.match(appCssSource, /html\[data-effective-theme='dark'\] \.rotary-selection-glow/)
+  assert.match(appCssSource, /html\[data-effective-theme='dark'\] \.rotary-knob::before/)
+  assert.match(appCssSource, /html\[data-effective-theme='dark'\] \.rotary-knob/)
+})
+
+test('permission help, legal readers and truthful about details are present once', () => {
+  assert.match(settingsSource, /shortcuts:\/\/open-shortcut\?name=Disconnect%20From%20CarPlay/)
+  assert.match(settingsSource, /shortcuts:\/\//)
+  assert.equal((settingsSource.match(/>פרטיות</g) ?? []).length, 1)
+  assert.equal((settingsSource.match(/>תנאי שימוש</g) ?? []).length, 1)
+  assert.equal((settingsSource.match(/>אודות</g) ?? []).length, 1)
+  assert.match(settingsSource, /ערוץ התמיכה עדיין אינו זמין/)
+  assert.match(settingsSource, /version/)
+  assert.match(legalSource, /Google Maps/)
+  assert.match(legalSource, /Gemini/)
+  assert.doesNotMatch(legalSource, /zero retention|אפס שמירה|לא משמש.*אימון/)
 })

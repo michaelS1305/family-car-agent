@@ -17,6 +17,10 @@ from models import (
     CreateFamilyAddressRequest,
     CreateFamilyRequest,
     FamilyMemberResponse,
+    FamilyAddressResolveRequest,
+    FamilyAddressResolveResponse,
+    FamilyAddressUpdateRequest,
+    FamilyAddressUpdateResponse,
     FamilyResponse,
     FamilyRoleUpdateRequest,
     JoinFamilyAddressConfirmationRequest,
@@ -52,7 +56,9 @@ from family_creation_service import (
 from family_service import (
     FamilyProfileError,
     get_family_for_current_user,
+    resolve_family_address_for_current_user,
     set_family_member_role,
+    update_family_address_for_current_user,
 )
 from identity import AuthenticatedSupabaseUser, CurrentUser
 from join_family_service import (
@@ -151,6 +157,36 @@ def set_family_role(
 ):
     try:
         return set_family_member_role(current_user, member_ref, request.role)
+    except FamilyProfileError as error:
+        _raise_family_profile_error(error)
+
+
+@app.post(
+    "/api/family/address/resolve",
+    response_model=FamilyAddressResolveResponse,
+    status_code=200,
+)
+def resolve_current_family_address(
+    request: FamilyAddressResolveRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return resolve_family_address_for_current_user(current_user, request.home_address)
+    except FamilyProfileError as error:
+        _raise_family_profile_error(error)
+
+
+@app.patch(
+    "/api/family/address",
+    response_model=FamilyAddressUpdateResponse,
+    status_code=200,
+)
+def update_current_family_address(
+    request: FamilyAddressUpdateRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return update_family_address_for_current_user(current_user, request.resolution_token)
     except FamilyProfileError as error:
         _raise_family_profile_error(error)
 

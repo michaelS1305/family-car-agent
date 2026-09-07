@@ -120,6 +120,28 @@ class FamilyRoleUpdateRequest(BaseModel):
     role: Literal["parent", "child"] | None
 
 
+class FamilyAddressResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    home_address: str
+
+
+class FamilyAddressResolveResponse(BaseModel):
+    normalized_address: str
+    display_address: str
+    resolution_token: str
+
+
+class FamilyAddressUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resolution_token: str
+
+
+class FamilyAddressUpdateResponse(BaseModel):
+    home_address: str
+
+
 class ReservationResponse(BaseModel):
     owner_name: str
     start_time: str

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { FormEvent, ReactNode } from 'react'
 import './App.css'
 import { useAuth } from './auth/authContext'
 import {
@@ -22,6 +22,8 @@ import { AuthGate } from './components/AuthGate'
 import { createInvalidSessionRecovery } from './auth/invalidSessionRecovery'
 import { CarPlaySetupWizard } from './components/CarPlaySetupWizard'
 import { MainAppScreen } from './components/MainAppScreen'
+import { LegalDocumentScreen } from './components/LegalDocumentScreen'
+import type { LegalDocumentKind } from './legal/legalDocuments'
 import { clearCarPlaySetupDraft } from './carplay/carPlaySetupDraft'
 import { resolveAppDestination } from './auth/appDestination'
 import {
@@ -194,6 +196,8 @@ type FlowScreenProps = {
   onContinue: () => void
   onChangeAddress: () => void
   onFinish: () => void
+  eligibilityAccepted: boolean
+  onEligibilityChange: (accepted: boolean) => void
 }
 
 function FlowHeader({
@@ -235,6 +239,7 @@ function TextStep({
   isSubmitting = false,
   onChange,
   onContinue,
+  additionalContent,
 }: {
   title: string
   description?: string
@@ -248,6 +253,7 @@ function TextStep({
   isSubmitting?: boolean
   onChange: (value: string) => void
   onContinue: () => void
+  additionalContent?: ReactNode
 }) {
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -279,6 +285,8 @@ function TextStep({
         />
         {error && <p className="field-error" id="field-error">{error}</p>}
       </div>
+
+      {additionalContent}
 
       <button type="submit" className="primary-button" disabled={isSubmitting}>
         {isSubmitting ? 'אנא המתינו…' : buttonText}
@@ -374,6 +382,8 @@ function FlowScreen(props: FlowScreenProps) {
     onContinue,
     onChangeAddress,
     onFinish,
+    eligibilityAccepted,
+    onEligibilityChange,
   } = props
 
   if (step === 5) {
@@ -415,7 +425,7 @@ function FlowScreen(props: FlowScreenProps) {
       content = (
         <TextStep
           title="מה כתובת הבית?"
-          description="יש לכתוב בפורמט הבא בלבד: עיר, רחוב, מספר בית"
+          description="הכתובת נדרשת לאימות המשפחה ולבדיקת ניתוק אופציונלית בקרבת הבית. היא נפתרת באמצעות Google Maps. יש לכתוב: עיר, רחוב, מספר בית."
           label="כתובת הבית"
           value={form.address}
           placeholder="תל אביב, דיזנגוף, 120"
@@ -448,6 +458,7 @@ function FlowScreen(props: FlowScreenProps) {
           isSubmitting={isSubmitting}
           onChange={(value) => onChange('userName', value)}
           onContinue={onContinue}
+          additionalContent={<DriverEligibilityDeclaration checked={eligibilityAccepted} onChange={onEligibilityChange} />}
         />
       )
     }
@@ -468,7 +479,7 @@ function FlowScreen(props: FlowScreenProps) {
     content = (
       <TextStep
         title="מה כתובת הבית?"
-        description="יש לכתוב בפורמט הבא בלבד: עיר, רחוב, מספר בית"
+        description="הכתובת נדרשת לאימות המשפחה ולבדיקת ניתוק אופציונלית בקרבת הבית. היא נפתרת באמצעות Google Maps. יש לכתוב: עיר, רחוב, מספר בית."
         label="כתובת הבית"
         value={form.address}
         placeholder="תל אביב, דיזנגוף, 120"
@@ -517,6 +528,7 @@ function FlowScreen(props: FlowScreenProps) {
         isSubmitting={isSubmitting}
         onChange={(value) => onChange('userName', value)}
         onContinue={onContinue}
+        additionalContent={<DriverEligibilityDeclaration checked={eligibilityAccepted} onChange={onEligibilityChange} />}
       />
     )
   }
@@ -526,6 +538,15 @@ function FlowScreen(props: FlowScreenProps) {
       <FlowHeader step={step} onBack={onBack} isSubmitting={isSubmitting} />
       <section className="flow-content">{content}</section>
     </main>
+  )
+}
+
+function DriverEligibilityDeclaration({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <label className="driver-eligibility">
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <span>אני עומד/ת בדרישות החוק החלות על נהג פעיל ברכב זה. בישראל, ההנחה למוצר היא גיל מינימלי של 16 שנים ו־9 חודשים לרישיון B. אם אני קטין/ה, השימוש הוא באחריות ובאישור הורה או אפוטרופוס. ידוע לי שהאפליקציה אינה בודקת תוקף רישיון או כשירות חוקית לנהיגה.</span>
+    </label>
   )
 }
 
@@ -561,6 +582,8 @@ function App() {
     restoredDraft?.createAttempts ?? initialCreateValidationAttempts(),
   )
   const [error, setError] = useState('')
+  const [eligibilityAccepted, setEligibilityAccepted] = useState(false)
+  const [publicLegalDocument, setPublicLegalDocument] = useState<LegalDocumentKind | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [finalProcessingFlow, setFinalProcessingFlow] = useState<OnboardingFlow | null>(null)
   const [joinSessionReady, setJoinSessionReady] = useState(
@@ -636,6 +659,7 @@ function App() {
       setFinalProcessingFlow(null)
       setIsSubmitting(false)
       setError('')
+      setEligibilityAccepted(false)
       saveOnboardingDraft({
         flow: 'create',
         step: 0,
@@ -675,6 +699,7 @@ function App() {
     setJoinLockedUntil(null)
     setFinalProcessingFlow(null)
     setError('')
+    setEligibilityAccepted(false)
     saveOnboardingDraft({
       flow: nextFlow,
       step: 0,
@@ -1014,6 +1039,11 @@ function App() {
     const field = currentField()
     const value = form[field].trim()
 
+    if (step === 4 && !eligibilityAccepted) {
+      setError('כדי להשלים את ההרשמה, יש לאשר את הצהרת הכשירות לשימוש ברכב.')
+      return
+    }
+
     if (
       (field === 'familyName' || field === 'userName')
       && !isValidHumanName(value)
@@ -1085,6 +1115,7 @@ function App() {
     }
 
     setError('')
+    setEligibilityAccepted(false)
     setStep((current) => current + 1)
   }
 
@@ -1109,6 +1140,7 @@ function App() {
     setJoinLockedUntil(null)
     setFinalProcessingFlow(null)
     setError('')
+    setEligibilityAccepted(false)
     setIsSubmitting(false)
   }
 
@@ -1122,6 +1154,7 @@ function App() {
     setJoinLockedUntil(null)
     setFinalProcessingFlow(null)
     setError('')
+    setEligibilityAccepted(false)
     setIsSubmitting(false)
   }
 
@@ -1145,6 +1178,10 @@ function App() {
     hasPendingJoinSuccess: joinSuccessMatchesSession && !hasConflictingSuccessMarkers,
     finalProcessingFlow,
   })
+
+  if (publicLegalDocument) {
+    return <LegalDocumentScreen kind={publicLegalDocument} onBack={() => setPublicLegalDocument(null)} />
+  }
 
   if (destination === 'create_processing') {
     return <FinalProcessingScreen flow="create" />
@@ -1225,6 +1262,7 @@ function App() {
     return (
       <MainAppScreen
         user={currentUser}
+        userEmail={session.user.email ?? ''}
         accessToken={session.access_token}
         authUserId={session.user.id}
         onLogout={async () => {
@@ -1244,6 +1282,8 @@ function App() {
       <AuthGate
         flow={intent}
         onBack={cancelAuthentication}
+        onOpenPrivacy={() => setPublicLegalDocument('privacy')}
+        onOpenTerms={() => setPublicLegalDocument('terms')}
       />
     )
   }
@@ -1296,6 +1336,8 @@ function App() {
         setStep(flow === 'create' ? 2 : 1)
       }}
       onFinish={finishPrototype}
+      eligibilityAccepted={eligibilityAccepted}
+      onEligibilityChange={setEligibilityAccepted}
     />
   )
 }

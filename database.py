@@ -1547,6 +1547,37 @@ def update_family_member_role(
             ).fetchone()
 
 
+def update_family_address(
+    caller_user_id,
+    family_id,
+    home_address,
+    home_latitude,
+    home_longitude,
+):
+    """Update all canonical address fields in one authorized SQL statement."""
+    with pool.connection() as conn:
+        with conn.transaction():
+            return conn.execute(
+                """
+                UPDATE families
+                SET home_address = %s,
+                    home_latitude = %s,
+                    home_longitude = %s
+                WHERE id = %s
+                  AND created_by_user_id = %s
+                  AND created_by_user_id IS NOT NULL
+                RETURNING home_address
+                """,
+                (
+                    home_address,
+                    home_latitude,
+                    home_longitude,
+                    family_id,
+                    caller_user_id,
+                ),
+            ).fetchone()
+
+
 def _join_session_from_row(row, was_reset=False):
     return {
         "auth_user_id": str(row[0]),

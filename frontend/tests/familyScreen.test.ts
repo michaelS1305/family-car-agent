@@ -49,3 +49,12 @@ test('back uses the existing dashboard close path so rotary selection stays moun
   assert.match(dashboardSource, /<div className="dashboard-content" inert=\{categoryOpen\}>/)
   assert.match(dashboardSource, /onBack=\{closeCategory\}/)
 })
+
+test('creator address editing uses resolve then explicit confirmation while members stay read-only', () => {
+  assert.match(familySource, /family\.can_edit_roles \? <button[^>]*>עריכת כתובת/)
+  assert.match(familySource, /resolveFamilyAddress\(accessToken, addressInput\.trim\(\)\)/)
+  assert.match(familySource, /updateFamilyAddress\(accessToken, resolvedAddress\.token\)/)
+  assert.match(familySource, /אישור שינוי/)
+  assert.match(familySource, /הכתובת הקודמת נשארה ללא שינוי/)
+  assert.doesNotMatch(familySource, /family_id|user_id|car_events/)
+})

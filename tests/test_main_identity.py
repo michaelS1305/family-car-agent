@@ -77,6 +77,10 @@ models_stub = stub_module(
     CreateFamilyAddressRequest=type("CreateFamilyAddressRequest", (), {}),
     CreateFamilyRequest=type("CreateFamilyRequest", (), {}),
     FamilyMemberResponse=type("FamilyMemberResponse", (), {}),
+    FamilyAddressResolveRequest=type("FamilyAddressResolveRequest", (), {}),
+    FamilyAddressResolveResponse=type("FamilyAddressResolveResponse", (), {}),
+    FamilyAddressUpdateRequest=type("FamilyAddressUpdateRequest", (), {}),
+    FamilyAddressUpdateResponse=type("FamilyAddressUpdateResponse", (), {}),
     FamilyResponse=type("FamilyResponse", (), {}),
     FamilyRoleUpdateRequest=type("FamilyRoleUpdateRequest", (), {}),
     JoinFamilyAddressConfirmationRequest=type("JoinFamilyAddressConfirmationRequest", (), {}),
@@ -189,7 +193,9 @@ family_profile_stub = stub_module(
     "family_service",
     FamilyProfileError=FakeFamilyProfileError,
     get_family_for_current_user=Mock(),
+    resolve_family_address_for_current_user=Mock(),
     set_family_member_role=Mock(),
+    update_family_address_for_current_user=Mock(),
 )
 
 
@@ -389,6 +395,14 @@ class FamilyProfileRouteTests(unittest.TestCase):
             return_value=True,
             side_effect=True,
         )
+        family_profile_stub.resolve_family_address_for_current_user.reset_mock(
+            return_value=True,
+            side_effect=True,
+        )
+        family_profile_stub.update_family_address_for_current_user.reset_mock(
+            return_value=True,
+            side_effect=True,
+        )
         family_profile_stub.get_family_for_current_user.return_value = {
             "name": "כהן",
             "home_address": "דימונה, המעפיל, 1209",
@@ -401,6 +415,14 @@ class FamilyProfileRouteTests(unittest.TestCase):
             "name": "נועה",
             "role": "parent",
             "is_family_admin": False,
+        }
+        family_profile_stub.resolve_family_address_for_current_user.return_value = {
+            "normalized_address": "דימונה, המעפיל, 1210",
+            "display_address": "המעפיל 1210, דימונה, ישראל",
+            "resolution_token": "opaque-address-resolution",
+        }
+        family_profile_stub.update_family_address_for_current_user.return_value = {
+            "home_address": "דימונה, המעפיל, 1210",
         }
 
     def test_family_read_is_protected_and_scoped_only_by_current_user(self):
@@ -431,6 +453,45 @@ class FamilyProfileRouteTests(unittest.TestCase):
             "parent",
         )
         self.assertEqual(result["role"], "parent")
+
+    def test_address_resolution_is_authenticated_and_accepts_no_browser_identity(self):
+        current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
+        request = types.SimpleNamespace(
+            home_address="דימונה, המעפיל, 1210",
+            user_id=999,
+            family_id=888,
+        )
+
+        result = main.resolve_current_family_address(request, current_user)
+        parameters = inspect.signature(main.resolve_current_family_address).parameters
+
+        self.assertIs(parameters["current_user"].default.dependency, auth_stub.get_current_user)
+        family_profile_stub.resolve_family_address_for_current_user.assert_called_once_with(
+            current_user,
+            "דימונה, המעפיל, 1210",
+        )
+        self.assertNotIn("user_id", result)
+        self.assertNotIn("family_id", result)
+
+    def test_address_update_is_authenticated_and_accepts_only_resolution_token(self):
+        current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
+        request = types.SimpleNamespace(
+            resolution_token="opaque-address-resolution",
+            user_id=999,
+            family_id=888,
+            latitude=1.0,
+            longitude=2.0,
+        )
+
+        result = main.update_current_family_address(request, current_user)
+        parameters = inspect.signature(main.update_current_family_address).parameters
+
+        self.assertIs(parameters["current_user"].default.dependency, auth_stub.get_current_user)
+        family_profile_stub.update_family_address_for_current_user.assert_called_once_with(
+            current_user,
+            "opaque-address-resolution",
+        )
+        self.assertEqual(result, {"home_address": "דימונה, המעפיל, 1210"})
 
 
 class ReservationCenterRouteTests(unittest.TestCase):

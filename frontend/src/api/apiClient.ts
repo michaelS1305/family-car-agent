@@ -58,6 +58,12 @@ export type FamilyProfile = {
   members: FamilyMember[]
 }
 
+export type ResolvedFamilyAddress = {
+  normalized_address: string
+  display_address: string
+  resolution_token: string
+}
+
 export type ReservationTimeFilter = 'future' | 'past'
 export type ReservationScopeFilter = 'all' | 'mine'
 
@@ -270,6 +276,15 @@ function isFamilyProfile(value: unknown): value is FamilyProfile {
   )
 }
 
+function isResolvedFamilyAddress(value: unknown): value is ResolvedFamilyAddress {
+  if (!value || typeof value !== 'object') return false
+  const address = value as Partial<ResolvedFamilyAddress>
+  return typeof address.normalized_address === 'string'
+    && typeof address.display_address === 'string'
+    && typeof address.resolution_token === 'string'
+    && address.resolution_token.length > 0
+}
+
 function isReservation(value: unknown): value is Reservation {
   if (!value || typeof value !== 'object') return false
   const reservation = value as Partial<Reservation>
@@ -353,6 +368,45 @@ export function updateFamilyMemberRole(
       body: JSON.stringify({ role }),
     },
     isFamilyMember,
+    options,
+  )
+}
+
+export function resolveFamilyAddress(
+  accessToken: string,
+  homeAddress: string,
+  options: RequestOptions = {},
+): Promise<ResolvedFamilyAddress> {
+  return familyRequest(
+    '/api/family/address/resolve',
+    accessToken,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ home_address: homeAddress }),
+    },
+    isResolvedFamilyAddress,
+    options,
+  )
+}
+
+export function updateFamilyAddress(
+  accessToken: string,
+  resolutionToken: string,
+  options: RequestOptions = {},
+): Promise<{ home_address: string }> {
+  return familyRequest(
+    '/api/family/address',
+    accessToken,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resolution_token: resolutionToken }),
+    },
+    (value): value is { home_address: string } => (
+      !!value && typeof value === 'object'
+      && typeof (value as { home_address?: unknown }).home_address === 'string'
+    ),
     options,
   )
 }

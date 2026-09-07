@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { getFamily, updateFamilyMemberRole } from '../src/api/apiClient.ts'
+import { getFamily, resolveFamilyAddress, updateFamilyAddress, updateFamilyMemberRole } from '../src/api/apiClient.ts'
 
 const family = {
   name: 'כהן',
@@ -68,4 +68,19 @@ test('role clear sends a JSON null role', async () => {
     },
   })
   assert.deepEqual(JSON.parse(body), { role: null })
+})
+
+test('address resolve and update send no browser identity or coordinates', async () => {
+  const requests: Array<{ url: string; body: string }> = []
+  const fetcher = async (url: URL | RequestInfo, init?: RequestInit) => {
+    requests.push({ url: String(url), body: String(init?.body) })
+    return String(url).endsWith('/resolve')
+      ? new Response(JSON.stringify({ normalized_address: 'דימונה, המעפיל, 1210', display_address: 'המעפיל 1210, דימונה, ישראל', resolution_token: 'opaque' }), { status: 200 })
+      : new Response(JSON.stringify({ home_address: 'דימונה, המעפיל, 1210' }), { status: 200 })
+  }
+  await resolveFamilyAddress('token', 'דימונה, המעפיל, 1210', { baseUrl: 'https://api.example.com', fetcher })
+  await updateFamilyAddress('token', 'opaque', { baseUrl: 'https://api.example.com', fetcher })
+  assert.deepEqual(JSON.parse(requests[0].body), { home_address: 'דימונה, המעפיל, 1210' })
+  assert.deepEqual(JSON.parse(requests[1].body), { resolution_token: 'opaque' })
+  assert.doesNotMatch(requests.map(({ body }) => body).join(' '), /user_id|family_id|latitude|longitude/)
 })
