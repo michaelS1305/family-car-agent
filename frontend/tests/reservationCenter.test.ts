@@ -15,10 +15,10 @@ const familySource = readFileSync(
   'utf8',
 )
 
-test('reservation category is real while family stays real and three categories stay placeholders', () => {
+test('reservation and family categories remain dedicated screens', () => {
   assert.match(dashboardSource, /activeCategory\.id === 'family'[\s\S]*?<FamilyScreen/)
   assert.match(dashboardSource, /activeCategory\.id === 'reservations'[\s\S]*?<ReservationCenterScreen/)
-  assert.match(dashboardSource, /<CategoryPlaceholderScreen/)
+  assert.doesNotMatch(dashboardSource, /<CategoryPlaceholderScreen/)
   assert.match(familySource, /אנשי המשפחה/)
 })
 

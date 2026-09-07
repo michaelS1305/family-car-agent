@@ -86,13 +86,11 @@ test('rotary has one accessible slider and one real OK confirmation button', () 
   assert.match(dashboardSource, /<strong>OK<\/strong>/)
 })
 
-test('one reusable placeholder remains for non-family categories', () => {
+test('all five categories open dedicated screens', () => {
   for (const category of DASHBOARD_CATEGORIES) {
     assert.ok(category.label.length > 0)
   }
-  assert.match(dashboardSource, /function CategoryPlaceholderScreen/)
-  assert.match(dashboardSource, /<h1>Family Car Agent<\/h1>/)
-  assert.match(dashboardSource, /<h2>\{category\.label\}<\/h2>/)
+  assert.doesNotMatch(dashboardSource, /function CategoryPlaceholderScreen/)
   assert.match(dashboardSource, /setActiveCategory\(category\)[\s\S]*?requestAnimationFrame[\s\S]*?setCategoryOpen\(true\)/)
   assert.doesNotMatch(dashboardSource, /בקרוב|coming soon|סטטיסטיקה/i)
   assert.match(dashboardSource, /activeCategory\.id === 'family'/)
@@ -103,12 +101,14 @@ test('one reusable placeholder remains for non-family categories', () => {
   assert.match(dashboardSource, /<HistoryScreen/)
   assert.match(dashboardSource, /activeCategory\.id === 'cars'/)
   assert.match(dashboardSource, /<VehiclesScreen/)
+  assert.match(dashboardSource, /activeCategory\.id === 'settings'/)
+  assert.match(dashboardSource, /<SettingsScreen/)
 })
 
 test('category back preserves the mounted rotary and restores focus to OK', () => {
   assert.match(dashboardSource, /<div className="dashboard-content" inert=\{categoryOpen\}>/)
-  assert.match(dashboardSource, /<RotarySelector[\s\S]*?<FamilyScreen[\s\S]*?<ReservationCenterScreen[\s\S]*?<HistoryScreen[\s\S]*?<VehiclesScreen/)
-  assert.match(dashboardSource, /aria-label="חזרה ללוח הבקרה"/)
+  assert.match(dashboardSource, /<RotarySelector[\s\S]*?<FamilyScreen[\s\S]*?<ReservationCenterScreen[\s\S]*?<HistoryScreen[\s\S]*?<VehiclesScreen[\s\S]*?<SettingsScreen/)
+  assert.match(dashboardSource, /onBack=\{closeCategory\}/)
   assert.match(dashboardSource, /setCategoryOpen\(false\)/)
   assert.match(dashboardSource, /confirmButtonRef\.current\?\.focus/)
   assert.match(dashboardSource, /if \(categoryOpen\) closeCategory\(\)/)

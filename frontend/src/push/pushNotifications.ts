@@ -7,6 +7,11 @@ import {
 } from '../api/apiClient.ts'
 
 export type PushCapability = 'supported' | 'unsupported'
+export type CurrentDevicePushState =
+  | 'subscribed'
+  | 'unsubscribed'
+  | 'denied'
+  | 'unsupported'
 
 export function detectPushCapability(): PushCapability {
   return (
@@ -22,8 +27,25 @@ export function currentNotificationPermission(): NotificationPermission | 'unsup
   return detectPushCapability() === 'supported' ? Notification.permission : 'unsupported'
 }
 
+export function notificationPermissionLabel(
+  permission: ReturnType<typeof currentNotificationPermission>,
+) {
+  if (permission === 'unsupported') return 'לא נתמך'
+  if (permission === 'granted') return 'מופעלות'
+  if (permission === 'denied') return 'חסומות'
+  return 'לא הופעלו'
+}
+
 export function preloadPushConfiguration(accessToken: string) {
   return getPushConfig(accessToken)
+}
+
+export async function inspectCurrentDevicePushState(): Promise<CurrentDevicePushState> {
+  if (detectPushCapability() !== 'supported') return 'unsupported'
+  if (Notification.permission === 'denied') return 'denied'
+  if (Notification.permission !== 'granted') return 'unsubscribed'
+  const registration = await navigator.serviceWorker.ready
+  return await registration.pushManager.getSubscription() ? 'subscribed' : 'unsubscribed'
 }
 
 export function urlBase64ToUint8Array(value: string) {

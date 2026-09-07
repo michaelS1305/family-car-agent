@@ -36,10 +36,12 @@ test('screen adds no bottom navigation and back returns to the mounted dashboard
   assert.match(dashboardSource, /confirmButtonRef\.current\?\.focus/)
 })
 
-test('family, reservations, history and vehicles are dedicated while settings remains generic', () => {
+test('family, reservations, history, vehicles and settings are dedicated', () => {
   assert.match(dashboardSource, /activeCategory\.id === 'family'/)
   assert.match(dashboardSource, /activeCategory\.id === 'reservations'/)
   assert.match(dashboardSource, /activeCategory\.id === 'history'/)
   assert.match(dashboardSource, /activeCategory\.id === 'cars'/)
-  assert.match(dashboardSource, /<CategoryPlaceholderScreen category=\{activeCategory\}/)
+  assert.match(dashboardSource, /activeCategory\.id === 'settings'/)
+  assert.match(dashboardSource, /<SettingsScreen/)
+  assert.doesNotMatch(dashboardSource, /<CategoryPlaceholderScreen/)
 })

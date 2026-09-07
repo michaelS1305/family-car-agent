@@ -56,10 +56,13 @@ test('one realtime subscription fans out canonical invalidation to status and hi
   assert.match(historySource, /refreshVersion[\s\S]*?getCarHistory/)
 })
 
-test('back returns to the mounted dashboard and remaining placeholders stay cars and settings', () => {
+test('back returns to the mounted dashboard while all category routes remain dedicated', () => {
   assert.match(historySource, /aria-label="חזרה ללוח הבקרה"/)
   assert.match(dashboardSource, /onBack=\{closeCategory\}/)
   assert.match(dashboardSource, /activeCategory\.id === 'family'/)
   assert.match(dashboardSource, /activeCategory\.id === 'reservations'/)
   assert.match(dashboardSource, /activeCategory\.id === 'history'/)
+  assert.match(dashboardSource, /activeCategory\.id === 'cars'/)
+  assert.match(dashboardSource, /activeCategory\.id === 'settings'/)
+  assert.doesNotMatch(dashboardSource, /CategoryPlaceholderScreen/)
 })
