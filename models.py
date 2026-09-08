@@ -3,13 +3,19 @@ from datetime import datetime
 from uuid import UUID
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class CarConnection(BaseModel):
     shortcut_token: str
     latitude: float | None = None
     longitude: float | None = None
+
+
+class CarDisconnectRequest(BaseModel):
+    shortcut_token: str
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
 
 
 class CarPlaySetupResponse(BaseModel):

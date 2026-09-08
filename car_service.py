@@ -5,7 +5,7 @@ from database import (
     get_user_by_token,
     get_family_by_id,
 )
-from math import radians, sin, cos, sqrt, atan2
+from math import radians, sin, cos, sqrt, atan2, isfinite
 
 from identity import CurrentUser
 from push_service import dispatch_car_transition_notification
@@ -66,6 +66,16 @@ def connect_user(shortcut_token):
     }
 
 
+def _valid_coordinates(latitude, longitude):
+    try:
+        return (
+            isfinite(latitude) and isfinite(longitude)
+            and -90 <= latitude <= 90 and -180 <= longitude <= 180
+        )
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def disconnect_user(shortcut_token, latitude=None, longitude=None):
     user = get_user_by_token(shortcut_token)
 
@@ -102,6 +112,9 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
             "message": "Location is required"
         }
 
+    if not _valid_coordinates(latitude, longitude):
+        return {"message": "Invalid location"}
+
     family = get_family_by_id(family_id)
 
     if not family:
@@ -112,22 +125,23 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
     home_latitude = family[3]
     home_longitude = family[4]
 
-    if home_latitude is None or home_longitude is None:
+    if not _valid_coordinates(home_latitude, home_longitude):
         return {
             "message": "Home location is not configured"
         }
 
-    distance = calculate_distance_meters(
-        latitude,
-        longitude,
-        home_latitude,
-        home_longitude
-    )
+    try:
+        distance = calculate_distance_meters(
+            latitude, longitude, home_latitude, home_longitude
+        )
+        if not isfinite(distance):
+            return {"message": "Unable to validate location"}
+    except (ValueError, OverflowError, TypeError):
+        return {"message": "Unable to validate location"}
 
     if distance > 500:
         return {
-            "message": "הרכב לא שוחרר כי הוא לא נמצא ליד הבית",
-            "distance_from_home": round(distance)
+            "message": "הרכב לא שוחרר כי הוא לא נמצא ליד הבית"
         }
 
     transition = disconnect_car_atomically(user[0], family_id)
@@ -151,7 +165,6 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
 
     return {
         "message": "הרכב שוחרר בהצלחה",
-        "distance_from_home": round(distance),
         "result": {
             "message": "Car disconnected",
             "user": user[1],

@@ -6,6 +6,9 @@ import sys
 import types
 import unittest
 from unittest.mock import Mock, patch
+import fastapi.exceptions
+import fastapi.exception_handlers
+import fastapi.responses
 
 from identity import AuthenticatedSupabaseUser, CurrentUser
 
@@ -33,6 +36,9 @@ class FakeFastAPI:
 
     def add_middleware(self, middleware, **options):
         self.middleware = (middleware, options)
+
+    def exception_handler(self, exception_type):
+        return lambda handler: handler
 
     def _route_decorator(self, method, path, options):
         def decorator(function):
@@ -69,6 +75,7 @@ dotenv_stub = stub_module("dotenv", load_dotenv=Mock())
 models_stub = stub_module(
     "models",
     CarConnection=type("CarConnection", (), {}),
+    CarDisconnectRequest=type("CarDisconnectRequest", (), {}),
     CarPlaySetupResponse=type("CarPlaySetupResponse", (), {}),
     CarPlaySetupStatusRequest=type("CarPlaySetupStatusRequest", (), {}),
     CarHistoryResponse=type("CarHistoryResponse", (), {}),
