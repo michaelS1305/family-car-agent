@@ -218,6 +218,8 @@ def _read_tool(name, current_user):
 
 
 def _safe_mutation_arguments(action_type, arguments):
+    if not isinstance(arguments, dict):
+        return {}
     allowed = {
         "create_reservation": ("start_time", "end_time"),
         "update_reservation": ("reservation_id", "start_time", "end_time"),
@@ -295,7 +297,8 @@ def generate_agent_response(
         for part in function_parts:
             function_call = _value(part, "function_call")
             name = _value(function_call, "name")
-            arguments = dict(_value(function_call, "args") or {})
+            raw_arguments = _value(function_call, "args")
+            arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else {}
             try:
                 if name in mutation_names:
                     action_type = mutation_names[name]

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { intervalFromForm, reservationFormValue, reservationPresentation } from '../src/reservationForm.ts'
 
 const screenSource = readFileSync(
   new URL('../src/components/ReservationCenterScreen.tsx', import.meta.url),
@@ -77,4 +78,35 @@ test('contextual empty and error states remain concise', () => {
   assert.match(screenSource, /אין הזמנות עתידיות/)
   assert.match(screenSource, /role="alert"/)
   assert.match(screenSource, /נסו שוב/)
+})
+
+test('multi-day create and edit retain independent dates and seconds', () => {
+  const interval = { start_time: '2030-09-10T18:00:12', end_time: '2030-09-12T14:00:34' }
+  const form = reservationFormValue(interval)
+  assert.equal(form.startDate, '2030-09-10')
+  assert.equal(form.endDate, '2030-09-12')
+  assert.deepEqual(intervalFromForm(form), interval)
+  assert.deepEqual(intervalFromForm({ startDate: '2030-09-10', startTime: '18:00', endDate: '2030-09-12', endTime: '14:00' }),
+    { start_time: '2030-09-10T18:00:00', end_time: '2030-09-12T14:00:00' })
+})
+
+test('same-day display is compact and multi-day display includes both dates', () => {
+  const same = reservationPresentation({ start_time: '2030-09-10T18:00:00', end_time: '2030-09-10T19:00:00' })
+  assert.equal(same.sameDay, true)
+  assert.equal(same.interval, '18:00–19:00')
+  const multi = reservationPresentation({ start_time: '2030-09-10T18:00:00', end_time: '2030-09-12T14:00:00' })
+  assert.equal(multi.sameDay, false)
+  for (const value of ['10', '12', '18:00', '14:00']) assert.ok(multi.interval.includes(value))
+})
+
+test('form groups reflow and original update locator stays untouched', () => {
+  const css = readFileSync(new URL('../src/App.css', import.meta.url), 'utf8')
+  assert.match(screenSource, /<legend>התחלה<\/legend>/)
+  assert.match(screenSource, /<legend>סיום<\/legend>/)
+  assert.match(screenSource, /value=\{form.startDate\}/)
+  assert.match(screenSource, /value=\{form.endDate\}/)
+  assert.match(screenSource, /start_time: editor.reservation.start_time/)
+  assert.match(screenSource, /end_time: editor.reservation.end_time/)
+  assert.match(css, /grid-template-columns: repeat\(auto-fit, minmax\(min\(100%, 10rem\), 1fr\)\)/)
+  assert.match(css, /\.reservation-editor input\s*\{[^}]*min-width: 0;[^}]*max-width: 100%;/)
 })

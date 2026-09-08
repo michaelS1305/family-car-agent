@@ -42,7 +42,9 @@ class ReservationServiceTests(unittest.TestCase):
             ("נועה", "2026-09-09T10:00:00", "2026-09-09T11:00:00", False),
         ]
         database_stub.create_current_user_reservation.return_value = {"success": True}
-        database_stub.update_current_user_reservation.return_value = {"success": True}
+        database_stub.update_current_user_reservation.return_value = {
+            "success": True, "start_time": "2026-09-08T12:00:00", "end_time": "2026-09-08T13:00:00"
+        }
         database_stub.cancel_current_user_reservation.return_value = {"success": True}
         self.now_patch = patch.object(
             service,
@@ -120,8 +122,8 @@ class ReservationServiceTests(unittest.TestCase):
             "2026-09-08T10:00:00",
             "2026-09-08T11:00:00",
             "2026-09-06T12:00:00",
-            "2026-09-08T12:00:00",
-            "2026-09-08T13:00:00",
+            datetime(2026, 9, 8, 12),
+            datetime(2026, 9, 8, 13),
         )
 
     def test_cancel_passes_current_identity_and_original_time_locator(self):

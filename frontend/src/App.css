@@ -1688,6 +1688,7 @@
 .reservation-editor label {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .reservation-editor form {
@@ -1703,6 +1704,8 @@
 .reservation-editor input {
   min-height: 48px;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding: 9px 12px;
   border: 1px solid rgba(48, 73, 96, 0.16);
   border-radius: 14px;
@@ -1713,8 +1716,21 @@
 
 .reservation-time-fields {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.reservation-datetime-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.reservation-datetime-group legend {
+  margin-bottom: 8px;
+  font-weight: 650;
 }
 
 .reservation-form-actions {

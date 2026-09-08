@@ -346,14 +346,14 @@ class MutationBoundaryTests(unittest.TestCase):
                 "lease-token",
                 self.user,
                 "create_reservation",
-                {"start_time": "start", "end_time": "end"},
+                {"start_time": "2030-01-11T10:00:00", "end_time": "2030-01-12T10:00:00"},
             )
         self.assertTrue(connection.transaction_state.committed)
         create.assert_called_once_with(
             connection,
             7,
-            "start",
-            "end",
+            "2030-01-11T10:00:00",
+            "2030-01-12T10:00:00",
             expected_family_id=42,
         )
         self.assertEqual(executed["result"], result)
@@ -368,7 +368,7 @@ class MutationBoundaryTests(unittest.TestCase):
                     "lease-token",
                     self.user,
                     "create_reservation",
-                    {"start_time": "start", "end_time": "end"},
+                    {"start_time": "2030-01-11T10:00:00", "end_time": "2030-01-12T10:00:00"},
                 )
         self.assertTrue(connection.transaction_state.rolled_back)
 
@@ -376,9 +376,9 @@ class MutationBoundaryTests(unittest.TestCase):
         cases = (
             (
                 "update_reservation",
-                {"reservation_id": 5, "start_time": "start", "end_time": "end"},
+                {"reservation_id": 5, "start_time": "2030-01-11T10:00:00", "end_time": "2030-01-12T10:00:00"},
                 "_update_reservation_on_connection",
-                (5, 7, 42, "start", "end"),
+                (5, 7, 42, "2030-01-11T10:00:00", "2030-01-12T10:00:00"),
                 {"success": True, "code": "RESERVATION_UPDATED"},
             ),
             (
@@ -415,7 +415,7 @@ class MutationBoundaryTests(unittest.TestCase):
                 "lease-token",
                 self.user,
                 "create_reservation",
-                {"start_time": "start", "end_time": "end"},
+                {"start_time": "2030-01-11T10:00:00", "end_time": "2030-01-12T10:00:00"},
             )
         self.assertTrue(connection.transaction_state.committed)
         self.assertEqual(executed["result"], conflict)

@@ -1,5 +1,5 @@
 import importlib.util
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 import types
@@ -84,7 +84,7 @@ class IsolationConnection:
                 return Cursor([(reservation_id,)])
             return Cursor()
 
-        if "SELECT r.id FROM reservations AS r" in compact:
+        if "SELECT r.id, r.start_time, r.end_time FROM reservations AS r" in compact:
             reservation_id, user_id, family_id = parameters
             reservation = self.state.reservations.get(reservation_id)
             allowed = (
@@ -93,7 +93,7 @@ class IsolationConnection:
                 and self.state.users[user_id]["family_id"] == family_id
                 and reservation["status"] == "active"
             )
-            return Cursor([(reservation_id,)] if allowed else [])
+            return Cursor([(reservation_id, reservation["start"], reservation["end"])] if allowed else [])
 
         if "SET start_time = %s" in compact:
             start, end, reservation_id, user_id, family_id = parameters
@@ -198,6 +198,9 @@ class IsolationPool:
 
 class DatabaseFamilyIsolationTests(unittest.TestCase):
     def setUp(self):
+        self.clock_patch = patch.object(database, "reservation_now", return_value=datetime(2026, 9, 3))
+        self.clock_patch.start()
+        self.addCleanup(self.clock_patch.stop)
         self.state = IsolationState()
         self.pool_patch = patch.object(database, "pool", IsolationPool(self.state))
         self.pool_patch.start()

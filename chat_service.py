@@ -13,6 +13,7 @@ from database import (
 )
 from gemini_usage import GeminiUsageTotals, log_gemini_usage
 from identity import CurrentUser
+from reservation_rules import ReservationValidationError, canonical_time
 
 
 logger = logging.getLogger(__name__)
@@ -289,6 +290,13 @@ def _execute_mutation(
                 "SELECT pg_advisory_xact_lock(%s, %s)",
                 (RESERVATION_LOCK_NAMESPACE, current_user.family_id),
             )
+            # Replay/fencing above must happen before validating a new action.
+            invalid_arguments = _invalid_mutation_arguments(action_type, arguments)
+            recorded_arguments = {} if invalid_arguments else {
+                key: canonical_time(value) if key in {"start_time", "end_time"} else value
+                for key, value in arguments.items()
+                if key in {"start_time", "end_time", "reservation_id"}
+            }
             action = conn.execute(
                 """
                 INSERT INTO chat_tool_actions (
@@ -304,12 +312,14 @@ def _execute_mutation(
                 (
                     chat_request_id,
                     action_type,
-                    _json(arguments),
+                    _json(recorded_arguments),
                     lease_token,
                 ),
             ).fetchone()
 
-            if action_type == "create_reservation":
+            if invalid_arguments:
+                result = invalid_arguments
+            elif action_type == "create_reservation":
                 result = _create_reservation_on_connection(
                     conn,
                     current_user.user_id,
@@ -351,6 +361,26 @@ def _execute_mutation(
                 "action_type": action_type,
                 "result": result,
             }
+
+
+def _invalid_mutation_arguments(action_type, arguments):
+    if not isinstance(arguments, dict):
+        return ReservationValidationError("INVALID_RESERVATION_TIME", "פרטי ההזמנה אינם תקינים.").result()
+    if action_type in {"create_reservation", "update_reservation"}:
+        if any(not isinstance(arguments.get(key), str) for key in ("start_time", "end_time")):
+            return ReservationValidationError("INVALID_RESERVATION_TIME", "התאריך או השעה אינם תקינים.").result()
+        try:
+            # Parse before JSONB recording: malformed strings may themselves be
+            # unrepresentable in PostgreSQL JSONB (for example a NUL character).
+            for key in ("start_time", "end_time"):
+                canonical_time(arguments[key])
+        except ReservationValidationError as error:
+            return error.result()
+    if action_type in {"update_reservation", "cancel_reservation"}:
+        if type(arguments.get("reservation_id")) is not int or arguments["reservation_id"] <= 0:
+            return {"success": False, "code": "RESERVATION_NOT_FOUND_OR_UNAVAILABLE",
+                    "message": "לא מצאנו הזמנה זמינה לשינוי."}
+    return None
 
 
 def _load_model_history(current_user, limit=MODEL_HISTORY_LIMIT):
@@ -519,6 +549,8 @@ def _fallback_for_action(action):
             "RESERVATION_CONFLICT": "הרכב כבר מוזמן בזמן הזה. ההזמנה לא נוצרה.",
             "RESERVATION_NOT_FOUND_OR_UNAVAILABLE": "לא מצאתי הזמנה זמינה שאפשר לשנות או לבטל.",
             "USER_FAMILY_NOT_FOUND": "לא ניתן לבצע את הפעולה בלי שיוך למשפחה.",
+            "INVALID_RESERVATION_TIME": "התאריך או השעה אינם תקינים. שעת הסיום חייבת להיות אחרי ההתחלה.",
+            "RESERVATION_TIME_IN_PAST": "לא ניתן לקבוע או לשנות את ההזמנה לזמן שכבר עבר.",
         }
     return messages.get(
         action["action_type"] if result.get("success") else result.get("code"),

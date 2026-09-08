@@ -1,5 +1,9 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from reservation_rules import (
+    canonical_time as _canonical_time,
+    local_now as _local_now,
+    validate_create,
+    ReservationValidationError,
+)
 
 from database import (
     cancel_current_user_reservation,
@@ -7,10 +11,6 @@ from database import (
     list_family_reservations,
     update_current_user_reservation,
 )
-from identity import CurrentUser
-
-
-ISRAEL_TIMEZONE = ZoneInfo("Asia/Jerusalem")
 
 
 class ReservationCenterError(Exception):
@@ -30,36 +30,11 @@ def _require_family(current_user):
         )
 
 
-def _local_now():
-    return datetime.now(ISRAEL_TIMEZONE).replace(tzinfo=None)
-
-
-def _canonical_time(value):
-    if value.tzinfo is not None:
-        value = value.astimezone(ISRAEL_TIMEZONE).replace(tzinfo=None)
-    return value.isoformat(timespec="seconds")
-
-
 def _validated_interval(start_time, end_time, now):
-    start = start_time
-    end = end_time
-    if start.tzinfo is not None:
-        start = start.astimezone(ISRAEL_TIMEZONE).replace(tzinfo=None)
-    if end.tzinfo is not None:
-        end = end.astimezone(ISRAEL_TIMEZONE).replace(tzinfo=None)
-    if start >= end:
-        raise ReservationCenterError(
-            "INVALID_RESERVATION_TIME",
-            "שעת הסיום חייבת להיות אחרי שעת ההתחלה.",
-            422,
-        )
-    if start < now:
-        raise ReservationCenterError(
-            "RESERVATION_TIME_IN_PAST",
-            "אפשר להזמין את הרכב רק לזמן עתידי.",
-            422,
-        )
-    return _canonical_time(start), _canonical_time(end)
+    try:
+        return validate_create(start_time, end_time, now)
+    except ReservationValidationError as error:
+        raise ReservationCenterError(error.code, error.message, 422) from None
 
 
 def _safe_reservation(row):
@@ -119,21 +94,20 @@ def update_reservation_for_current_user(
 ):
     _require_family(current_user)
     now = _local_now()
-    start, end = _validated_interval(start_time, end_time, now)
     result = update_current_user_reservation(
         current_user.user_id,
         current_user.family_id,
         original_start_time,
         original_end_time,
         _canonical_time(now),
-        start,
-        end,
+        start_time,
+        end_time,
     )
     _raise_for_result(result)
     return {
         "owner_name": current_user.name,
-        "start_time": start,
-        "end_time": end,
+        "start_time": result["start_time"],
+        "end_time": result["end_time"],
         "is_mine": True,
     }
 
@@ -159,6 +133,8 @@ def cancel_reservation_for_current_user(
 def _raise_for_result(result):
     if result.get("success"):
         return
+    if result.get("code") in {"INVALID_RESERVATION_TIME", "RESERVATION_TIME_IN_PAST"}:
+        raise ReservationCenterError(result["code"], result["message"], 422)
     if result.get("code") == "RESERVATION_CONFLICT":
         raise ReservationCenterError(
             "RESERVATION_CONFLICT",
