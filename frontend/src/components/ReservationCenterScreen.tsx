@@ -10,44 +10,13 @@ import {
   type ReservationTimeFilter,
 } from '../api/apiClient'
 import { DashboardCategoryIcon } from './DashboardCategoryIcon'
+import { intervalFromForm, reservationFormValue, reservationPresentation, type ReservationFormValue } from '../reservationForm'
 
 type EditorState =
   | { mode: 'list' }
   | { mode: 'create' }
   | { mode: 'edit'; reservation: Reservation }
 
-type ReservationFormValue = {
-  date: string
-  startTime: string
-  endTime: string
-}
-
-const HEBREW_DATE = new Intl.DateTimeFormat('he-IL', {
-  weekday: 'short',
-  day: 'numeric',
-  month: 'long',
-})
-
-function localDate(value: string) {
-  return new Date(value)
-}
-
-function reservationFormValue(reservation?: Reservation): ReservationFormValue {
-  const start = reservation?.start_time ?? ''
-  const end = reservation?.end_time ?? ''
-  return {
-    date: start.slice(0, 10),
-    startTime: start.slice(11, 16),
-    endTime: end.slice(11, 16),
-  }
-}
-
-function intervalFromForm(form: ReservationFormValue) {
-  return {
-    start_time: `${form.date}T${form.startTime}:00`,
-    end_time: `${form.date}T${form.endTime}:00`,
-  }
-}
 
 function readableError(error: unknown) {
   return error instanceof ApiRequestError
@@ -77,7 +46,7 @@ function ReservationForm({
   }, [])
 
   const submit = async () => {
-    if (!form.date || !form.startTime || !form.endTime || saving) return
+    if (!form.startDate || !form.endDate || !form.startTime || !form.endTime || saving) return
     setError('')
     try {
       await onSave(form)
@@ -95,40 +64,55 @@ function ReservationForm({
         event.preventDefault()
         void submit()
       }}>
-        <label>
-          <span>תאריך</span>
-          <input
-            ref={dateInputRef}
-            type="date"
-            required
-            value={form.date}
-            onChange={(event) => setForm((current) => ({ ...current, date: event.target.value }))}
-          />
-        </label>
-        <div className="reservation-time-fields">
-          <label>
-            <span>משעה</span>
-            <input
-              type="time"
-              required
-              value={form.startTime}
-              onChange={(event) => setForm((current) => ({ ...current, startTime: event.target.value }))}
-            />
-          </label>
-          <label>
-            <span>עד שעה</span>
-            <input
-              type="time"
-              required
-              value={form.endTime}
-              onChange={(event) => setForm((current) => ({ ...current, endTime: event.target.value }))}
-            />
-          </label>
-        </div>
+        <fieldset className="reservation-datetime-group">
+          <legend>התחלה</legend>
+          <div className="reservation-time-fields">
+            <label>
+              <span>תאריך</span>
+              <input
+                ref={dateInputRef}
+                type="date"
+                required
+                value={form.startDate}
+                onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>משעה</span>
+              <input
+                type="time"
+                step="1"
+                required
+                value={form.startTime}
+                onChange={(event) => setForm((current) => ({ ...current, startTime: event.target.value }))}
+              />
+            </label>
+          </div>
+        </fieldset>
+        <fieldset className="reservation-datetime-group">
+          <legend>סיום</legend>
+          <div className="reservation-time-fields">
+            <label>
+              <span>תאריך</span>
+              <input type="date" required value={form.endDate}
+                onChange={(event) => setForm((current) => ({ ...current, endDate: event.target.value }))} />
+            </label>
+            <label>
+              <span>עד שעה</span>
+              <input
+                type="time"
+                step="1"
+                required
+                value={form.endTime}
+                onChange={(event) => setForm((current) => ({ ...current, endTime: event.target.value }))}
+              />
+            </label>
+          </div>
+        </fieldset>
         {error ? <p className="reservation-form-error" role="alert">{error}</p> : null}
         <div className="reservation-form-actions">
           <button type="button" className="secondary" disabled={saving} onClick={onCancel}>ביטול</button>
-          <button type="submit" disabled={saving || !form.date || !form.startTime || !form.endTime}>
+          <button type="submit" disabled={saving || !form.startDate || !form.endDate || !form.startTime || !form.endTime}>
             {saving ? 'שומרים…' : 'שמירה'}
           </button>
         </div>
@@ -315,13 +299,12 @@ export function ReservationCenterScreen({ accessToken, open, onBack }: {
                 {reservations.map((reservation) => {
                   const key = `${reservation.start_time}|${reservation.end_time}`
                   const canModify = timeFilter === 'future' && reservation.is_mine
-                  const start = localDate(reservation.start_time)
-                  const end = localDate(reservation.end_time)
+                  const presentation = reservationPresentation(reservation)
                   return (
                     <article className="reservation-card" key={key}>
                       <div>
-                        <strong>{HEBREW_DATE.format(start)}</strong>
-                        <span dir="ltr">{start.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}–{end.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}</span>
+                        <strong>{presentation.title}</strong>
+                        <span dir={presentation.sameDay ? 'ltr' : 'rtl'}>{presentation.interval}</span>
                       </div>
                       <p>{reservation.is_mine ? 'ההזמנה שלי' : reservation.owner_name}</p>
                       {canModify ? (

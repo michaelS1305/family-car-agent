@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 from unittest.mock import Mock, patch
 
 from tests.test_database_atomic_creation import RecordingContext, database
@@ -6,6 +7,9 @@ from tests.test_database_atomic_creation import RecordingContext, database
 
 class ReservationCenterDatabaseTests(unittest.TestCase):
     def setUp(self):
+        clock = patch.object(database, "reservation_now", return_value=datetime(2026, 9, 6, 12))
+        clock.start()
+        self.addCleanup(clock.stop)
         self.connection = Mock(name="connection")
         self.connection_context = RecordingContext(self.connection)
         self.transaction_context = RecordingContext()

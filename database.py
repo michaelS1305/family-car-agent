@@ -4,6 +4,10 @@ from psycopg_pool import ConnectionPool
 from psycopg.errors import ForeignKeyViolation, UniqueViolation
 import secrets
 from datetime import datetime, timezone
+from reservation_rules import (
+    local_now as reservation_now,
+    validate_create, validate_update, validate_target, ReservationValidationError,
+)
 from dotenv import load_dotenv
 from onboarding_rules import (
     NAME_SQL_TRANSLATE_SOURCE,
@@ -654,6 +658,10 @@ def _create_reservation_on_connection(
     end_time,
     expected_family_id=None,
 ):
+    try:
+        start_time, end_time = validate_create(start_time, end_time, reservation_now())
+    except ReservationValidationError as error:
+        return error.result()
     user = conn.execute(
         """
         SELECT family_id
@@ -1004,6 +1012,14 @@ def cancel_current_user_reservation(
             )
 
 def _cancel_reservation_on_connection(conn, reservation_id, user_id, family_id):
+    reservation = _get_owned_reservation_on_connection(conn, reservation_id, user_id, family_id)
+    if not reservation:
+        return {"success": False, "code": "RESERVATION_NOT_FOUND_OR_UNAVAILABLE",
+                "message": "Reservation not found or unavailable"}
+    try:
+        validate_target(reservation[1], reservation[2], reservation_now())
+    except ReservationValidationError as error:
+        return error.result()
     updated = conn.execute(
         """
         UPDATE reservations AS r
@@ -1063,17 +1079,10 @@ def update_reservation(
             )
 
 
-def _update_reservation_on_connection(
-    conn,
-    reservation_id,
-    user_id,
-    family_id,
-    start_time,
-    end_time,
-):
-    reservation = conn.execute(
+def _get_owned_reservation_on_connection(conn, reservation_id, user_id, family_id):
+    return conn.execute(
         """
-        SELECT r.id
+        SELECT r.id, r.start_time, r.end_time
         FROM reservations AS r
         JOIN users AS u ON u.id = r.user_id
         WHERE r.id = %s
@@ -1085,12 +1094,24 @@ def _update_reservation_on_connection(
         (reservation_id, user_id, family_id),
     ).fetchone()
 
+
+def _update_reservation_on_connection(
+    conn, reservation_id, user_id, family_id, start_time, end_time,
+):
+    reservation = _get_owned_reservation_on_connection(conn, reservation_id, user_id, family_id)
     if not reservation:
         return {
             "success": False,
             "code": "RESERVATION_NOT_FOUND_OR_UNAVAILABLE",
             "message": "Reservation not found or unavailable"
         }
+
+    try:
+        start_time, end_time = validate_update(
+            start_time, end_time, reservation[1], reservation[2], reservation_now()
+        )
+    except ReservationValidationError as error:
+        return error.result()
 
     conflict = _get_conflicting_reservation(
         conn,
