@@ -4,11 +4,15 @@ from uuid import UUID
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.responses import JSONResponse
 
 load_dotenv()
 
 from models import (
     CarConnection,
+    CarDisconnectRequest,
     CarPlaySetupResponse,
     CarPlaySetupStatusRequest,
     CarHistoryResponse,
@@ -102,6 +106,16 @@ def _cors_allowed_origins() -> list[str]:
 
 
 app = FastAPI()
+
+
+@app.exception_handler(RequestValidationError)
+async def safe_disconnect_validation_error(request, exc):
+    if request.url.path == "/car/disconnect":
+        # Never serialize non-finite inputs or echo the credential/body.
+        return JSONResponse(status_code=422, content={
+            "detail": "Invalid disconnect request"
+        })
+    return await request_validation_exception_handler(request, exc)
 
 app.add_middleware(
     CORSMiddleware,
@@ -588,7 +602,7 @@ def connect_car(connection: CarConnection):
 
 
 @app.post("/car/disconnect")
-def disconnect_car(connection: CarConnection):
+def disconnect_car(connection: CarDisconnectRequest):
     return disconnect_user(
         connection.shortcut_token,
         connection.latitude,
