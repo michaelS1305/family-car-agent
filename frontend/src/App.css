@@ -1716,6 +1716,19 @@
   font: inherit;
 }
 
+/* Avoid iOS native date/time percentage-width + padding overflow.
+   Stretch the border box into the label's grid track instead. */
+.reservation-editor input:is([type="date"], [type="time"]) {
+  box-sizing: border-box;
+  width: auto;
+  inline-size: auto;
+  min-width: 0;
+  min-inline-size: 0;
+  max-width: 100%;
+  max-inline-size: 100%;
+  justify-self: stretch;
+}
+
 .reservation-time-fields {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
