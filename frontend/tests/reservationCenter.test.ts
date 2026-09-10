@@ -123,3 +123,13 @@ test('vertical date and time controls retain visible labels and accessible names
   assert.equal((screenSource.match(/type="time"/g) ?? []).length, 2)
   assert.equal((screenSource.match(/className="reservation-time-fields"/g) ?? []).length, 2)
 })
+
+test('native date/time border boxes stretch without percentage-width sizing', () => {
+  const css = readFileSync(new URL('../src/App.css', import.meta.url), 'utf8')
+  const rule = css.match(/\.reservation-editor input:is\(\[type="date"\], \[type="time"\]\)\s*\{([^}]+)\}/)?.[1]
+  assert.ok(rule)
+  for (const declaration of ['box-sizing: border-box;', 'width: auto;', 'inline-size: auto;',
+    'min-width: 0;', 'min-inline-size: 0;', 'max-width: 100%;', 'max-inline-size: 100%;',
+    'justify-self: stretch;']) assert.ok(rule.includes(declaration))
+  assert.doesNotMatch(rule, /overflow:|transform:|position:|margin:|height:|padding:/)
+})
