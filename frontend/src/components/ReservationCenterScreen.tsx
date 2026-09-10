@@ -68,8 +68,8 @@ function ReservationForm({
           <legend>התחלה</legend>
           <div className="reservation-time-fields">
             <label>
-              <span>תאריך</span>
               <input
+                aria-label="תאריך התחלה"
                 ref={dateInputRef}
                 type="date"
                 required
@@ -78,8 +78,8 @@ function ReservationForm({
               />
             </label>
             <label>
-              <span>משעה</span>
               <input
+                aria-label="שעת התחלה"
                 type="time"
                 step="1"
                 required
@@ -93,13 +93,12 @@ function ReservationForm({
           <legend>סיום</legend>
           <div className="reservation-time-fields">
             <label>
-              <span>תאריך</span>
-              <input type="date" required value={form.endDate}
+              <input aria-label="תאריך סיום" type="date" required value={form.endDate}
                 onChange={(event) => setForm((current) => ({ ...current, endDate: event.target.value }))} />
             </label>
             <label>
-              <span>עד שעה</span>
               <input
+                aria-label="שעת סיום"
                 type="time"
                 step="1"
                 required
