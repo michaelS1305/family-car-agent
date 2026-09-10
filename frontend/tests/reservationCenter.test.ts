@@ -107,6 +107,19 @@ test('form groups reflow and original update locator stays untouched', () => {
   assert.match(screenSource, /value=\{form.endDate\}/)
   assert.match(screenSource, /start_time: editor.reservation.start_time/)
   assert.match(screenSource, /end_time: editor.reservation.end_time/)
-  assert.match(css, /grid-template-columns: repeat\(auto-fit, minmax\(min\(100%, 10rem\), 1fr\)\)/)
+  assert.match(css, /container: reservation-form \/ inline-size/)
+  assert.match(css, /@container reservation-form \(min-width: calc\(16em \+ 10px\)\)/)
+  assert.match(css, /grid-template-columns: minmax\(0, 1fr\) 7em/)
+  assert.match(css, /\.reservation-time-fields\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\);[^}]*gap: 10px;/)
   assert.match(css, /\.reservation-editor input\s*\{[^}]*min-width: 0;[^}]*max-width: 100%;/)
+})
+
+test('date and time controls have accessible names without redundant visible labels', () => {
+  for (const name of ['תאריך התחלה', 'שעת התחלה', 'תאריך סיום', 'שעת סיום']) {
+    assert.ok(screenSource.includes(`aria-label="${name}"`))
+  }
+  assert.doesNotMatch(screenSource, /<span>(תאריך|משעה|עד שעה)<\/span>/)
+  assert.equal((screenSource.match(/type="date"/g) ?? []).length, 2)
+  assert.equal((screenSource.match(/type="time"/g) ?? []).length, 2)
+  assert.equal((screenSource.match(/className="reservation-time-fields"/g) ?? []).length, 2)
 })

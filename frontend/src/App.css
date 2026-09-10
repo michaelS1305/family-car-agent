@@ -1693,6 +1693,7 @@
 
 .reservation-editor form {
   gap: 18px;
+  container: reservation-form / inline-size;
 }
 
 .reservation-editor label > span {
@@ -1716,9 +1717,19 @@
 
 .reservation-time-fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Use the editor's available width, not the viewport. Reserve 9em for
+   the native date and 7em for time; larger text can fall back per row. */
+@container reservation-form (min-width: calc(16em + 10px)) {
+  .reservation-time-fields {
+    grid-template-columns: minmax(0, 1fr) 7em;
+  }
 }
 
 .reservation-datetime-group {
