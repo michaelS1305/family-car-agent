@@ -1252,6 +1252,10 @@ function App() {
         onBack={() => undefined}
         onStatusChange={async (status) => {
           await updateCarPlaySetupStatus(session.access_token, status)
+          clearPendingCreateSuccess()
+          clearPendingJoinSuccess()
+          setPendingCreateSuccess(null)
+          setPendingJoinSuccess(null)
           retryBackendIdentity()
         }}
       />

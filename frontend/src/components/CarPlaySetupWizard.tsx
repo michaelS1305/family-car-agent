@@ -76,7 +76,6 @@ const steps: StepContent[] = [
     image: connectShortcutImage,
     imageAlt: 'מסך Connect To CarPlay עם הכפתור הגדרת קיצור',
     shortcut: 'connect',
-    code: 'compact',
   },
   {
     title: 'הגדרת קיצור החיבור',
@@ -84,7 +83,6 @@ const steps: StepContent[] = [
     secondary: 'לאחר מכן לחץ על ״הוספת קיצור״.',
     image: connectCodeImage,
     imageAlt: 'מסך קביעת תצורה לקיצור עם השדה מלל',
-    code: 'compact',
   },
   {
     title: 'התקנת קיצור הניתוק',
@@ -92,7 +90,6 @@ const steps: StepContent[] = [
     image: disconnectShortcutImage,
     imageAlt: 'מסך Disconnect From CarPlay עם הכפתור הגדרת קיצור',
     shortcut: 'disconnect',
-    code: 'compact',
   },
   {
     title: 'הגדרת קיצור הניתוק',
@@ -350,17 +347,9 @@ export function CarPlaySetupWizard({ accessToken, authUserId, onBack, onStatusCh
               <i style={{ width: `${(progressStep / carPlaySetupActionSteps) * 100}%` }} />
             </div>
           </div>
-          <button
-            type="button"
-            onClick={step === 0 ? () => void saveStatus('skipped') : moveNext}
-            disabled={step === 0 && isSavingStatus}
-          >
-            {step === 0
-              ? (isSavingStatus ? 'שומר...' : 'כבר הגדרתי')
-              : (isNotificationStep && (pushStatus === 'idle' || pushStatus === 'ready' || pushStatus === 'loading' || pushStatus === 'activating')
-                  ? 'לא עכשיו'
-                  : 'המשך')}
-          </button>
+          {step !== 0 && !isNotificationStep ? (
+            <button type="button" onClick={moveNext}>המשך</button>
+          ) : <span aria-hidden="true" />}
         </header>
       )}
 
@@ -417,18 +406,21 @@ export function CarPlaySetupWizard({ accessToken, authUserId, onBack, onStatusCh
                 <button type="button" className="secondary-button" onClick={retryPush}>נסה שוב</button>
               </div>
             )}
+            <button type="button" className="secondary-button carplay-secondary-action" onClick={moveNext}>
+              לא עכשיו
+            </button>
           </div>
         )}
 
         {step === 0 && (
-          <button
-            type="button"
-            className="primary-button carplay-start-button"
-            onClick={moveNext}
-            disabled={isSavingStatus}
-          >
-            מתחילים
-          </button>
+          <div className="carplay-intro-actions">
+            <button type="button" className="secondary-button carplay-secondary-action" onClick={() => void saveStatus('skipped')} disabled={isSavingStatus}>
+              כבר הגדרתי
+            </button>
+            <button type="button" className="primary-button carplay-start-button" onClick={moveNext} disabled={isSavingStatus}>
+              מתחילים
+            </button>
+          </div>
         )}
 
         {isFinished && (
