@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from database import (
     _update_reservation_on_connection,
     pool,
 )
+from gemini_capacity import ProviderCalls, CapacityUnavailable, AttemptExpired
 from gemini_usage import GeminiUsageTotals, log_gemini_usage
 from identity import CurrentUser
 from reservation_rules import ReservationValidationError, canonical_time
@@ -88,139 +90,161 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def _active_attempts(conn, user_id):
+    return conn.execute(
+        """SELECT count(*) FROM (
+            SELECT id, lease_token FROM chat_requests
+            WHERE user_id = %s AND status = 'processing'
+              AND lease_expires_at > clock_timestamp()
+            UNION
+            SELECT cr.id, p.attempt_token FROM gemini_call_permits p
+            JOIN chat_requests cr ON cr.id = p.chat_request_id
+            WHERE cr.user_id = %s AND p.expires_at > clock_timestamp()
+        ) occupied""", (user_id, user_id),
+    ).fetchone()[0]
+
+
+def _valid_completed_action(row):
+    return (
+        row is not None
+        and row[0] in {"create_reservation", "update_reservation", "cancel_reservation"}
+        and isinstance(row[1], dict)
+        and type(row[1].get("success")) is bool
+        and isinstance(row[1].get("code"), str)
+    )
+
+
 def _claim_request(current_user, request_id, message, lease_token):
     with pool.connection() as conn:
         with conn.transaction():
-            created = conn.execute(
-                """
-                INSERT INTO chat_requests (
-                    request_id,
-                    user_id,
-                    family_id,
-                    status,
-                    original_message,
-                    lease_token,
-                    lease_expires_at
-                )
-                VALUES (
-                    %s, %s, %s, 'processing', %s, %s,
-                    NOW() + (%s * INTERVAL '1 second')
-                )
-                ON CONFLICT (user_id, request_id) DO NOTHING
-                RETURNING id
-                """,
-                (
-                    request_id,
-                    current_user.user_id,
-                    current_user.family_id,
-                    message,
-                    lease_token,
-                    CHAT_LEASE_SECONDS,
-                ),
-            ).fetchone()
-
-            if created:
-                created_at = datetime.now(timezone.utc).isoformat()
-                conn.execute(
-                    """
-                    INSERT INTO conversation_messages (
-                        user_id, role, content, created_at, chat_request_id
-                    )
-                    VALUES (%s, 'user', %s, %s, %s)
-                    """,
-                    (
-                        current_user.user_id,
-                        message,
-                        created_at,
-                        created[0],
-                    ),
-                )
-                return {"outcome": "claimed", "id": created[0]}
-
+            conn.execute("SELECT pg_advisory_xact_lock(%s, %s)",
+                         (1178686275, current_user.user_id))
             existing = conn.execute(
-                """
-                SELECT
-                    id,
-                    family_id,
-                    original_message,
-                    status,
-                    final_response,
-                    error_http_status,
-                    error_payload,
-                    lease_expires_at <= NOW()
-                FROM chat_requests
-                WHERE user_id = %s
-                  AND request_id = %s
-                FOR UPDATE
-                """,
+                """SELECT id, family_id, original_message, status, final_response,
+                          error_http_status, error_payload,
+                          lease_expires_at <= clock_timestamp(), processing_attempts
+                   FROM chat_requests WHERE user_id = %s AND request_id = %s FOR UPDATE""",
                 (current_user.user_id, request_id),
             ).fetchone()
-
-            if not existing:
-                raise RuntimeError("Chat request conflict could not be loaded")
-
-            (
-                database_id,
-                stored_family_id,
-                stored_message,
-                status,
-                final_response,
-                error_http_status,
-                error_payload,
-                lease_expired,
-            ) = existing
-
-            if stored_family_id != current_user.family_id:
-                return {"outcome": "family_mismatch"}
-            if stored_message != message:
-                return {"outcome": "message_mismatch"}
-            if status == "completed":
-                return {
-                    "outcome": "completed",
-                    "response": final_response,
-                }
-            if status == "failed":
-                return {
-                    "outcome": "failed",
-                    "status_code": error_http_status,
-                    "error": error_payload,
-                }
-            if not lease_expired:
-                return {"outcome": "processing"}
-
-            taken_over = conn.execute(
-                """
-                UPDATE chat_requests
-                SET lease_token = %s,
-                    lease_expires_at = NOW() + (%s * INTERVAL '1 second'),
-                    updated_at = NOW()
-                WHERE id = %s
-                  AND status = 'processing'
-                  AND lease_expires_at <= NOW()
-                RETURNING id
-                """,
-                (lease_token, CHAT_LEASE_SECONDS, database_id),
+            if existing:
+                database_id, family_id, stored_message, status, response, http_status, error, expired, attempts = existing
+                if family_id != current_user.family_id:
+                    return {"outcome": "family_mismatch"}
+                if stored_message != message:
+                    return {"outcome": "message_mismatch"}
+                if status == "completed":
+                    return {"outcome": "completed", "response": response}
+                if status == "failed":
+                    return {"outcome": "failed", "status_code": http_status, "error": error}
+                if not expired:
+                    return {"outcome": "processing"}
+                action = conn.execute(
+                    """SELECT action_type, result FROM chat_tool_actions
+                       WHERE chat_request_id = %s AND status = 'completed' FOR UPDATE""",
+                    (database_id,),
+                ).fetchone()
+                if _valid_completed_action(action):
+                    # Finalization ONLY under the request lock: no new attempt,
+                    # lease, model, permit, dispatcher or mutation replay.
+                    response = _response(request_id, _fallback_for_action(
+                        {"action_type": action[0], "result": action[1]}))
+                    assistant = response["assistant_message"]
+                    conn.execute(
+                        """INSERT INTO conversation_messages
+                           (user_id, role, content, created_at, chat_request_id)
+                           VALUES (%s, 'assistant', %s, %s, %s)""",
+                        (current_user.user_id, assistant["content"], assistant["created_at"], database_id),
+                    )
+                    conn.execute(
+                        """UPDATE chat_requests SET status = 'completed', final_response = %s::jsonb,
+                           completed_at = clock_timestamp(), updated_at = clock_timestamp()
+                           WHERE id = %s""", (_json(response), database_id),
+                    )
+                    return {"outcome": "completed", "response": response}
+                if attempts >= 3:
+                    detail = {"detail": {"code": "CHAT_ATTEMPTS_EXHAUSTED",
+                              "message": "לא ניתן להמשיך את הבקשה הזו. אפשר לשלוח הודעה חדשה."}}
+                    conn.execute(
+                        """UPDATE chat_requests SET status = 'failed', error_http_status = 409,
+                           error_payload = %s::jsonb, completed_at = clock_timestamp(),
+                           updated_at = clock_timestamp() WHERE id = %s""",
+                        (_json(detail), database_id),
+                    )
+                    return {"outcome": "failed", "status_code": 409, "error": detail}
+                retained = conn.execute(
+                    """SELECT 1 FROM gemini_call_permits WHERE chat_request_id = %s
+                       AND expires_at > clock_timestamp()""", (database_id,),
+                ).fetchone()
+                if retained:
+                    raise ChatError(503, "GEMINI_CAPACITY_UNAVAILABLE", "הבקשה עדיין מתאוששת. נסו שוב בעוד רגע.", 5)
+                if _active_attempts(conn, current_user.user_id) >= 2:
+                    raise ChatError(429, "CHAT_CONCURRENCY_LIMITED", "יש הודעות שעדיין בעיבוד. נסו שוב בעוד רגע.", 5)
+                conn.execute(
+                    """UPDATE chat_requests SET lease_token = %s,
+                       lease_expires_at = clock_timestamp() + INTERVAL '120 seconds',
+                       processing_attempts = processing_attempts + 1, updated_at = clock_timestamp()
+                       WHERE id = %s""", (lease_token, database_id),
+                )
+                return {"outcome": "recovered", "id": database_id}
+            count = conn.execute(
+                """SELECT count(*) FROM chat_requests WHERE user_id = %s
+                   AND created_at > clock_timestamp() - INTERVAL '60 seconds'""",
+                (current_user.user_id,),
+            ).fetchone()[0]
+            if count >= 10:
+                raise ChatError(429, "CHAT_RATE_LIMITED", "נשלחו הרבה הודעות. נסו שוב בעוד דקה.", 60)
+            if _active_attempts(conn, current_user.user_id) >= 2:
+                raise ChatError(429, "CHAT_CONCURRENCY_LIMITED", "יש הודעות שעדיין בעיבוד. נסו שוב בעוד רגע.", 5)
+            created = conn.execute(
+                """INSERT INTO chat_requests
+                   (request_id, user_id, family_id, status, original_message, lease_token,
+                    lease_expires_at, processing_attempts, created_at)
+                   VALUES (%s, %s, %s, 'processing', %s, %s,
+                           clock_timestamp() + INTERVAL '120 seconds', 1, clock_timestamp())
+                   RETURNING id""",
+                (request_id, current_user.user_id, current_user.family_id, message, lease_token),
             ).fetchone()
-            if not taken_over:
-                return {"outcome": "processing"}
-            return {"outcome": "recovered", "id": database_id}
+            conn.execute(
+                """INSERT INTO conversation_messages (user_id, role, content, created_at, chat_request_id)
+                   VALUES (%s, 'user', %s, %s, %s)""",
+                (current_user.user_id, message, datetime.now(timezone.utc).isoformat(), created[0]),
+            )
+            return {"outcome": "claimed", "id": created[0]}
 
 
 def _renew_lease(chat_request_id, lease_token):
+    """Compatibility name: checks ownership/deadline; never extends the lease."""
     with pool.connection() as conn:
         renewed = conn.execute(
             """
-            UPDATE chat_requests
-            SET lease_expires_at = NOW() + (%s * INTERVAL '1 second'),
-                updated_at = NOW()
+            SELECT id FROM chat_requests
             WHERE id = %s
               AND status = 'processing'
               AND lease_token = %s
-            RETURNING id
+              AND lease_expires_at - INTERVAL '45 seconds' > clock_timestamp()
             """,
-            (CHAT_LEASE_SECONDS, chat_request_id, lease_token),
+            (chat_request_id, lease_token),
         ).fetchone()
     if not renewed:
+        raise ChatLeaseLostError()
+
+
+def _check_attempt_on_connection(conn, chat_request_id, lease_token):
+    if not conn.execute(
+        """SELECT id FROM chat_requests WHERE id = %s AND lease_token = %s
+           AND status = 'processing'
+           AND lease_expires_at - INTERVAL '45 seconds' > clock_timestamp()""",
+        (chat_request_id, lease_token),
+    ).fetchone():
+        raise ChatLeaseLostError()
+
+
+def _check_finalization_deadline(conn, chat_request_id):
+    if not conn.execute(
+        """SELECT id FROM chat_requests WHERE id = %s
+           AND lease_expires_at - INTERVAL '45 seconds' > clock_timestamp()""",
+        (chat_request_id,),
+    ).fetchone():
         raise ChatLeaseLostError()
 
 
@@ -258,6 +282,7 @@ def _execute_mutation(
                   AND family_id = %s
                   AND status = 'processing'
                   AND lease_token = %s
+                  AND lease_expires_at - INTERVAL '45 seconds' > clock_timestamp()
                 FOR UPDATE
                 """,
                 (
@@ -290,6 +315,7 @@ def _execute_mutation(
                 "SELECT pg_advisory_xact_lock(%s, %s)",
                 (RESERVATION_LOCK_NAMESPACE, current_user.family_id),
             )
+            _check_attempt_on_connection(conn, chat_request_id, lease_token)
             # Replay/fencing above must happen before validating a new action.
             invalid_arguments = _invalid_mutation_arguments(action_type, arguments)
             recorded_arguments = {} if invalid_arguments else {
@@ -356,6 +382,7 @@ def _execute_mutation(
                 """,
                 (_json(result), action[0]),
             )
+            _check_attempt_on_connection(conn, chat_request_id, lease_token)
             return {
                 "already_executed": False,
                 "action_type": action_type,
@@ -459,6 +486,7 @@ def _finalize_request(chat_request_id, lease_token, current_user, response):
                   AND family_id = %s
                   AND status = 'processing'
                   AND lease_token = %s
+                  AND lease_expires_at - INTERVAL '45 seconds' > clock_timestamp()
                 FOR UPDATE
                 """,
                 (
@@ -501,6 +529,7 @@ def _finalize_request(chat_request_id, lease_token, current_user, response):
             ).fetchone()
             if not completed:
                 raise ChatLeaseLostError()
+            _check_finalization_deadline(conn, chat_request_id)
     return response
 
 
@@ -518,6 +547,7 @@ def _mark_failed(chat_request_id, lease_token, error):
             WHERE cr.id = %s
               AND cr.status = 'processing'
               AND cr.lease_token = %s
+              AND cr.lease_expires_at - INTERVAL '45 seconds' > clock_timestamp()
               AND NOT EXISTS (
                   SELECT 1
                   FROM chat_tool_actions AS action
@@ -606,6 +636,7 @@ def process_chat_message(request_id, message, current_user: CurrentUser):
     if current_user.family_id is None:
         raise ChatError(403, "FAMILY_REQUIRED", "המשתמש אינו משויך למשפחה.")
 
+    started = time.monotonic()
     lease_token = str(uuid4())
     try:
         claim = _claim_request(current_user, request_id, message, lease_token)
@@ -699,6 +730,8 @@ def process_chat_message(request_id, message, current_user: CurrentUser):
             history,
             dispatch_mutation,
             usage_accumulator=gemini_usage,
+            provider_call=ProviderCalls(pool, chat_request_id, lease_token, request_id, started),
+            check_attempt=lambda: _renew_lease(chat_request_id, lease_token),
         )
         gemini_succeeded = True
         _renew_lease(chat_request_id, lease_token)
@@ -708,6 +741,23 @@ def process_chat_message(request_id, message, current_user: CurrentUser):
             current_user,
             _response(request_id, reply),
         )
+    except (CapacityUnavailable, AttemptExpired) as error:
+        completed_action = _get_completed_action(chat_request_id)
+        if completed_action:
+            try:
+                return _finalize_completed_action(chat_request_id, lease_token, current_user,
+                                                 request_id, completed_action)
+            except ChatLeaseLostError:
+                pass
+        # Relinquish processing ownership without deleting any uncertain permit.
+        with pool.connection() as conn:
+            conn.execute(
+                """UPDATE chat_requests SET lease_expires_at = clock_timestamp()
+                   WHERE id = %s AND lease_token = %s AND status = 'processing'""",
+                (chat_request_id, lease_token),
+            )
+        raise ChatError(503, "GEMINI_CAPACITY_UNAVAILABLE",
+                        "הבקשה ממתינה לעיבוד. נסו שוב בעוד רגע.", 5) from error
     except ChatError:
         raise
     except Exception as error:

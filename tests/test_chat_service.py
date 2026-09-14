@@ -112,6 +112,7 @@ class ChatOrchestrationTests(unittest.TestCase):
             _history,
             _dispatcher,
             usage_accumulator=None,
+            **_controls,
         ):
             usage_accumulator.add_response(types.SimpleNamespace(
                 usage_metadata=types.SimpleNamespace(
@@ -173,6 +174,7 @@ class ChatOrchestrationTests(unittest.TestCase):
             _history,
             dispatcher,
             usage_accumulator=None,
+            **_controls,
         ):
             mutation_results.append(dispatcher("cancel_reservation", {"reservation_id": 5}))
             mutation_results.append(dispatcher("cancel_reservation", {"reservation_id": 6}))

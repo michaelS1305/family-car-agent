@@ -93,6 +93,9 @@ function isRetryableWithSameRequest(error: unknown) {
     || error.code === 'CHAT_IN_PROGRESS'
     || error.code === 'CHAT_RECOVERY_REQUIRED'
     || error.code === 'CHAT_LEASE_LOST'
+    || error.code === 'CHAT_RATE_LIMITED'
+    || error.code === 'CHAT_CONCURRENCY_LIMITED'
+    || error.code === 'GEMINI_CAPACITY_UNAVAILABLE'
   )
 }
 

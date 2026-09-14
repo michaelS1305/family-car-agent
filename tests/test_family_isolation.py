@@ -574,12 +574,14 @@ class AIToolBoundaryTests(unittest.TestCase):
             "get_active_driver",
             "get_last_driver",
             "get_recent_events",
+            "get_ai_reservations",
             "get_user_reservations",
             "get_family_reservations",
         ):
             setattr(self.database_stub, name, Mock())
         self.database_stub.get_user_reservations.return_value = []
         self.database_stub.get_family_reservations.return_value = []
+        self.database_stub.get_ai_reservations.return_value = {"items": [], "limit": 20, "truncated": False}
         self.model = ToolInvokingModel()
         self.service = load_ai_service(self.database_stub, self.model)
 
@@ -593,8 +595,8 @@ class AIToolBoundaryTests(unittest.TestCase):
                 dispatcher,
             )
 
-        self.database_stub.get_family_reservations.assert_called_once_with(10)
-        self.database_stub.get_user_reservations.assert_called_once_with(1, 10)
+        self.assertEqual(self.database_stub.get_ai_reservations.call_args_list,
+                         [unittest.mock.call(10, 1), unittest.mock.call(10)])
         dispatcher.assert_not_called()
         serialized_contents = repr(self.model.contents)
         self.assertNotIn("user_id", serialized_contents)

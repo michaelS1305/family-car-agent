@@ -2,6 +2,14 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
+test('capacity and admission retries preserve the original chat request', () => {
+  const source = readFileSync(new URL('../src/components/MainAppScreen.tsx', import.meta.url), 'utf8')
+  const classification = source.slice(source.indexOf('function isRetryableWithSameRequest'), source.indexOf('export function MainAppScreen'))
+  for (const code of ['CHAT_RATE_LIMITED', 'CHAT_CONCURRENCY_LIMITED', 'GEMINI_CAPACITY_UNAVAILABLE']) {
+    assert.ok(classification.includes(`error.code === '${code}'`))
+  }
+})
+
 import {
   CHAT_HEADER,
   CHAT_COMPOSER_LAYOUT,

@@ -7,10 +7,9 @@ from google import genai
 
 from database import (
     get_active_driver,
-    get_family_reservations,
+    get_ai_reservations,
     get_last_driver,
     get_recent_events,
-    get_user_reservations,
 )
 from identity import CurrentUser
 
@@ -211,9 +210,9 @@ def _read_tool(name, current_user):
     if name == "get_recent_events_tool":
         return [{"driver": row[0], "status": row[1], "event_time": row[2]} for row in get_recent_events(family_id)]
     if name == "get_user_reservations_tool":
-        return [{"reservation_id": row[0], "start_time": row[1], "end_time": row[2], "status": row[3]} for row in get_user_reservations(current_user.user_id, family_id)]
+        return get_ai_reservations(family_id, current_user.user_id)
     if name == "get_family_reservations_tool":
-        return [{"reservation_id": row[0], "user_name": row[2], "start_time": row[3], "end_time": row[4], "status": row[5]} for row in get_family_reservations(family_id)]
+        return get_ai_reservations(family_id)
     raise ValueError("Unknown read tool")
 
 
@@ -238,6 +237,8 @@ def generate_agent_response(
     history,
     mutation_dispatcher,
     usage_accumulator=None,
+    provider_call=None,
+    check_attempt=None,
 ):
     if current_user.family_id is None:
         raise ValueError("A family-scoped AI request requires a family mapping")
@@ -255,13 +256,17 @@ def generate_agent_response(
     }
 
     for round_index in range(MAX_TOOL_ROUNDS):
+        if check_attempt is not None:
+            check_attempt()
         gemini_stage = (
             "gemini_initial_call"
             if round_index == 0
             else "gemini_final_response"
         )
         try:
-            response = client.models.generate_content(
+            generate = client.models.generate_content
+            call = generate if provider_call is None else lambda **kwargs: provider_call(generate, **kwargs)
+            response = call(
                 model=GEMINI_MODEL,
                 contents=contents,
                 config={
@@ -295,6 +300,8 @@ def generate_agent_response(
         contents.append(response.candidates[0].content)
         function_responses = []
         for part in function_parts:
+            if check_attempt is not None:
+                check_attempt()
             function_call = _value(part, "function_call")
             name = _value(function_call, "name")
             raw_arguments = _value(function_call, "args")

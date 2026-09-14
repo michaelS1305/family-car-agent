@@ -735,6 +735,27 @@ def create_reservation(user_id, start_time, end_time):
             end_time,
         )
 
+def get_ai_reservations(family_id, user_id=None):
+    """AI-only bounded page; 21st row proves truncation without loading all rows."""
+    if family_id is None:
+        raise ValueError("Family required")
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """SELECT r.id, u.name, r.start_time, r.end_time, r.status
+               FROM reservations r JOIN users u ON u.id = r.user_id
+               WHERE u.family_id = %s AND (%s::integer IS NULL OR r.user_id = %s)
+               ORDER BY r.start_time, r.id LIMIT 21""",
+            (family_id, user_id, user_id),
+        ).fetchall()
+    return {
+        "items": [{"reservation_id": row[0], "user_name": row[1],
+                   "start_time": row[2], "end_time": row[3], "status": row[4]}
+                  for row in rows[:20]],
+        "limit": 20, "truncated": len(rows) > 20,
+        "ordering": "start_time ascending, reservation_id ascending",
+    }
+
+
 def get_family_reservations(family_id):
     with pool.connection() as conn:
         cursor = conn.execute(
