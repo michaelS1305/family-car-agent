@@ -1076,6 +1076,36 @@
 .dashboard-category-button svg { width: clamp(25px, 8.5vw, 32px); height: clamp(25px, 8.5vw, 32px); }
 .dashboard-category-button span { max-width: 100%; font-size: clamp(0.78rem, 3.5vw, 1rem); font-weight: 620; text-wrap: balance; }
 
+/* Each control is a full radial wedge; the inner content stays at the established points. */
+.dashboard-category-button {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.54);
+  clip-path: polygon(50% 50%, 22% 0, 78% 0);
+}
+.dashboard-category-button:nth-of-type(3) { clip-path: polygon(50% 50%, 78% 0, 100% 66%); }
+.dashboard-category-button:nth-of-type(4) { clip-path: polygon(50% 50%, 100% 66%, 22% 100%); }
+.dashboard-category-button:nth-of-type(5) { clip-path: polygon(50% 50%, 22% 100%, 0 66%); }
+.dashboard-category-button:nth-of-type(6) { clip-path: polygon(50% 50%, 0 66%, 22% 0); }
+.dashboard-category-button > svg,
+.dashboard-category-button > span { position: absolute; left: var(--category-left, 50%); top: var(--category-top, 50%); transform: translate(-50%, -50%); }
+.dashboard-category-button > span { display: grid; justify-items: center; gap: 5px; }
+.dashboard-category-button > span > span { position: static; transform: none; }
+.dashboard-category-button:nth-of-type(1) > span, .dashboard-category-button:nth-of-type(1) > svg { left: 50%; top: 16%; }
+.dashboard-category-button:nth-of-type(2) > span, .dashboard-category-button:nth-of-type(2) > svg { left: 84%; top: 42%; }
+.dashboard-category-button:nth-of-type(3) > span, .dashboard-category-button:nth-of-type(3) > svg { left: 72%; top: 82%; }
+.dashboard-category-button:nth-of-type(4) > span, .dashboard-category-button:nth-of-type(4) > svg { left: 28%; top: 82%; }
+.dashboard-category-button:nth-of-type(5) > span, .dashboard-category-button:nth-of-type(5) > svg { left: 16%; top: 42%; }
+.dashboard-category-button > svg { transform: translate(-50%, -85%); }
+.dashboard-category-button > span { transform: translate(-50%, 5%); }
+.dashboard-category-center { position: absolute; z-index: 4; inset: 31%; border: 1px solid rgba(255,255,255,.72); border-radius: 50%; background: rgba(255,255,255,.3); pointer-events: none; }
+
 .rotary-selector {
   --rotary-angle: 0deg;
   width: clamp(282px, min(88vw, 52dvh), 430px);
