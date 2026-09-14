@@ -1076,54 +1076,10 @@
 .dashboard-category-button svg { width: clamp(25px, 8.5vw, 32px); height: clamp(25px, 8.5vw, 32px); }
 .dashboard-category-button span { max-width: 100%; font-size: clamp(0.78rem, 3.5vw, 1rem); font-weight: 620; text-wrap: balance; }
 
-/* Each control is a full radial wedge; the inner content stays at the established points. */
-.dashboard-category-button {
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: rgba(255, 255, 255, 0.2);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.54);
-  clip-path: polygon(50% 50%, 22% 0, 78% 0);
-}
-.dashboard-category-button:nth-of-type(3) { clip-path: polygon(50% 50%, 78% 0, 100% 66%); }
-.dashboard-category-button:nth-of-type(4) { clip-path: polygon(50% 50%, 100% 66%, 22% 100%); }
-.dashboard-category-button:nth-of-type(5) { clip-path: polygon(50% 50%, 22% 100%, 0 66%); }
-.dashboard-category-button:nth-of-type(6) { clip-path: polygon(50% 50%, 0 66%, 22% 0); }
-.dashboard-category-button > svg,
-.dashboard-category-button > span { position: absolute; left: var(--category-left, 50%); top: var(--category-top, 50%); transform: translate(-50%, -50%); }
-.dashboard-category-button > span { display: grid; justify-items: center; gap: 5px; }
-.dashboard-category-button > span > span { position: static; transform: none; }
-.dashboard-category-button:nth-of-type(1) > span, .dashboard-category-button:nth-of-type(1) > svg { left: 50%; top: 16%; }
-.dashboard-category-button:nth-of-type(2) > span, .dashboard-category-button:nth-of-type(2) > svg { left: 84%; top: 42%; }
-.dashboard-category-button:nth-of-type(3) > span, .dashboard-category-button:nth-of-type(3) > svg { left: 72%; top: 82%; }
-.dashboard-category-button:nth-of-type(4) > span, .dashboard-category-button:nth-of-type(4) > svg { left: 28%; top: 82%; }
-.dashboard-category-button:nth-of-type(5) > span, .dashboard-category-button:nth-of-type(5) > svg { left: 16%; top: 42%; }
-.dashboard-category-button > svg { transform: translate(-50%, -85%); }
-.dashboard-category-button > span { transform: translate(-50%, 5%); }
-.dashboard-category-center { position: absolute; z-index: 4; inset: 31%; border: 1px solid rgba(255,255,255,.72); border-radius: 50%; background: rgba(255,255,255,.3); pointer-events: none; }
-.dashboard-category-button { inset: 0 !important; width: 100%; height: 100%; border-radius: 0; padding: 0; clip-path: polygon(50% 50%, 22% 0, 78% 0); }
-.dashboard-category-button:nth-of-type(3) { clip-path: polygon(50% 50%, 78% 0, 100% 66%); }
-.dashboard-category-button:nth-of-type(4) { clip-path: polygon(50% 50%, 100% 66%, 78% 100%); }
-.dashboard-category-button:nth-of-type(5) { clip-path: polygon(50% 50%, 78% 100%, 22% 100%); }
-.dashboard-category-button:nth-of-type(6) { clip-path: polygon(50% 50%, 22% 100%, 0 66%); }
-.dashboard-category-button:nth-of-type(2) { clip-path: polygon(50% 50%, 78% 0, 100% 66%); }
-.dashboard-category-button:nth-of-type(3) { clip-path: polygon(50% 50%, 100% 66%, 78% 100%); }
-.dashboard-category-button:nth-of-type(4) { clip-path: polygon(50% 50%, 78% 100%, 22% 100%); }
-.dashboard-category-button:nth-of-type(5) { clip-path: polygon(50% 50%, 22% 100%, 0 66%); }
-.dashboard-category-content { position: absolute; left: var(--category-left); top: var(--category-top); display: grid; justify-items: center; gap: 5px; transform: translate(-50%, -50%); pointer-events: none; }
-.dashboard-category-content svg { position: static; transform: none; }
-.dashboard-category-content > span { position: static; transform: none; }
 .dashboard-wedge-layer { position:absolute; inset:0; width:100%; height:100%; z-index:2; overflow:visible; }
 .dashboard-wedge-layer path { fill:rgba(255,255,255,.18); stroke:rgba(255,255,255,.7); stroke-width:.45; vector-effect:non-scaling-stroke; cursor:pointer; }
 .dashboard-wedge-layer path:focus-visible { stroke:#28705c; stroke-width:1.2; outline:none; }
 .dashboard-wedge-center { fill:rgba(255,255,255,.42); stroke:rgba(255,255,255,.75); stroke-width:.6; pointer-events:none; }
-.dashboard-category-button { inset:auto !important; width:clamp(66px,22%,96px); height:auto; min-height:72px; padding:8px 5px; border:1px solid rgba(255,255,255,.72); border-radius:24px; background:transparent; box-shadow:none; clip-path:none; z-index:3; }
-.dashboard-category-button > svg, .dashboard-category-button > span { position:static; transform:none; }
-.dashboard-category-button > span { display:grid; justify-items:center; gap:5px; }
 
 .rotary-selector {
   --rotary-angle: 0deg;
