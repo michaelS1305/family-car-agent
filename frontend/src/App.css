@@ -1060,11 +1060,11 @@
   align-content: center;
   gap: 5px;
   padding: 8px 5px;
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  border-radius: 24px;
+  border: 0;
+  border-radius: 0;
   color: #294967;
-  background: rgba(255, 255, 255, 0.52);
-  box-shadow: 0 8px 20px rgba(38, 50, 65, 0.08);
+  background: transparent;
+  box-shadow: none;
   transform: translate(-50%, -50%);
   cursor: pointer;
   transition: transform 160ms ease, filter 160ms ease, background 160ms ease;
@@ -1077,7 +1077,9 @@
 .dashboard-category-button span { max-width: 100%; font-size: clamp(0.78rem, 3.5vw, 1rem); font-weight: 620; text-wrap: balance; }
 
 .dashboard-wedge-layer { position:absolute; inset:0; width:100%; height:100%; z-index:2; overflow:visible; }
-.dashboard-wedge-layer path { fill:rgba(255,255,255,.18); stroke:rgba(255,255,255,.7); stroke-width:.45; vector-effect:non-scaling-stroke; cursor:pointer; }
+.dashboard-wedge-layer path { fill:rgba(255,255,255,.34); stroke:rgba(255,255,255,.9); stroke-width:.65; vector-effect:non-scaling-stroke; cursor:pointer; transition:fill 160ms ease, stroke 160ms ease; }
+.dashboard-wedge-layer path:hover { fill:rgba(255,255,255,.42); }
+.dashboard-wedge-layer path:active { fill:rgba(255,255,255,.5); }
 .dashboard-wedge-layer path:focus-visible { stroke:#28705c; stroke-width:1.2; outline:none; }
 .dashboard-wedge-center { fill:rgba(255,255,255,.42); stroke:rgba(255,255,255,.75); stroke-width:.6; pointer-events:none; }
 
