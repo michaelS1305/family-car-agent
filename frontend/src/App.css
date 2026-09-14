@@ -1105,6 +1105,18 @@
 .dashboard-category-button > svg { transform: translate(-50%, -85%); }
 .dashboard-category-button > span { transform: translate(-50%, 5%); }
 .dashboard-category-center { position: absolute; z-index: 4; inset: 31%; border: 1px solid rgba(255,255,255,.72); border-radius: 50%; background: rgba(255,255,255,.3); pointer-events: none; }
+.dashboard-category-button { inset: 0 !important; width: 100%; height: 100%; border-radius: 0; padding: 0; clip-path: polygon(50% 50%, 22% 0, 78% 0); }
+.dashboard-category-button:nth-of-type(3) { clip-path: polygon(50% 50%, 78% 0, 100% 66%); }
+.dashboard-category-button:nth-of-type(4) { clip-path: polygon(50% 50%, 100% 66%, 78% 100%); }
+.dashboard-category-button:nth-of-type(5) { clip-path: polygon(50% 50%, 78% 100%, 22% 100%); }
+.dashboard-category-button:nth-of-type(6) { clip-path: polygon(50% 50%, 22% 100%, 0 66%); }
+.dashboard-category-button:nth-of-type(2) { clip-path: polygon(50% 50%, 78% 0, 100% 66%); }
+.dashboard-category-button:nth-of-type(3) { clip-path: polygon(50% 50%, 100% 66%, 78% 100%); }
+.dashboard-category-button:nth-of-type(4) { clip-path: polygon(50% 50%, 78% 100%, 22% 100%); }
+.dashboard-category-button:nth-of-type(5) { clip-path: polygon(50% 50%, 22% 100%, 0 66%); }
+.dashboard-category-content { position: absolute; left: var(--category-left); top: var(--category-top); display: grid; justify-items: center; gap: 5px; transform: translate(-50%, -50%); pointer-events: none; }
+.dashboard-category-content svg { position: static; transform: none; }
+.dashboard-category-content > span { position: static; transform: none; }
 
 .rotary-selector {
   --rotary-angle: 0deg;
