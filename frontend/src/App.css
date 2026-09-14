@@ -461,8 +461,8 @@
   );
   -webkit-backdrop-filter: blur(5px) saturate(112%);
   backdrop-filter: blur(5px) saturate(112%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 42%);
-  mask-image: linear-gradient(to bottom, transparent, #000 42%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0 48%, #000 62%);
+  mask-image: linear-gradient(to bottom, transparent 0 48%, #000 62%);
 }
 
 .main-chat-header {
@@ -1042,6 +1042,39 @@
   justify-items: center;
   padding: 8px 0;
 }
+
+.dashboard-category-orbit {
+  width: clamp(282px, min(88vw, 52dvh), 430px);
+  aspect-ratio: 1;
+  position: relative;
+  isolation: isolate;
+}
+
+.dashboard-category-button {
+  position: absolute;
+  z-index: 3;
+  width: clamp(78px, 22%, 104px);
+  min-height: 72px;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 5px;
+  padding: 8px 5px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 24px;
+  color: #294967;
+  background: rgba(255, 255, 255, 0.52);
+  box-shadow: 0 8px 20px rgba(38, 50, 65, 0.08);
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  transition: transform 160ms ease, filter 160ms ease, background 160ms ease;
+}
+
+.dashboard-category-button:hover { filter: brightness(1.03); }
+.dashboard-category-button:active { transform: translate(-50%, -50%) scale(0.97); }
+.dashboard-category-button:focus-visible { outline: 3px solid rgba(40, 112, 92, 0.34); outline-offset: 3px; }
+.dashboard-category-button svg { width: clamp(25px, 8.5vw, 32px); height: clamp(25px, 8.5vw, 32px); }
+.dashboard-category-button span { max-width: 100%; font-size: clamp(0.78rem, 3.5vw, 1rem); font-weight: 620; text-wrap: balance; }
 
 .rotary-selector {
   --rotary-angle: 0deg;

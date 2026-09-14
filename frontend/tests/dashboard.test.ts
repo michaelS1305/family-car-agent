@@ -61,9 +61,9 @@ test('hamburger opens the dashboard and its close control returns to chat', () =
 
 test('greeting and logout reuse authenticated app state and the existing auth flow', () => {
   assert.match(dashboardSource, /היי, \{userName\}/)
-  assert.match(dashboardSource, /סובב את המתג לשירות מבוקש/)
+  assert.doesNotMatch(dashboardSource, /סובב את המתג לשירות מבוקש/)
   assert.doesNotMatch(dashboardSource, /מיכאל/)
-  assert.match(dashboardSource, /loggingOut \? 'מתנתקים…' : 'התנתקות'/)
+  assert.match(dashboardSource, /מתנתקים….*התנתקות/)
   assert.match(appSource, /await cleanupPushBeforeLogout\(session\.access_token\)[\s\S]*?await invalidateAuthSession\(''\)/)
 })
 
@@ -78,12 +78,10 @@ test('application version is injected from package metadata', () => {
   assert.match(dashboardSource, /<small>v\{version\}<\/small>/)
 })
 
-test('rotary has one accessible slider and one real OK confirmation button', () => {
-  assert.equal((dashboardSource.match(/role="slider"/g) ?? []).length, 1)
-  assert.match(dashboardSource, /aria-valuetext=\{selectedCategory\.label\}/)
-  assert.match(dashboardSource, /className="rotary-knob"[\s\S]*?onClick=\{\(\) => onConfirm/)
-  assert.match(dashboardSource, /aria-label=\{`פתיחת \$\{selectedCategory\.label\}`\}/)
-  assert.match(dashboardSource, /<strong>OK<\/strong>/)
+test('dashboard categories are direct accessible buttons without rotary confirmation', () => {
+  assert.equal((dashboardSource.match(/className="dashboard-category-button"/g) ?? []).length, 1)
+  assert.doesNotMatch(dashboardSource, /role="slider"|rotary-knob|<strong>OK<\/strong>/)
+  assert.match(dashboardSource, /onClick=\{\(\)=>openCategory\(category\)\}/)
 })
 
 test('all five categories open dedicated screens', () => {
@@ -91,27 +89,26 @@ test('all five categories open dedicated screens', () => {
     assert.ok(category.label.length > 0)
   }
   assert.doesNotMatch(dashboardSource, /function CategoryPlaceholderScreen/)
-  assert.match(dashboardSource, /setActiveCategory\(category\)[\s\S]*?requestAnimationFrame[\s\S]*?setCategoryOpen\(true\)/)
+  assert.match(dashboardSource, /setActiveCategory\(category\)[\s\S]*?setCategoryOpen\(true\)/)
   assert.doesNotMatch(dashboardSource, /בקרוב|coming soon|סטטיסטיקה/i)
-  assert.match(dashboardSource, /activeCategory\.id === 'family'/)
+  assert.match(dashboardSource, /activeCategory\.id===?'family'/)
   assert.match(dashboardSource, /<FamilyScreen/)
-  assert.match(dashboardSource, /activeCategory\.id === 'reservations'/)
+  assert.match(dashboardSource, /activeCategory\.id===?'reservations'/)
   assert.match(dashboardSource, /<ReservationCenterScreen/)
-  assert.match(dashboardSource, /activeCategory\.id === 'history'/)
+  assert.match(dashboardSource, /activeCategory\.id===?'history'/)
   assert.match(dashboardSource, /<HistoryScreen/)
-  assert.match(dashboardSource, /activeCategory\.id === 'cars'/)
+  assert.match(dashboardSource, /activeCategory\.id===?'cars'/)
   assert.match(dashboardSource, /<VehiclesScreen/)
-  assert.match(dashboardSource, /activeCategory\.id === 'settings'/)
   assert.match(dashboardSource, /<SettingsScreen/)
 })
 
-test('category back preserves the mounted rotary and restores focus to OK', () => {
+test('category back preserves the mounted dashboard and restores focus', () => {
   assert.match(dashboardSource, /<div className="dashboard-content" inert=\{categoryOpen\}>/)
-  assert.match(dashboardSource, /<RotarySelector[\s\S]*?<FamilyScreen[\s\S]*?<ReservationCenterScreen[\s\S]*?<HistoryScreen[\s\S]*?<VehiclesScreen[\s\S]*?<SettingsScreen/)
+  assert.match(dashboardSource, /dashboard-category-button[\s\S]*?<FamilyScreen[\s\S]*?<ReservationCenterScreen[\s\S]*?<HistoryScreen[\s\S]*?<VehiclesScreen[\s\S]*?<SettingsScreen/)
   assert.match(dashboardSource, /onBack=\{closeCategory\}/)
   assert.match(dashboardSource, /setCategoryOpen\(false\)/)
-  assert.match(dashboardSource, /confirmButtonRef\.current\?\.focus/)
-  assert.match(dashboardSource, /if \(categoryOpen\) closeCategory\(\)/)
+  assert.match(dashboardSource, /closeButtonRef\.current\?\.focus/)
+  assert.match(dashboardSource, /if\(categoryOpen\)closeCategory\(\)/)
 })
 
 test('dashboard transition and rotary motion respect reduced motion', () => {
