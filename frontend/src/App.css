@@ -846,7 +846,7 @@
   position: absolute;
   z-index: 10;
   right: max(18px, env(safe-area-inset-right));
-  bottom: max(4px, env(safe-area-inset-bottom));
+  bottom: max(2px, calc(env(safe-area-inset-bottom) - 52px));
   left: max(18px, env(safe-area-inset-left));
   width: auto;
   max-width: 640px;

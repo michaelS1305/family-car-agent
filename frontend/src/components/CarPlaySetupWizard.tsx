@@ -22,6 +22,7 @@ import connectCodeImage from '../assets/carplay/02-connect-code.jpeg'
 import disconnectShortcutImage from '../assets/carplay/03-disconnect-shortcut.jpeg'
 import disconnectCodeImage from '../assets/carplay/04-disconnect-code.jpeg'
 import allShortcutsImage from '../assets/carplay/05-all-shortcuts.jpeg'
+import shortcutsAppImage from '../assets/carplay/shortcuts.jpeg'
 import chooseCarPlayImage from '../assets/carplay/06-choose-carplay.jpeg'
 import connectAutomationImage from '../assets/carplay/07-connect-automation.jpeg'
 import chooseConnectImage from '../assets/carplay/08-choose-connect.jpeg'
@@ -67,7 +68,6 @@ const steps: StepContent[] = [
   {
     title: 'קוד החיבור שלך',
     action: 'העתק את הקוד. נשתמש בו בשני הקיצורים שנגדיר בעוד רגע.',
-    secondary: 'אל תדאג, נציג לך אותו שוב כשצריך.',
     code: 'full',
   },
   {
@@ -103,7 +103,7 @@ const steps: StepContent[] = [
     title: 'פתח את אפליקציית קיצורים',
     action: 'פתח באייפון את אפליקציית ״קיצורים״.',
     secondary: 'אם אינך מוצא אותה, חפש ״קיצורים״ בחיפוש של האייפון.',
-    image: allShortcutsImage,
+    image: shortcutsAppImage,
     imageAlt: 'מסך כל הקיצורים באייפון',
   },
   {
