@@ -40,8 +40,9 @@ export function resolveAppDestination({
 
   if (identityStatus === 'authenticated_mapped') {
     if (!hasCurrentUser) return 'error'
-    if (hasPendingCreateSuccess) return 'create_success'
-    if (hasPendingJoinSuccess) return 'join_success'
+    // A verified create/join now enters the shared CarPlay onboarding directly;
+    // the redundant intermediate success screen is no longer shown.
+    if (hasPendingCreateSuccess || hasPendingJoinSuccess) return 'carplay_setup'
     if (carPlaySetupStatus === 'pending') return 'carplay_setup'
     if (carPlaySetupStatus === 'completed' || carPlaySetupStatus === 'skipped') return 'main'
     return 'error'

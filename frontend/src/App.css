@@ -349,7 +349,23 @@
 }
 
 .carplay-wizard.is-intro .carplay-start-button {
-  margin-top: auto;
+  margin-top: 0;
+}
+
+.carplay-intro-actions {
+  width: min(100%, 240px);
+  display: grid;
+  gap: 12px;
+  margin: auto auto 0;
+}
+
+.carplay-intro-actions .carplay-secondary-action,
+.carplay-push-action .carplay-secondary-action {
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 12px;
+  border-radius: 13px;
+  font-size: 0.82rem;
 }
 
 .carplay-push-action {
@@ -364,6 +380,10 @@
 .carplay-push-action .secondary-button {
   width: min(100%, 260px);
   min-height: 48px;
+}
+
+.carplay-push-action .carplay-secondary-action {
+  margin-top: 0;
 }
 
 .carplay-push-status,
@@ -826,7 +846,7 @@
   position: absolute;
   z-index: 10;
   right: max(18px, env(safe-area-inset-right));
-  bottom: max(10px, env(safe-area-inset-bottom));
+  bottom: max(4px, env(safe-area-inset-bottom));
   left: max(18px, env(safe-area-inset-left));
   width: auto;
   max-width: 640px;

@@ -90,7 +90,7 @@ test('successful Create waits for mapped identity before showing success', () =>
     carPlaySetupStatus: 'pending',
     hasPendingCreateSuccess: true,
     hasPendingJoinSuccess: false,
-  }), 'create_success')
+  }), 'carplay_setup')
 })
 
 test('mapped identity enters the app after Create success is acknowledged', () => {
@@ -123,7 +123,7 @@ test('successful Join waits for mapped identity before showing success', () => {
     carPlaySetupStatus: 'pending',
     hasPendingCreateSuccess: false,
     hasPendingJoinSuccess: true,
-  }), 'join_success')
+  }), 'carplay_setup')
 })
 
 test('mapped identity enters the app after Join success is acknowledged', () => {
@@ -182,7 +182,7 @@ test('real identity errors replace processing and mapped identity shows success'
     identityStatus: 'authenticated_mapped',
     hasCurrentUser: true,
     carPlaySetupStatus: 'pending',
-  }), 'join_success')
+  }), 'carplay_setup')
 })
 
 test('mapped users are routed by the server-side CarPlay setup status', () => {
@@ -218,7 +218,7 @@ test('onboarding success markers take priority over pending CarPlay setup', () =
     carPlaySetupStatus: 'pending',
     hasPendingCreateSuccess: true,
     hasPendingJoinSuccess: false,
-  }), 'create_success')
+  }), 'carplay_setup')
 })
 
 test('a stale onboarding intent cannot override completed or skipped server status', () => {
