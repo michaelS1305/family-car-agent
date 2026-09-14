@@ -1009,6 +1009,9 @@
   transform: translateY(-1px);
 }
 
+.dashboard-menu-glyph { width: 26px; display: grid; gap: 5px; transform: none !important; }
+.dashboard-menu-glyph i { display: block; height: 3px; border-radius: 999px; background: currentColor; }
+
 .dashboard-header strong {
   min-width: 0;
   font-size: clamp(1.08rem, 5vw, 1.42rem);
