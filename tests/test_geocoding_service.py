@@ -91,6 +91,26 @@ class GeocodingServiceTests(unittest.TestCase):
         self.assertEqual(params["components"], "country:IL")
         self.assertEqual(params["key"], "test-key")
 
+    def test_logging_failure_does_not_change_success_or_provider_failure(self):
+        with patch.object(
+            geocoding_service.logger,
+            "log",
+            side_effect=RuntimeError("logging unavailable"),
+        ):
+            value, _ = self.geocode([precise_result()])
+        self.assertEqual(value["latitude"], 31.0721)
+
+        with patch.object(geocoding_service, "GOOGLE_MAPS_API_KEY", None), \
+             patch.object(
+                 geocoding_service.logger,
+                 "log",
+                 side_effect=RuntimeError("logging unavailable"),
+             ):
+            with self.assertRaisesRegex(RuntimeError, "not configured"):
+                geocoding_service.geocode_address(
+                    "sensitive-city", "sensitive-street", "999"
+                )
+
     def test_provider_request_uses_bounded_phase_timeouts(self):
         connection = Mock()
         response = Mock()
@@ -123,16 +143,18 @@ class GeocodingServiceTests(unittest.TestCase):
             "get_context",
             return_value=context,
         ):
-            with self.assertRaisesRegex(TimeoutError, "timed out"):
-                geocoding_service._request_geocoding_payload(
-                    {"url": "https://example.test", "params": {}}
-                )
+            with self.assertLogs(geocoding_service.logger, level="ERROR") as captured:
+                with self.assertRaisesRegex(TimeoutError, "timed out"):
+                    geocoding_service._request_geocoding_payload(
+                        {"url": "https://example.test", "params": {}}
+                    )
 
         receive_connection.poll.assert_called_once_with(
             geocoding_service.PROVIDER_CALL_DEADLINE_SECONDS
         )
         process.terminate.assert_called_once_with()
         process.join.assert_called()
+        self.assertIn("stage=provider_timeout", " ".join(captured.output))
 
     def test_rooftop_premise_with_complete_components_is_accepted(self):
         value, _ = self.geocode([precise_result(types=["premise"])])
@@ -217,13 +239,81 @@ class GeocodingServiceTests(unittest.TestCase):
         self.assertIsNotNone(value)
 
     def test_zero_results_returns_none(self):
-        value, _ = self.geocode([], status="ZERO_RESULTS")
+        with self.assertLogs(geocoding_service.logger, level="INFO") as captured:
+            value, _ = self.geocode([], status="ZERO_RESULTS")
 
         self.assertIsNone(value)
+        self.assertIn("stage=provider_success", " ".join(captured.output))
+        self.assertIn("provider_status=ZERO_RESULTS", " ".join(captured.output))
 
     def test_provider_error_status_is_not_treated_as_address_not_found(self):
-        with self.assertRaisesRegex(RuntimeError, "REQUEST_DENIED"):
-            self.geocode([], status="REQUEST_DENIED")
+        with self.assertLogs(geocoding_service.logger, level="ERROR") as captured:
+            with self.assertRaisesRegex(RuntimeError, "REQUEST_DENIED"):
+                self.geocode([], status="REQUEST_DENIED")
+        output = " ".join(captured.output)
+        self.assertIn("stage=provider_api_rejected", output)
+        self.assertIn("provider_status=REQUEST_DENIED", output)
+        self.assertNotIn("test-key", output)
+        self.assertNotIn("דימונה", output)
+
+    def test_unknown_provider_status_is_safely_categorized_in_logs(self):
+        sensitive_status = "UNEXPECTED-sensitive-log-value"
+        with self.assertLogs(geocoding_service.logger, level="ERROR") as captured:
+            with self.assertRaisesRegex(RuntimeError, "UNEXPECTED"):
+                self.geocode([], status=sensitive_status)
+
+        output = " ".join(captured.output)
+        self.assertIn("provider_status=UNKNOWN", output)
+        self.assertNotIn(sensitive_status, output)
+
+    def test_unhashable_provider_status_is_safely_categorized_as_unknown(self):
+        sensitive_status = ["sensitive-provider-value"]
+        with self.assertLogs(geocoding_service.logger, level="ERROR") as captured:
+            with self.assertRaisesRegex(RuntimeError, "sensitive-provider-value"):
+                self.geocode([], status=sensitive_status)
+
+        output = " ".join(captured.output)
+        self.assertIn("provider_status=UNKNOWN", output)
+        self.assertNotIn("sensitive-provider-value", output)
+
+    def test_missing_key_and_transport_failure_log_no_sensitive_values(self):
+        with patch.object(geocoding_service, "GOOGLE_MAPS_API_KEY", None):
+            with self.assertLogs(geocoding_service.logger, level="ERROR") as captured:
+                with self.assertRaisesRegex(RuntimeError, "not configured"):
+                    geocoding_service.geocode_address(
+                        "sensitive-city", "sensitive-street", "999"
+                    )
+        output = " ".join(captured.output)
+        self.assertIn("stage=provider_configuration_error", output)
+        self.assertNotIn("sensitive-city", output)
+        self.assertNotIn("sensitive-street", output)
+
+        receive_connection = Mock()
+        receive_connection.poll.return_value = True
+        receive_connection.recv.return_value = ("error", "ConnectionError")
+        send_connection = Mock()
+        process = Mock()
+        process.is_alive.return_value = False
+        context = Mock()
+        context.Pipe.return_value = (receive_connection, send_connection)
+        context.Process.return_value = process
+        request = {
+            "url": "https://example.test?sensitive-key=secret",
+            "params": {"address": "sensitive-address", "key": "secret"},
+        }
+        with patch.object(
+            geocoding_service.multiprocessing,
+            "get_context",
+            return_value=context,
+        ):
+            with self.assertLogs(geocoding_service.logger, level="ERROR") as captured:
+                with self.assertRaisesRegex(RuntimeError, "ConnectionError"):
+                    geocoding_service._request_geocoding_payload(request)
+        output = " ".join(captured.output)
+        self.assertIn("stage=provider_transport_error", output)
+        self.assertIn("exception_class=ConnectionError", output)
+        self.assertNotIn("sensitive-address", output)
+        self.assertNotIn("secret", output)
 
 
 if __name__ == "__main__":
