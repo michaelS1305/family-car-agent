@@ -9,7 +9,7 @@ import sys
 import time
 import types
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -23,6 +23,131 @@ with patch.dict(sys.modules, {"database": database_stub}):
 
 
 class GeocodingCapacityUnitTests(unittest.TestCase):
+    def test_logging_failure_does_not_change_capacity_rejection(self):
+        rejection = capacity.GeocodingAdmissionError(
+            "GEOCODING_RATE_LIMITED", 429, 8
+        )
+        with patch.object(capacity, "_acquire", side_effect=rejection), \
+             patch.object(
+                 capacity.logger,
+                 "log",
+                 side_effect=RuntimeError("logging unavailable"),
+             ):
+            with self.assertRaises(capacity.GeocodingAdmissionError) as raised:
+                capacity.acquire("sensitive-auth-user")
+
+        self.assertIs(raised.exception, rejection)
+        self.assertEqual(raised.exception.status_code, 429)
+
+    def test_logging_and_sqlstate_failures_cannot_mask_database_failure(self):
+        class DatabaseFailure(Exception):
+            @property
+            def sqlstate(self):
+                raise RuntimeError("metadata unavailable")
+
+        original = DatabaseFailure("sensitive database detail")
+        with patch.object(capacity, "_acquire", side_effect=original), \
+             patch.object(
+                 capacity.logger,
+                 "log",
+                 side_effect=RuntimeError("logging unavailable"),
+             ):
+            with self.assertRaises(DatabaseFailure) as raised:
+                capacity.acquire("sensitive-auth-user")
+
+        self.assertIs(raised.exception, original)
+
+        with patch.object(capacity, "_acquire", side_effect=original):
+            with self.assertLogs(capacity.logger, level="ERROR") as captured:
+                with self.assertRaises(DatabaseFailure) as raised:
+                    capacity.acquire("sensitive-auth-user")
+        self.assertIs(raised.exception, original)
+        output = " ".join(captured.output)
+        self.assertIn("sqlstate=UNKNOWN", output)
+        self.assertNotIn("metadata unavailable", output)
+        self.assertNotIn("sensitive database detail", output)
+
+    def test_policy_missing_and_database_failures_log_safe_stages(self):
+        connection_context = MagicMock()
+        conn = connection_context.__enter__.return_value
+        conn.transaction.return_value.__enter__.return_value = None
+        conn.execute.return_value.fetchone.return_value = None
+
+        with patch.object(
+            capacity.pool, "connection", return_value=connection_context
+        ):
+            with self.assertLogs(capacity.logger, level="ERROR") as captured:
+                with self.assertRaisesRegex(RuntimeError, "not configured"):
+                    capacity.acquire("sensitive-auth-user")
+        output = " ".join(captured.output)
+        self.assertIn("stage=capacity_policy_missing", output)
+        self.assertNotIn("sensitive-auth-user", output)
+
+        class DatabaseFailure(Exception):
+            sqlstate = "42501"
+
+        conn.execute.side_effect = DatabaseFailure("sensitive database detail")
+        with patch.object(
+            capacity.pool, "connection", return_value=connection_context
+        ):
+            with self.assertLogs(capacity.logger, level="ERROR") as captured:
+                with self.assertRaises(DatabaseFailure):
+                    capacity.acquire("sensitive-auth-user")
+        output = " ".join(captured.output)
+        self.assertIn("stage=capacity_database_error", output)
+        self.assertIn("exception_class=DatabaseFailure", output)
+        self.assertIn("sqlstate=42501", output)
+        self.assertNotIn("sensitive database detail", output)
+        self.assertNotIn("sensitive-auth-user", output)
+
+    def test_capacity_rejection_and_release_failure_keep_existing_behavior(self):
+        connection_context = MagicMock()
+        conn = connection_context.__enter__.return_value
+        conn.transaction.return_value.__enter__.return_value = None
+        results = [Mock(), Mock(), Mock(), Mock()]
+        results[0].fetchone.return_value = (20,)
+        results[3].fetchone.return_value = (5.2,)
+        conn.execute.side_effect = results
+
+        with patch.object(
+            capacity.pool, "connection", return_value=connection_context
+        ):
+            with self.assertLogs(capacity.logger, level="WARNING") as captured:
+                with self.assertRaises(capacity.GeocodingAdmissionError) as raised:
+                    capacity.acquire("sensitive-auth-user")
+        self.assertEqual(raised.exception.code, "GEOCODING_USER_BUSY")
+        output = " ".join(captured.output)
+        self.assertIn("stage=capacity_rejected", output)
+        self.assertIn("error_code=GEOCODING_USER_BUSY", output)
+        self.assertNotIn("sensitive-auth-user", output)
+
+        release_failure = RuntimeError("sensitive release detail")
+        with patch.object(capacity, "acquire", return_value="attempt"), \
+             patch.object(capacity, "finish", side_effect=release_failure):
+            with self.assertLogs(capacity.logger, level="ERROR") as captured:
+                with self.assertRaises(RuntimeError) as release_raised:
+                    capacity.geocode_with_capacity(
+                        "sensitive-auth-user", Mock(return_value="ok")
+                    )
+        self.assertIs(release_raised.exception, release_failure)
+        output = " ".join(captured.output)
+        self.assertIn("stage=permit_release_error", output)
+        self.assertNotIn("sensitive release detail", output)
+        self.assertNotIn("sensitive-auth-user", output)
+
+        with patch.object(capacity, "acquire", return_value="attempt"), \
+             patch.object(capacity, "finish", side_effect=release_failure), \
+             patch.object(
+                 capacity.logger,
+                 "log",
+                 side_effect=RuntimeError("logging unavailable"),
+             ):
+            with self.assertRaises(RuntimeError) as release_raised:
+                capacity.geocode_with_capacity(
+                    "sensitive-auth-user", Mock(return_value="ok")
+                )
+        self.assertIs(release_raised.exception, release_failure)
+
     def test_provider_deadline_is_shorter_than_active_permit(self):
         self.assertLess(
             capacity.PROVIDER_CALL_DEADLINE_SECONDS,

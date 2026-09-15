@@ -828,6 +828,30 @@ class CreateFamilyRouteTests(unittest.TestCase):
         self.assertNotIn("latitude", response)
         self.assertNotIn("longitude", response)
 
+    def test_address_resolution_keeps_existing_structured_503_response(self):
+        family_creation_stub.resolve_create_family_address.side_effect = (
+            FakeFamilyCreationError(
+                "SERVER_ERROR",
+                "לא הצלחנו להשלים את הפעולה כרגע. נסו שוב בעוד רגע.",
+                503,
+            )
+        )
+
+        with self.assertRaises(FakeHTTPException) as raised:
+            main.resolve_family_address(
+                types.SimpleNamespace(home_address="תל אביב, דיזנגוף, 120"),
+                AuthenticatedSupabaseUser(auth_user_id="verified-auth-user"),
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            {
+                "code": "SERVER_ERROR",
+                "message": "לא הצלחנו להשלים את הפעולה כרגע. נסו שוב בעוד רגע.",
+            },
+        )
+
     def test_route_uses_unmapped_auth_dependency_and_token_identity(self):
         route = main.app.routes[("POST", "/api/onboarding/create-family")]
         dependency = inspect.signature(main.create_family).parameters[

@@ -1,3 +1,4 @@
+import logging
 import multiprocessing
 import os
 import unicodedata
@@ -15,6 +16,23 @@ GOOGLE_GEOCODING_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 ACCEPTED_RESULT_TYPES = {"street_address", "premise"}
 ACCEPTED_LOCATION_TYPES = {"ROOFTOP"}
 MAX_EQUIVALENT_RESULT_DISTANCE_METERS = 50
+SAFE_PROVIDER_STATUSES = {
+    "INVALID_REQUEST",
+    "OK",
+    "OVER_DAILY_LIMIT",
+    "OVER_QUERY_LIMIT",
+    "REQUEST_DENIED",
+    "UNKNOWN_ERROR",
+    "ZERO_RESULTS",
+}
+logger = logging.getLogger(__name__)
+
+
+def _safe_log(level, message, *args):
+    try:
+        logger.log(level, message, *args)
+    except BaseException:
+        pass
 
 
 def _fetch_geocoding_payload(connection, request_kwargs):
@@ -36,7 +54,17 @@ def _request_geocoding_payload(request_kwargs):
         args=(send_connection, request_kwargs),
         daemon=True,
     )
-    process.start()
+    try:
+        process.start()
+    except Exception as exc:
+        _safe_log(
+            logging.ERROR,
+            "operation=geocoding stage=provider_transport_error exception_class=%s",
+            type(exc).__name__,
+        )
+        receive_connection.close()
+        send_connection.close()
+        raise
     send_connection.close()
     try:
         if not receive_connection.poll(PROVIDER_CALL_DEADLINE_SECONDS):
@@ -45,10 +73,19 @@ def _request_geocoding_payload(request_kwargs):
             if process.is_alive():
                 process.kill()
                 process.join(timeout=1)
+            _safe_log(
+                logging.ERROR,
+                "operation=geocoding stage=provider_timeout exception_class=TimeoutError"
+            )
             raise TimeoutError("Google Maps Geocoding request timed out")
         try:
             outcome, value = receive_connection.recv()
         except EOFError as exc:
+            _safe_log(
+                logging.ERROR,
+                "operation=geocoding stage=provider_transport_error "
+                "exception_class=EOFError"
+            )
             raise RuntimeError("Google Maps Geocoding request failed") from exc
     finally:
         receive_connection.close()
@@ -58,6 +95,11 @@ def _request_geocoding_payload(request_kwargs):
             process.join(timeout=1)
 
     if outcome == "error":
+        _safe_log(
+            logging.ERROR,
+            "operation=geocoding stage=provider_transport_error exception_class=%s",
+            value,
+        )
         raise RuntimeError(f"Google Maps Geocoding request failed ({value})")
     return value
 
@@ -147,6 +189,11 @@ def _select_unambiguous_address(results, city, street, house_number):
 
 def geocode_address(city, street, house_number):
     if not GOOGLE_MAPS_API_KEY:
+        _safe_log(
+            logging.ERROR,
+            "operation=geocoding stage=provider_configuration_error "
+            "exception_class=RuntimeError"
+        )
         raise RuntimeError("GOOGLE_MAPS_API_KEY is not configured")
 
     address = f"{street} {house_number}, {city}, Israel"
@@ -165,11 +212,30 @@ def geocode_address(city, street, house_number):
     )
     status = payload.get("status")
     if status == "ZERO_RESULTS":
+        _safe_log(
+            logging.INFO,
+            "operation=geocoding stage=provider_success "
+            "provider_status=ZERO_RESULTS"
+        )
         return None
     if status != "OK":
+        safe_status = (
+            status
+            if isinstance(status, str) and status in SAFE_PROVIDER_STATUSES
+            else "UNKNOWN"
+        )
+        _safe_log(
+            logging.ERROR,
+            "operation=geocoding stage=provider_api_rejected provider_status=%s",
+            safe_status,
+        )
         raise RuntimeError(
             f"Google Maps Geocoding failed with status: {status or 'UNKNOWN'}"
         )
+    _safe_log(
+        logging.INFO,
+        "operation=geocoding stage=provider_success provider_status=OK",
+    )
 
     result = _select_unambiguous_address(
         payload.get("results") or [],

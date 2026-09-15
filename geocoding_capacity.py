@@ -1,4 +1,5 @@
 """Backend-only PostgreSQL admission for Google geocoding calls."""
+import logging
 import math
 from uuid import uuid4
 
@@ -11,6 +12,42 @@ from geocoding_limits import (
 
 
 WINDOW_SECONDS = 10 * 60
+logger = logging.getLogger(__name__)
+
+
+def _safe_log(level, message, *args):
+    try:
+        logger.log(level, message, *args)
+    except BaseException:
+        pass
+
+
+def _safe_exception_class(error):
+    try:
+        name = type(error).__name__
+        return name if isinstance(name, str) and name.isidentifier() else "UNKNOWN"
+    except BaseException:
+        return "UNKNOWN"
+
+
+def _safe_sqlstate(error):
+    try:
+        sqlstate = getattr(error, "sqlstate", None)
+        if (
+            isinstance(sqlstate, str)
+            and len(sqlstate) == 5
+            and sqlstate.isascii()
+            and sqlstate.isalnum()
+            and sqlstate == sqlstate.upper()
+        ):
+            return sqlstate
+    except BaseException:
+        pass
+    return "UNKNOWN"
+
+
+class GeocodingPolicyMissingError(RuntimeError):
+    pass
 
 
 class GeocodingAdmissionError(Exception):
@@ -21,7 +58,7 @@ class GeocodingAdmissionError(Exception):
         self.retry_after_seconds = max(1, math.ceil(retry_after_seconds))
 
 
-def acquire(auth_user_id):
+def _acquire(auth_user_id):
     if not auth_user_id:
         raise RuntimeError("Authenticated identity is required for geocoding")
 
@@ -33,7 +70,13 @@ def acquire(auth_user_id):
                 "WHERE capacity_pool = 'google-geocoding' FOR UPDATE"
             ).fetchone()
             if not policy:
-                raise RuntimeError("Geocoding capacity policy is not configured")
+                _safe_log(
+                    logging.ERROR,
+                    "operation=geocoding stage=capacity_policy_missing",
+                )
+                raise GeocodingPolicyMissingError(
+                    "Geocoding capacity policy is not configured"
+                )
 
             # Cleanup is bounded. The final predicates are rechecked after any
             # concurrent row update, so an extended uncertain permit is retained.
@@ -98,6 +141,29 @@ def acquire(auth_user_id):
     return attempt_id
 
 
+def acquire(auth_user_id):
+    try:
+        return _acquire(auth_user_id)
+    except GeocodingAdmissionError as exc:
+        _safe_log(
+            logging.WARNING,
+            "operation=geocoding stage=capacity_rejected error_code=%s",
+            exc.code,
+        )
+        raise
+    except GeocodingPolicyMissingError:
+        raise
+    except Exception as exc:
+        _safe_log(
+            logging.ERROR,
+            "operation=geocoding stage=capacity_database_error "
+            "exception_class=%s sqlstate=%s",
+            _safe_exception_class(exc),
+            _safe_sqlstate(exc),
+        )
+        raise
+
+
 def finish(attempt_id, uncertain=False):
     with pool.connection() as conn:
         if uncertain:
@@ -123,4 +189,14 @@ def geocode_with_capacity(auth_user_id, geocode, **kwargs):
         completed = True
         return result
     finally:
-        finish(attempt_id, uncertain=not completed)
+        try:
+            finish(attempt_id, uncertain=not completed)
+        except Exception as exc:
+            _safe_log(
+                logging.ERROR,
+                "operation=geocoding stage=permit_release_error "
+                "exception_class=%s sqlstate=%s",
+                _safe_exception_class(exc),
+                _safe_sqlstate(exc),
+            )
+            raise
