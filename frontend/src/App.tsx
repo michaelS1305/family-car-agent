@@ -54,7 +54,6 @@ type FormData = OnboardingFormData
 
 const initialForm: FormData = {
   familyName: '',
-  familyCode: '',
   address: '',
   userName: '',
   resolvedAddress: '',
@@ -202,10 +201,12 @@ type FlowScreenProps = {
 
 function FlowHeader({
   step,
+  totalSteps,
   onBack,
   isSubmitting,
 }: {
   step: number
+  totalSteps: number
   onBack: () => void
   isSubmitting: boolean
 }) {
@@ -220,7 +221,7 @@ function FlowHeader({
       >
         →
       </button>
-      <span className="progress-label">{step + 1} מתוך 5</span>
+      <span className="progress-label">{step + 1} מתוך {totalSteps}</span>
       <span className="header-spacer" aria-hidden="true" />
     </header>
   )
@@ -233,6 +234,7 @@ function TextStep({
   value,
   placeholder,
   inputMode,
+  textDirection = 'rtl',
   maxLength,
   error,
   buttonText = 'המשך',
@@ -247,6 +249,7 @@ function TextStep({
   value: string
   placeholder: string
   inputMode?: 'text' | 'numeric'
+  textDirection?: 'rtl' | 'ltr'
   maxLength?: number
   error: string
   buttonText?: string
@@ -272,10 +275,12 @@ function TextStep({
         <input
           id="step-input"
           type="text"
-          dir="rtl"
+          dir={textDirection}
           value={value}
           placeholder={placeholder}
           inputMode={inputMode}
+          autoCapitalize={textDirection === 'ltr' ? 'none' : undefined}
+          spellCheck={textDirection === 'ltr' ? false : undefined}
           maxLength={maxLength}
           onChange={(event) => onChange(event.target.value)}
           aria-invalid={Boolean(error)}
@@ -333,18 +338,6 @@ function AddressConfirmation({
 }
 
 function SuccessScreen({ flow, form, onFinish }: Pick<FlowScreenProps, 'flow' | 'form' | 'onFinish'>) {
-  const [copied, setCopied] = useState(false)
-
-  const copyCode = async () => {
-    if (!form.familyCode) return
-    try {
-      await navigator.clipboard.writeText(form.familyCode)
-      setCopied(true)
-    } catch {
-      setCopied(false)
-    }
-  }
-
   return (
     <main className="success-screen">
       <div className="success-mark" aria-hidden="true">✓</div>
@@ -353,15 +346,6 @@ function SuccessScreen({ flow, form, onFinish }: Pick<FlowScreenProps, 'flow' | 
       <p className="success-copy">
         {form.userName}, הכול מוכן עבור {flow === 'create' ? 'משפחת ' : ''}{form.familyName}.
       </p>
-
-      {flow === 'create' && (
-        <div className="family-code-panel">
-          <span>קוד המשפחה</span>
-          <strong dir="ltr">{form.familyCode}</strong>
-          <button type="button" onClick={copyCode}>{copied ? 'הקוד הועתק' : 'העתקת הקוד'}</button>
-          <small>שתף את הקוד רק עם בני המשפחה שתרצה לצרף.</small>
-        </div>
-      )}
 
       <button type="button" className="primary-button success-button" onClick={onFinish}>
         המשך להגדרת CarPlay
@@ -386,7 +370,7 @@ function FlowScreen(props: FlowScreenProps) {
     onEligibilityChange,
   } = props
 
-  if (step === 5) {
+  if (step === (flow === 'create' ? 4 : 5)) {
     return <SuccessScreen flow={flow} form={form} onFinish={onFinish} />
   }
 
@@ -400,6 +384,7 @@ function FlowScreen(props: FlowScreenProps) {
           label="שם המשפחה"
           value={form.familyName}
           placeholder="לדוגמה: כהן"
+          maxLength={100}
           error={error}
           isSubmitting={isSubmitting}
           onChange={(value) => onChange('familyName', value)}
@@ -407,21 +392,6 @@ function FlowScreen(props: FlowScreenProps) {
         />
       )
     } else if (step === 1) {
-      content = (
-        <TextStep
-          title="בחר קוד משפחה"
-          description="קוד בן 6 ספרות שבני המשפחה האחרים ישתמשו בו כדי להצטרף."
-          label="קוד משפחה"
-          value={form.familyCode}
-          placeholder="482731"
-          inputMode="numeric"
-          maxLength={6}
-          error={error}
-          onChange={(value) => onChange('familyCode', value)}
-          onContinue={onContinue}
-        />
-      )
-    } else if (step === 2) {
       content = (
         <TextStep
           title="מה כתובת הבית?"
@@ -436,7 +406,7 @@ function FlowScreen(props: FlowScreenProps) {
           onContinue={onContinue}
         />
       )
-    } else if (step === 3) {
+    } else if (step === 2) {
       content = (
         <AddressConfirmation
           address={form.address}
@@ -454,6 +424,7 @@ function FlowScreen(props: FlowScreenProps) {
           label="השם שלך"
           value={form.userName}
           placeholder="הקלד את שמך"
+          maxLength={100}
           error={error}
           buttonText="יצירת המשפחה"
           isSubmitting={isSubmitting}
@@ -470,6 +441,7 @@ function FlowScreen(props: FlowScreenProps) {
         label="שם המשפחה"
         value={form.familyName}
         placeholder="לדוגמה: כהן"
+        maxLength={100}
         error={error}
         isSubmitting={isSubmitting}
         onChange={(value) => onChange('familyName', value)}
@@ -506,11 +478,12 @@ function FlowScreen(props: FlowScreenProps) {
     content = (
       <TextStep
         title="מה קוד המשפחה?"
-        description="הקוד מופיע בהודעה שקיבל בן המשפחה שיצר את המשפחה."
+        description="הקוד בן 6 תווים ומופיע במסך המשפחה של אחד מבני המשפחה."
         label="קוד משפחה"
-        value={form.familyCode}
-        placeholder="000000"
-        inputMode="numeric"
+        value={form.familyCode ?? ''}
+        placeholder="k7m2q9"
+        inputMode="text"
+        textDirection="ltr"
         maxLength={6}
         error={error}
         isSubmitting={isSubmitting}
@@ -525,6 +498,7 @@ function FlowScreen(props: FlowScreenProps) {
         label="השם שלך"
         value={form.userName}
         placeholder="הקלד את שמך"
+        maxLength={100}
         error={error}
         buttonText="הצטרפות למשפחה"
         isSubmitting={isSubmitting}
@@ -537,7 +511,12 @@ function FlowScreen(props: FlowScreenProps) {
 
   return (
     <main className="flow-screen">
-      <FlowHeader step={step} onBack={onBack} isSubmitting={isSubmitting} />
+      <FlowHeader
+        step={step}
+        totalSteps={flow === 'create' ? 4 : 5}
+        onBack={onBack}
+        isSubmitting={isSubmitting}
+      />
       <section className="flow-content">{content}</section>
     </main>
   )
@@ -579,7 +558,10 @@ function App() {
   )
   const [flow, setFlow] = useState<Flow>(restoredDraft?.flow ?? 'welcome')
   const [step, setStep] = useState(restoredDraft?.step ?? 0)
-  const [form, setForm] = useState<FormData>(restoredDraft?.form ?? initialForm)
+  const [form, setForm] = useState<FormData>(() => ({
+    ...initialForm,
+    ...restoredDraft?.form,
+  }))
   const [createAttempts, setCreateAttempts] = useState(
     restoredDraft?.createAttempts ?? initialCreateValidationAttempts(),
   )
@@ -618,7 +600,6 @@ function App() {
         authUserId: authUserIdRef.current ?? '',
         createdAt: new Date().toISOString(),
         familyName: payload.family_name,
-        familyCode: payload.family_code,
         userName: payload.user_name,
       }
       savePendingCreateSuccess(pending)
@@ -726,7 +707,7 @@ function App() {
       keyof FormData,
       'resolvedAddress' | 'addressResolutionToken'
     >
-    if (flow === 'create') return ['familyName', 'familyCode', 'address', 'address', 'userName'][step] as EditableField
+    if (flow === 'create') return ['familyName', 'address', 'address', 'userName'][step] as EditableField
     return ['familyName', 'address', 'address', 'familyCode', 'userName'][step] as EditableField
   }
 
@@ -838,7 +819,7 @@ function App() {
     }
 
     setCreateAttempts(result.attempts)
-    setStep(field === 'familyCode' ? 1 : 2)
+    setStep(1)
     setError(appendRemainingAttempts(message, result.remainingAttempts))
   }
 
@@ -866,14 +847,6 @@ function App() {
     }
 
     if (
-      requestError.code === 'INVALID_FAMILY_CODE'
-      || requestError.code === 'FAMILY_CODE_TAKEN'
-    ) {
-      registerValidationFailure('familyCode', requestError.message)
-      return
-    }
-
-    if (
       requestError.code === 'INVALID_ADDRESS_FORMAT'
       || requestError.code === 'ADDRESS_NOT_FOUND'
     ) {
@@ -887,15 +860,15 @@ function App() {
         resolvedAddress: '',
         addressResolutionToken: '',
       }))
-      setStep(2)
+      setStep(1)
       setError(requestError.message)
       return
     }
 
     const errorSteps: Partial<Record<typeof requestError.code, number>> = {
       INVALID_FAMILY_NAME: 0,
-      FAMILY_ALREADY_EXISTS_AT_ADDRESS: 2,
-      INVALID_USER_NAME: 4,
+      FAMILY_ALREADY_EXISTS_AT_ADDRESS: 1,
+      INVALID_USER_NAME: 3,
     }
     const targetStep = errorSteps[requestError.code]
     if (targetStep !== undefined) setStep(targetStep)
@@ -921,7 +894,7 @@ function App() {
         addressResolutionToken: resolved.resolution_token,
       }))
       setError('')
-      setStep(3)
+      setStep(2)
     } catch (requestError) {
       handleCreateFamilyError(requestError)
     } finally {
@@ -941,7 +914,6 @@ function App() {
     try {
       await createFamilySubmitter(session.access_token, {
         family_name: form.familyName,
-        family_code: form.familyCode,
         address_resolution_token: form.addressResolutionToken ?? '',
         user_name: form.userName,
       })
@@ -1039,9 +1011,9 @@ function App() {
   const continueFlow = () => {
     if (isSubmitting) return
     const field = currentField()
-    const value = form[field].trim()
+    const value = (form[field] ?? '').trim()
 
-    if (step === 4 && !eligibilityAccepted) {
+    if (step === (flow === 'create' ? 3 : 4) && !eligibilityAccepted) {
       setError('כדי להשלים את ההרשמה, יש לאשר את הצהרת הכשירות לשימוש ברכב.')
       return
     }
@@ -1064,13 +1036,6 @@ function App() {
     }
 
     if (!value) {
-      if (flow === 'create' && field === 'familyCode') {
-        registerValidationFailure(
-          'familyCode',
-          'קוד המשפחה חייב להכיל בדיוק 6 ספרות.',
-        )
-        return
-      }
       if (flow === 'create' && field === 'address') {
         registerValidationFailure(
           'address',
@@ -1082,15 +1047,8 @@ function App() {
       return
     }
 
-    if (field === 'familyCode' && !/^\d{6}$/.test(value)) {
-      if (flow === 'create') {
-        registerValidationFailure(
-          'familyCode',
-          'קוד המשפחה חייב להכיל בדיוק 6 ספרות.',
-        )
-        return
-      }
-      setError('קוד המשפחה חייב להכיל בדיוק 6 ספרות.')
+    if (field === 'familyCode' && !/^[a-z0-9]{6}$/.test(value)) {
+      setError('קוד המשפחה חייב להכיל בדיוק 6 אותיות אנגליות קטנות או ספרות.')
       return
     }
 
@@ -1106,12 +1064,12 @@ function App() {
       return
     }
 
-    if (flow === 'create' && step === 2) {
+    if (flow === 'create' && step === 1) {
       void resolveCreateAddress(value)
       return
     }
 
-    if (flow === 'create' && step === 4) {
+    if (flow === 'create' && step === 3) {
       void submitCreateFamily()
       return
     }
@@ -1212,7 +1170,6 @@ function App() {
         flow="create"
         form={{
           familyName: pendingCreateSuccess.familyName,
-          familyCode: pendingCreateSuccess.familyCode,
           userName: pendingCreateSuccess.userName,
           address: '',
           resolvedAddress: '',
@@ -1232,7 +1189,6 @@ function App() {
         flow="join"
         form={{
           familyName: pendingJoinSuccess.familyName,
-          familyCode: '',
           userName: pendingJoinSuccess.userName,
           address: '',
           resolvedAddress: '',
@@ -1339,7 +1295,7 @@ function App() {
           resolvedAddress: '',
           addressResolutionToken: '',
         }))
-        setStep(flow === 'create' ? 2 : 1)
+        setStep(1)
       }}
       onFinish={finishPrototype}
       eligibilityAccepted={eligibilityAccepted}

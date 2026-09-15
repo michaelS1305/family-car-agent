@@ -1450,19 +1450,6 @@ def create_family_with_first_user(
             raise AuthUserIdentityNotFoundError() from exc
         raise
 
-def get_family_by_code(family_code):
-    with pool.connection() as conn:
-        cursor = conn.execute(
-            """
-            SELECT id, name, home_address, home_latitude, home_longitude
-            FROM families
-            WHERE family_code = %s
-            """,
-            (family_code,)
-        )
-
-        return cursor.fetchone()
-
 def _get_family_by_location(conn, latitude, longitude, radius_meters=50):
     cursor = conn.execute(
             """

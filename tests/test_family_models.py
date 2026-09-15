@@ -4,8 +4,12 @@ from pydantic import ValidationError
 
 from models import (
     CreateFamilyAddressRequest,
+    CreateFamilyRequest,
     FamilyAddressResolveRequest,
     FamilyRoleUpdateRequest,
+    JoinFamilyCodeRequest,
+    JoinFamilyCompleteRequest,
+    JoinFamilyNameRequest,
     ReservationCancelRequest,
     ReservationIntervalRequest,
     ReservationUpdateRequest,
@@ -70,6 +74,50 @@ class AddressModelTests(unittest.TestCase):
                 self.assertEqual(len(model(home_address="א" * 200).home_address), 200)
                 with self.assertRaises(ValidationError):
                     model(home_address="א" * 201)
+
+
+class OnboardingModelTests(unittest.TestCase):
+    def test_create_forbids_creator_supplied_family_code(self):
+        values = {
+            "family_name": "כהן",
+            "address_resolution_token": "opaque",
+            "user_name": "מיכאל",
+        }
+        self.assertEqual(CreateFamilyRequest(**values).family_name, "כהן")
+        with self.assertRaises(ValidationError):
+            CreateFamilyRequest(**values, family_code="chosen1")
+
+    def test_name_fields_are_bounded_without_restricting_unicode(self):
+        self.assertEqual(
+            JoinFamilyNameRequest(family_name="א" * 100).family_name,
+            "א" * 100,
+        )
+        self.assertEqual(
+            JoinFamilyCompleteRequest(user_name="é" * 100).user_name,
+            "é" * 100,
+        )
+        for model, field in (
+            (CreateFamilyRequest, "family_name"),
+            (CreateFamilyRequest, "user_name"),
+            (JoinFamilyNameRequest, "family_name"),
+            (JoinFamilyCompleteRequest, "user_name"),
+        ):
+            values = {
+                "family_name": "כהן",
+                "address_resolution_token": "opaque",
+                "user_name": "מיכאל",
+            } if model is CreateFamilyRequest else {}
+            values[field] = "א" * 101
+            with self.subTest(model=model.__name__, field=field):
+                with self.assertRaises(ValidationError):
+                    model(**values)
+
+    def test_join_family_code_transport_rejects_oversized_input_early(self):
+        for code in ("k7m2q9", "00ab12", "abcdef", "123456"):
+            with self.subTest(code=code):
+                self.assertEqual(JoinFamilyCodeRequest(family_code=code).family_code, code)
+        with self.assertRaises(ValidationError):
+            JoinFamilyCodeRequest(family_code="abc1234")
 
 
 if __name__ == "__main__":

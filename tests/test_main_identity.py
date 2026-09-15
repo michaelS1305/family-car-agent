@@ -857,7 +857,6 @@ class CreateFamilyRouteTests(unittest.TestCase):
         family_creation_stub.create_family_for_auth_user.assert_called_once_with(
             auth_user_id="verified-auth-user",
             family_name="כהן",
-            family_code="482731",
             address_resolution_token="opaque-resolution-token",
             user_name="מיכאל",
         )

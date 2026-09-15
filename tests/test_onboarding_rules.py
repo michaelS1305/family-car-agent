@@ -41,12 +41,26 @@ class ParseHomeAddressTests(unittest.TestCase):
 
 
 class FamilyCodeTests(unittest.TestCase):
-    def test_accepts_exactly_six_digits(self):
-        self.assertTrue(is_valid_family_code("482731"))
-        self.assertTrue(is_valid_family_code("000000"))
+    def test_accepts_exactly_six_lowercase_ascii_alphanumeric_characters(self):
+        for family_code in ("k7m2q9", "00ab12", "abcdef", "123456", "a00000"):
+            with self.subTest(family_code=family_code):
+                self.assertTrue(is_valid_family_code(family_code))
 
-    def test_rejects_non_six_digit_values(self):
-        for family_code in ("48273", "4827310", "48273א", " 482731 ", ""):
+    def test_rejects_noncanonical_values_including_unicode_digits(self):
+        for family_code in (
+            "ABC123",
+            "Abc123",
+            "abc-12",
+            "abc_12",
+            "abc 12",
+            "אבג123",
+            "１２３４５６",
+            "abc12",
+            "abc1234",
+            "!@#$%^",
+            " 123456 ",
+            "",
+        ):
             with self.subTest(family_code=family_code):
                 self.assertFalse(is_valid_family_code(family_code))
 

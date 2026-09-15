@@ -7,11 +7,11 @@ import {
   registerCreateValidationFailure,
 } from '../src/onboarding/createValidationAttempts.ts'
 
-test('family code failures count down independently to exhaustion', () => {
+test('address failures count down to exhaustion', () => {
   const initial = initialCreateValidationAttempts()
-  const first = registerCreateValidationFailure(initial, 'familyCode')
-  const second = registerCreateValidationFailure(first.attempts, 'familyCode')
-  const third = registerCreateValidationFailure(second.attempts, 'familyCode')
+  const first = registerCreateValidationFailure(initial, 'address')
+  const second = registerCreateValidationFailure(first.attempts, 'address')
+  const third = registerCreateValidationFailure(second.attempts, 'address')
 
   assert.equal(first.remainingAttempts, 2)
   assert.equal(first.exhausted, false)
@@ -21,19 +21,19 @@ test('family code failures count down independently to exhaustion', () => {
   assert.equal(third.exhausted, true)
 })
 
-test('address failures do not consume family code attempts', () => {
+test('address failure state contains no obsolete creator code counter', () => {
   const result = registerCreateValidationFailure(
     initialCreateValidationAttempts(),
     'address',
   )
 
-  assert.deepEqual(result.attempts, { familyCode: 0, address: 1 })
+  assert.deepEqual(result.attempts, { address: 1 })
 })
 
 test('messages preserve validation text and show the remaining attempts', () => {
   assert.equal(
-    appendRemainingAttempts('הקוד אינו תקין.', 2),
-    'הקוד אינו תקין. נותרו 2 ניסיונות.',
+    appendRemainingAttempts('הכתובת לא נמצאה.', 2),
+    'הכתובת לא נמצאה. נותרו 2 ניסיונות.',
   )
   assert.equal(
     appendRemainingAttempts('הכתובת לא נמצאה.', 1),

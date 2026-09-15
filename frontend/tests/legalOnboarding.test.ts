@@ -22,10 +22,18 @@ test('address collection gives the contextual Google Maps and geofence notice', 
 
 test('driver eligibility is explicit at both irreversible create and join boundaries without DOB', () => {
   assert.ok((app.match(/<DriverEligibilityDeclaration/g) ?? []).length >= 2)
-  assert.match(app, /step === 4 && !eligibilityAccepted/)
+  assert.match(app, /step === \(flow === 'create' \? 3 : 4\) && !eligibilityAccepted/)
   assert.match(app, /16 שנים ו־9 חודשים/)
   assert.match(app, /אינה בודקת תוקף רישיון/)
   assert.doesNotMatch(app, /dateOfBirth|birth_date|תאריך לידה/)
+})
+
+test('Create has four steps and no creator-controlled family code UI', () => {
+  assert.match(app, /totalSteps=\{flow === 'create' \? 4 : 5\}/)
+  assert.doesNotMatch(app, /title="בחר קוד משפחה"/)
+  assert.doesNotMatch(app, /payload\.family_code/)
+  assert.match(app, /placeholder="k7m2q9"/)
+  assert.match(app, /\^\[a-z0-9\]\{6\}\$/)
 })
 
 test('central legal documents expose metadata and avoid unsupported privacy promises', () => {

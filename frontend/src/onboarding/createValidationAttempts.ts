@@ -1,4 +1,4 @@
-export type CreateValidationField = 'familyCode' | 'address'
+export type CreateValidationField = 'address'
 
 export type CreateValidationAttempts = Record<CreateValidationField, number>
 
@@ -6,7 +6,6 @@ export const maxCreateValidationAttempts = 3
 
 export function initialCreateValidationAttempts(): CreateValidationAttempts {
   return {
-    familyCode: 0,
     address: 0,
   }
 }

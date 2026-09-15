@@ -29,14 +29,14 @@ const successMetadata = {
   createdAt: '2026-09-01T10:00:00.000Z',
 }
 
-test('OAuth redirect preserves the selected intent and onboarding form', () => {
+test('Join draft preserves and restores its family code', () => {
   const storage = createMemoryStorage()
   saveOnboardingDraft({
     flow: 'join',
-    step: 1,
+    step: 3,
     form: {
       familyName: 'כהן',
-      familyCode: '',
+      familyCode: 'k7m2q9',
       address: 'תל אביב, דיזנגוף, 120',
       userName: '',
       resolvedAddress: '',
@@ -46,10 +46,10 @@ test('OAuth redirect preserves the selected intent and onboarding form', () => {
 
   assert.deepEqual(loadOnboardingDraft(storage), {
     flow: 'join',
-    step: 1,
+    step: 3,
     form: {
       familyName: 'כהן',
-      familyCode: '',
+      familyCode: 'k7m2q9',
       address: 'תל אביב, דיזנגוף, 120',
       userName: '',
       resolvedAddress: '',
@@ -63,11 +63,53 @@ test('draft is removed only when onboarding is explicitly cleared', () => {
   saveOnboardingDraft({
     flow: 'create',
     step: 0,
-    form: { familyName: '', familyCode: '', address: '', userName: '' },
+    form: { familyName: '', address: '', userName: '' },
   }, storage)
 
   clearOnboardingDraft(storage)
   assert.equal(loadOnboardingDraft(storage), null)
+})
+
+test('Create draft saves and restores without a familyCode field', () => {
+  const storage = createMemoryStorage()
+  const draft = {
+    flow: 'create' as const,
+    step: 2,
+    form: {
+      familyName: 'כהן',
+      address: 'תל אביב, דיזנגוף, 120',
+      resolvedAddress: 'דיזנגוף 120, תל אביב, ישראל',
+      addressResolutionToken: 'opaque-resolution-token',
+      userName: '',
+    },
+    createAttempts: { address: 0 },
+  }
+
+  saveOnboardingDraft(draft, storage)
+
+  const stored = JSON.parse(String(
+    storage.getItem('family-car-agent:onboarding-draft'),
+  )) as { form: Record<string, unknown> }
+  assert.equal(Object.hasOwn(stored.form, 'familyCode'), false)
+  assert.deepEqual(loadOnboardingDraft(storage), draft)
+})
+
+test('legacy Create draft familyCode is discarded during restore', () => {
+  const storage = createMemoryStorage()
+  storage.setItem('family-car-agent:onboarding-draft', JSON.stringify({
+    flow: 'create',
+    step: 1,
+    form: {
+      familyName: 'כהן',
+      familyCode: '482731',
+      address: 'תל אביב, דיזנגוף, 120',
+      userName: '',
+    },
+  }))
+
+  const restored = loadOnboardingDraft(storage)
+  assert.equal(restored?.flow, 'create')
+  assert.equal(Object.hasOwn(restored?.form ?? {}, 'familyCode'), false)
 })
 
 test('successful Create marker survives refresh until the user continues', () => {
@@ -76,7 +118,6 @@ test('successful Create marker survives refresh until the user continues', () =>
     ...successMetadata,
     flow: 'create' as const,
     familyName: 'כהן',
-    familyCode: '482731',
     userName: 'מיכאל',
   }
 
@@ -87,14 +128,13 @@ test('successful Create marker survives refresh until the user continues', () =>
   assert.equal(loadPendingCreateSuccess(storage), null)
 })
 
-test('Create success cannot be restored from an unverified step-five draft', () => {
+test('Create drafts reject the removed fifth step', () => {
   const storage = createMemoryStorage()
   saveOnboardingDraft({
     flow: 'create',
-    step: 5,
+    step: 4,
     form: {
       familyName: 'כהן',
-      familyCode: '482731',
       address: 'תל אביב, דיזנגוף, 120',
       userName: 'מיכאל',
     },
@@ -124,7 +164,7 @@ test('malformed JSON and invalid legacy drafts are removed safely', () => {
   storage.setItem('family-car-agent:onboarding-draft', JSON.stringify({
     flow: 'create',
     step: 99,
-    form: { familyName: '', familyCode: '', address: '', userName: '' },
+    form: { familyName: '', address: '', userName: '' },
   }))
   assert.equal(loadOnboardingDraft(storage), null)
   assert.equal(storage.getItem('family-car-agent:onboarding-draft'), null)
@@ -149,8 +189,7 @@ test('success markers require complete versioned data for their own flow', () =>
   for (const invalid of [
     { familyName: 'כהן', familyCode: '123456', userName: 'מיכאל' },
     { ...successMetadata, flow: 'join', familyName: 'כהן', familyCode: '123456', userName: 'מיכאל' },
-    { ...successMetadata, flow: 'create', familyName: 'כהן', userName: 'מיכאל' },
-    { ...successMetadata, flow: 'create', familyName: 'כהן', familyCode: '123456', userName: '' },
+    { ...successMetadata, flow: 'create', familyName: 'כהן', userName: '' },
   ]) {
     storage.setItem(key, JSON.stringify(invalid))
     assert.equal(loadPendingCreateSuccess(storage), null)
@@ -163,7 +202,6 @@ test('success marker is valid only for the active Supabase identity', () => {
     ...successMetadata,
     flow: 'create' as const,
     familyName: 'כהן',
-    familyCode: '123456',
     userName: 'מיכאל',
   }
 

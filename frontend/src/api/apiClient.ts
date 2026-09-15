@@ -148,7 +148,6 @@ type RequestOptions = {
 export type CreateFamilyErrorCode =
   | 'INVALID_FAMILY_NAME'
   | 'INVALID_FAMILY_CODE'
-  | 'FAMILY_CODE_TAKEN'
   | 'INVALID_ADDRESS_FORMAT'
   | 'ADDRESS_TOO_LONG'
   | 'ADDRESS_NOT_FOUND'
@@ -198,7 +197,6 @@ export type ResolvedCreateFamilyAddress = {
 
 export type CreateFamilyPayload = {
   family_name: string
-  family_code: string
   address_resolution_token: string
   user_name: string
 }

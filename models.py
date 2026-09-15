@@ -4,6 +4,7 @@ from uuid import UUID
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from onboarding_rules import HUMAN_NAME_MAX_LENGTH
 
 
 class CarConnection(BaseModel):
@@ -191,14 +192,15 @@ class CreateFamilyAddressRequest(BaseModel):
 
 
 class CreateFamilyRequest(BaseModel):
-    family_name: str
-    family_code: str
+    model_config = ConfigDict(extra="forbid")
+
+    family_name: str = Field(max_length=HUMAN_NAME_MAX_LENGTH)
     address_resolution_token: str
-    user_name: str
+    user_name: str = Field(max_length=HUMAN_NAME_MAX_LENGTH)
 
 
 class JoinFamilyNameRequest(BaseModel):
-    family_name: str
+    family_name: str = Field(max_length=HUMAN_NAME_MAX_LENGTH)
 
 
 class JoinFamilyAddressRequest(BaseModel):
@@ -210,11 +212,14 @@ class JoinFamilyAddressConfirmationRequest(BaseModel):
 
 
 class JoinFamilyCodeRequest(BaseModel):
-    family_code: str
+    # The service performs the exact canonical check so malformed attempts still
+    # participate in the existing three-attempt Join lock. This transport bound
+    # rejects oversized input before service/database work.
+    family_code: str = Field(max_length=6)
 
 
 class JoinFamilyCompleteRequest(BaseModel):
-    user_name: str
+    user_name: str = Field(max_length=HUMAN_NAME_MAX_LENGTH)
 
 
 class ChatRequest(BaseModel):

@@ -1,4 +1,9 @@
+import re
 import unicodedata
+
+
+HUMAN_NAME_MAX_LENGTH = 100
+FAMILY_CODE_PATTERN = re.compile(r"^[a-z0-9]{6}$")
 
 
 def parse_home_address(text):
@@ -21,7 +26,10 @@ def parse_home_address(text):
 
 
 def is_valid_family_code(family_code):
-    return family_code.isdigit() and len(family_code) == 6
+    return (
+        isinstance(family_code, str)
+        and FAMILY_CODE_PATTERN.fullmatch(family_code) is not None
+    )
 
 
 CANONICAL_NAME_APOSTROPHE = "'"
