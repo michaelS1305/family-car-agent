@@ -64,33 +64,75 @@ class GeocodingServiceTests(unittest.TestCase):
         self.response.raise_for_status.return_value = None
 
     def geocode(self, results, status="OK"):
-        self.response.json.return_value = {"status": status, "results": results}
         with (
             patch.object(geocoding_service, "GOOGLE_MAPS_API_KEY", "test-key"),
             patch.object(
-                geocoding_service.requests,
-                "get",
-                return_value=self.response,
-            ) as get,
+                geocoding_service,
+                "_request_geocoding_payload",
+                return_value={"status": status, "results": results},
+            ) as request_payload,
         ):
             value = geocoding_service.geocode_address(
                 "דימונה",
                 "המעפיל",
                 "1209",
             )
-        return value, get
+        return value, request_payload
 
     def test_rooftop_street_address_is_accepted_with_israel_bias(self):
         value, get = self.geocode([precise_result()])
 
         self.assertEqual(value["latitude"], 31.0721)
         self.assertEqual(value["longitude"], 35.0364)
-        params = get.call_args.kwargs["params"]
+        params = get.call_args.args[0]["params"]
         self.assertEqual(params["address"], "המעפיל 1209, דימונה, Israel")
         self.assertEqual(params["language"], "he")
         self.assertEqual(params["region"], "il")
         self.assertEqual(params["components"], "country:IL")
         self.assertEqual(params["key"], "test-key")
+
+    def test_provider_request_uses_bounded_phase_timeouts(self):
+        connection = Mock()
+        response = Mock()
+        response.json.return_value = {"status": "OK", "results": []}
+        with patch.object(
+            geocoding_service.requests, "get", return_value=response
+        ) as get:
+            geocoding_service._fetch_geocoding_payload(
+                connection, {"url": "https://example.test", "params": {}}
+            )
+
+        self.assertEqual(get.call_args.kwargs["timeout"], (5, 10))
+        connection.send.assert_called_once_with(
+            ("ok", {"status": "OK", "results": []})
+        )
+        connection.close.assert_called_once_with()
+
+    def test_total_deadline_terminates_the_provider_process(self):
+        receive_connection = Mock()
+        receive_connection.poll.return_value = False
+        send_connection = Mock()
+        process = Mock()
+        process.is_alive.return_value = False
+        context = Mock()
+        context.Pipe.return_value = (receive_connection, send_connection)
+        context.Process.return_value = process
+
+        with patch.object(
+            geocoding_service.multiprocessing,
+            "get_context",
+            return_value=context,
+        ):
+            with self.assertRaisesRegex(TimeoutError, "timed out"):
+                geocoding_service._request_geocoding_payload(
+                    {"url": "https://example.test", "params": {}}
+                )
+
+        receive_connection.poll.assert_called_once_with(
+            geocoding_service.PROVIDER_CALL_DEADLINE_SECONDS
+        )
+        process.terminate.assert_called_once_with()
+        process.join.assert_called()
 
     def test_rooftop_premise_with_complete_components_is_accepted(self):
         value, _ = self.geocode([precise_result(types=["premise"])])

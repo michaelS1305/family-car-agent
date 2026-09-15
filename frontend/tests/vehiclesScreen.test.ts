@@ -12,7 +12,7 @@ const dashboardSource = readFileSync(
 )
 
 test('vehicles category opens a dedicated screen using the existing car icon', () => {
-  assert.match(dashboardSource, /activeCategory\.id === 'cars'/)
+  assert.match(dashboardSource, /activeCategory\.id==='cars'/)
   assert.match(dashboardSource, /<VehiclesScreen/)
   assert.match(vehiclesSource, /<h1>Family Car Agent<\/h1>/)
   assert.match(vehiclesSource, /<DashboardCategoryIcon icon="car"/)
@@ -33,15 +33,14 @@ test('screen adds no bottom navigation and back returns to the mounted dashboard
   assert.match(vehiclesSource, /onClick=\{onBack\}/)
   assert.match(dashboardSource, /<div className="dashboard-content" inert=\{categoryOpen\}>/)
   assert.match(dashboardSource, /<VehiclesScreen open=\{categoryOpen\} onBack=\{closeCategory\}/)
-  assert.match(dashboardSource, /confirmButtonRef\.current\?\.focus/)
+  assert.match(dashboardSource, /closeButtonRef\.current\?\.focus/)
 })
 
 test('family, reservations, history, vehicles and settings are dedicated', () => {
-  assert.match(dashboardSource, /activeCategory\.id === 'family'/)
-  assert.match(dashboardSource, /activeCategory\.id === 'reservations'/)
-  assert.match(dashboardSource, /activeCategory\.id === 'history'/)
-  assert.match(dashboardSource, /activeCategory\.id === 'cars'/)
-  assert.match(dashboardSource, /activeCategory\.id === 'settings'/)
+  assert.match(dashboardSource, /activeCategory\.id==='family'/)
+  assert.match(dashboardSource, /activeCategory\.id==='reservations'/)
+  assert.match(dashboardSource, /activeCategory\.id==='history'/)
+  assert.match(dashboardSource, /activeCategory\.id==='cars'/)
   assert.match(dashboardSource, /<SettingsScreen/)
   assert.doesNotMatch(dashboardSource, /<CategoryPlaceholderScreen/)
 })

@@ -16,7 +16,7 @@ const mainAppSource = readFileSync(
 )
 
 test('history category is real and reuses the dashboard history icon and heading', () => {
-  assert.match(dashboardSource, /activeCategory\.id === 'history'/)
+  assert.match(dashboardSource, /activeCategory\.id==='history'/)
   assert.match(dashboardSource, /<HistoryScreen/)
   assert.match(historySource, /<DashboardCategoryIcon icon="history"/)
   assert.match(historySource, /<h2>היסטוריה<\/h2>/)
@@ -59,10 +59,10 @@ test('one realtime subscription fans out canonical invalidation to status and hi
 test('back returns to the mounted dashboard while all category routes remain dedicated', () => {
   assert.match(historySource, /aria-label="חזרה ללוח הבקרה"/)
   assert.match(dashboardSource, /onBack=\{closeCategory\}/)
-  assert.match(dashboardSource, /activeCategory\.id === 'family'/)
-  assert.match(dashboardSource, /activeCategory\.id === 'reservations'/)
-  assert.match(dashboardSource, /activeCategory\.id === 'history'/)
-  assert.match(dashboardSource, /activeCategory\.id === 'cars'/)
-  assert.match(dashboardSource, /activeCategory\.id === 'settings'/)
+  assert.match(dashboardSource, /activeCategory\.id==='family'/)
+  assert.match(dashboardSource, /activeCategory\.id==='reservations'/)
+  assert.match(dashboardSource, /activeCategory\.id==='history'/)
+  assert.match(dashboardSource, /activeCategory\.id==='cars'/)
+  assert.match(dashboardSource, /<SettingsScreen/)
   assert.doesNotMatch(dashboardSource, /CategoryPlaceholderScreen/)
 })

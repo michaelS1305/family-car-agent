@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  ApiRequestError,
   getFamily,
   resolveFamilyAddress,
   updateFamilyAddress,
@@ -96,8 +97,12 @@ export function FamilyScreen({ accessToken, open, onBack }: {
     try {
       const resolved = await resolveFamilyAddress(accessToken, addressInput.trim())
       setResolvedAddress({ display: resolved.display_address, token: resolved.resolution_token })
-    } catch {
-      setAddressError('לא הצלחנו לאמת את הכתובת. בדקו את הפרטים ונסו שוב.')
+    } catch (error) {
+      setAddressError(
+        error instanceof ApiRequestError
+          ? error.message
+          : 'לא הצלחנו לאמת את הכתובת. בדקו את הפרטים ונסו שוב.',
+      )
     } finally {
       setAddressBusy(false)
     }
@@ -201,6 +206,7 @@ export function FamilyScreen({ accessToken, open, onBack }: {
               ) : (
                 <div className="family-address-editor">
                   <label htmlFor="family-address-input">כתובת חדשה</label>
+                  <p className="family-address-guidance">יש להזין את הכתובת כפי שהיא מופיעה ב-Google Maps</p>
                   <input
                     id="family-address-input"
                     value={addressInput}
@@ -211,6 +217,7 @@ export function FamilyScreen({ accessToken, open, onBack }: {
                       setAddressError('')
                     }}
                     placeholder="עיר, רחוב, מספר בית"
+                    maxLength={200}
                   />
                   {resolvedAddress ? (
                     <div className="family-address-confirmation" role="status">

@@ -128,12 +128,14 @@ export type ApiRequestErrorKind = 'network' | 'server' | 'invalid-response'
 export class ApiRequestError extends Error {
   readonly kind: ApiRequestErrorKind
   readonly status?: number
+  readonly code?: string
 
-  constructor(kind: ApiRequestErrorKind, message: string, status?: number) {
+  constructor(kind: ApiRequestErrorKind, message: string, status?: number, code?: string) {
     super(message)
     this.name = 'ApiRequestError'
     this.kind = kind
     this.status = status
+    this.code = code
   }
 }
 
@@ -148,6 +150,7 @@ export type CreateFamilyErrorCode =
   | 'INVALID_FAMILY_CODE'
   | 'FAMILY_CODE_TAKEN'
   | 'INVALID_ADDRESS_FORMAT'
+  | 'ADDRESS_TOO_LONG'
   | 'ADDRESS_NOT_FOUND'
   | 'ADDRESS_RESOLUTION_EXPIRED'
   | 'FAMILY_ALREADY_EXISTS_AT_ADDRESS'
@@ -161,6 +164,9 @@ export type CreateFamilyErrorCode =
   | 'UNAUTHORIZED'
   | 'SERVER_ERROR'
   | 'NETWORK_ERROR'
+  | 'GEOCODING_RATE_LIMITED'
+  | 'GEOCODING_USER_BUSY'
+  | 'GEOCODING_CAPACITY_FULL'
 
 export class OnboardingApiError extends Error {
   readonly code: CreateFamilyErrorCode
@@ -211,7 +217,6 @@ export type JoinFamilySession = {
   resolved_address: string | null
   attempts_remaining: {
     family_name: number
-    address: number
     family_code: number
   }
   reset: boolean
@@ -332,6 +337,20 @@ async function familyRequest<T>(
     throw new ApiRequestError('network', 'לא הצלחנו לטעון את פרטי המשפחה.')
   }
   if (!response.ok) {
+    try {
+      const body = await response.json() as { detail?: { code?: unknown; message?: unknown } }
+      if (
+        body.detail
+        && typeof body.detail.code === 'string'
+        && typeof body.detail.message === 'string'
+      ) {
+        throw new ApiRequestError(
+          'server', body.detail.message, response.status, body.detail.code,
+        )
+      }
+    } catch (error) {
+      if (error instanceof ApiRequestError) throw error
+    }
     throw new ApiRequestError('server', 'לא הצלחנו לטעון את פרטי המשפחה.', response.status)
   }
   let body: unknown

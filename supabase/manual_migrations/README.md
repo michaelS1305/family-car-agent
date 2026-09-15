@@ -51,3 +51,8 @@ Future backend-only public-table migrations must explicitly revoke `anon`,
 creation transaction. Discover serial/identity ownership through `pg_depend`
 (`a`/`i` dependencies); do not assume sequence names. Review function access
 separately. Do not rely on default privileges to enforce this boundary.
+
+`2026091402_geocoding_capacity.sql` was executed manually in production on
+2026-09-15. It creates backend-only, PostgreSQL-authoritative rolling admission
+and active-permit state; it stores no address, coordinates, provider URL, or API
+key. Do not run it from application startup.

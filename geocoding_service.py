@@ -1,3 +1,4 @@
+import multiprocessing
 import os
 import unicodedata
 from math import asin, cos, radians, sin, sqrt
@@ -5,6 +6,7 @@ from math import asin, cos, radians, sin, sqrt
 import requests
 
 from dotenv import load_dotenv
+from geocoding_limits import PROVIDER_CALL_DEADLINE_SECONDS
 
 load_dotenv()
 
@@ -13,6 +15,51 @@ GOOGLE_GEOCODING_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 ACCEPTED_RESULT_TYPES = {"street_address", "premise"}
 ACCEPTED_LOCATION_TYPES = {"ROOFTOP"}
 MAX_EQUIVALENT_RESULT_DISTANCE_METERS = 50
+
+
+def _fetch_geocoding_payload(connection, request_kwargs):
+    try:
+        response = requests.get(**request_kwargs, timeout=(5, 10))
+        response.raise_for_status()
+        connection.send(("ok", response.json()))
+    except BaseException as exc:
+        connection.send(("error", exc.__class__.__name__))
+    finally:
+        connection.close()
+
+
+def _request_geocoding_payload(request_kwargs):
+    context = multiprocessing.get_context("spawn")
+    receive_connection, send_connection = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_fetch_geocoding_payload,
+        args=(send_connection, request_kwargs),
+        daemon=True,
+    )
+    process.start()
+    send_connection.close()
+    try:
+        if not receive_connection.poll(PROVIDER_CALL_DEADLINE_SECONDS):
+            process.terminate()
+            process.join(timeout=1)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=1)
+            raise TimeoutError("Google Maps Geocoding request timed out")
+        try:
+            outcome, value = receive_connection.recv()
+        except EOFError as exc:
+            raise RuntimeError("Google Maps Geocoding request failed") from exc
+    finally:
+        receive_connection.close()
+        process.join(timeout=1)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=1)
+
+    if outcome == "error":
+        raise RuntimeError(f"Google Maps Geocoding request failed ({value})")
+    return value
 
 
 def _distance_meters(first, second):
@@ -104,20 +151,18 @@ def geocode_address(city, street, house_number):
 
     address = f"{street} {house_number}, {city}, Israel"
 
-    response = requests.get(
-        GOOGLE_GEOCODING_URL,
-        params={
-            "address": address,
-            "language": "he",
-            "region": "il",
-            "components": "country:IL",
-            "key": GOOGLE_MAPS_API_KEY,
+    payload = _request_geocoding_payload(
+        {
+            "url": GOOGLE_GEOCODING_URL,
+            "params": {
+                "address": address,
+                "language": "he",
+                "region": "il",
+                "components": "country:IL",
+                "key": GOOGLE_MAPS_API_KEY,
+            },
         },
-        timeout=10,
     )
-    response.raise_for_status()
-
-    payload = response.json()
     status = payload.get("status")
     if status == "ZERO_RESULTS":
         return None

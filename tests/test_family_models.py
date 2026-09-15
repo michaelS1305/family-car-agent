@@ -3,10 +3,13 @@ import unittest
 from pydantic import ValidationError
 
 from models import (
+    CreateFamilyAddressRequest,
+    FamilyAddressResolveRequest,
     FamilyRoleUpdateRequest,
     ReservationCancelRequest,
     ReservationIntervalRequest,
     ReservationUpdateRequest,
+    JoinFamilyAddressRequest,
 )
 
 
@@ -54,6 +57,19 @@ class ReservationModelTests(unittest.TestCase):
     def test_rejects_client_supplied_identity_fields(self):
         with self.assertRaises(ValidationError):
             FamilyRoleUpdateRequest(role="parent", family_id=42, user_id=17)
+
+
+class AddressModelTests(unittest.TestCase):
+    def test_all_geocoding_requests_limit_address_to_200_characters(self):
+        for model in (
+            CreateFamilyAddressRequest,
+            JoinFamilyAddressRequest,
+            FamilyAddressResolveRequest,
+        ):
+            with self.subTest(model=model.__name__):
+                self.assertEqual(len(model(home_address="א" * 200).home_address), 200)
+                with self.assertRaises(ValidationError):
+                    model(home_address="א" * 201)
 
 
 if __name__ == "__main__":

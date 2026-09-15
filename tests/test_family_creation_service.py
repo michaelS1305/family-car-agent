@@ -41,6 +41,11 @@ database_stub = stub_module(
     get_user_by_auth_user_id=Mock(),
 )
 geocoding_stub = stub_module("geocoding_service", geocode_address=Mock())
+capacity_stub = stub_module(
+    "geocoding_capacity",
+    GeocodingAdmissionError=type("GeocodingAdmissionError", (Exception,), {}),
+    geocode_with_capacity=Mock(),
+)
 
 
 def load_service_module():
@@ -50,7 +55,11 @@ def load_service_module():
 
     with patch.dict(
         sys.modules,
-        {"database": database_stub, "geocoding_service": geocoding_stub},
+        {
+            "database": database_stub,
+            "geocoding_service": geocoding_stub,
+            "geocoding_capacity": capacity_stub,
+        },
     ):
         sys.modules[spec.name] = module
         try:
@@ -72,6 +81,7 @@ class FamilyCreationServiceTests(unittest.TestCase):
             database_stub.get_family_by_location,
             database_stub.get_user_by_auth_user_id,
             geocoding_stub.geocode_address,
+            capacity_stub.geocode_with_capacity,
         ):
             mocked_function.reset_mock(return_value=True, side_effect=True)
 
@@ -83,6 +93,9 @@ class FamilyCreationServiceTests(unittest.TestCase):
             "latitude": 32.0809,
             "longitude": 34.7806,
         }
+        capacity_stub.geocode_with_capacity.side_effect = (
+            lambda _auth_user_id, geocode, **kwargs: geocode(**kwargs)
+        )
         service._address_resolutions.clear()
         service._auth_resolution_tokens.clear()
 
@@ -188,6 +201,12 @@ class FamilyCreationServiceTests(unittest.TestCase):
             self.resolve_address("תל אביב")
         self.assertEqual(raised.exception.code, "INVALID_ADDRESS_FORMAT")
         geocoding_stub.geocode_address.assert_not_called()
+
+    def test_address_over_200_characters_is_rejected_before_admission(self):
+        with self.assertRaises(service.FamilyCreationError) as raised:
+            self.resolve_address("א" * 201)
+        self.assertEqual(raised.exception.code, "ADDRESS_TOO_LONG")
+        capacity_stub.geocode_with_capacity.assert_not_called()
 
     def test_address_not_found(self):
         geocoding_stub.geocode_address.return_value = None

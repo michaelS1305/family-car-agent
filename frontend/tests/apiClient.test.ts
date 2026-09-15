@@ -312,7 +312,7 @@ test('Join start sends only the bearer identity and returns server state', async
         family_name: null,
         normalized_address: null,
         resolved_address: null,
-        attempts_remaining: { family_name: 3, address: 3, family_code: 3 },
+        attempts_remaining: { family_name: 3, family_code: 3 },
         reset: false,
       })
     },

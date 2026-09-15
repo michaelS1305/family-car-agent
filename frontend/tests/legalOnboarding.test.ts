@@ -14,9 +14,10 @@ test('privacy and terms are accessible before authentication without generic con
 })
 
 test('address collection gives the contextual Google Maps and geofence notice', () => {
-  assert.ok((app.match(/נפתרת באמצעות Google Maps/g) ?? []).length >= 2)
+  assert.ok((app.match(/יש להזין את הכתובת כפי שהיא מופיעה ב-Google Maps/g) ?? []).length >= 2)
   assert.match(app, /אימות המשפחה/)
   assert.match(app, /ניתוק אופציונלית/)
+  assert.ok((app.match(/maxLength=\{200\}/g) ?? []).length >= 2)
 })
 
 test('driver eligibility is explicit at both irreversible create and join boundaries without DOB', () => {

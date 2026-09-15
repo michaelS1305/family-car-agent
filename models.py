@@ -129,7 +129,7 @@ class FamilyRoleUpdateRequest(BaseModel):
 class FamilyAddressResolveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    home_address: str
+    home_address: str = Field(max_length=200)
 
 
 class FamilyAddressResolveResponse(BaseModel):
@@ -187,7 +187,7 @@ class ReservationCancelRequest(BaseModel):
 
 
 class CreateFamilyAddressRequest(BaseModel):
-    home_address: str
+    home_address: str = Field(max_length=200)
 
 
 class CreateFamilyRequest(BaseModel):
@@ -202,7 +202,7 @@ class JoinFamilyNameRequest(BaseModel):
 
 
 class JoinFamilyAddressRequest(BaseModel):
-    home_address: str
+    home_address: str = Field(max_length=200)
 
 
 class JoinFamilyAddressConfirmationRequest(BaseModel):
