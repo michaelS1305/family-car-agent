@@ -2128,11 +2128,40 @@ button.settings-row {
 .settings-code-row .settings-row-value {
   display: grid;
   justify-items: end;
-  gap: 2px;
+  gap: 6px;
+  min-width: 0;
 }
 
-.settings-code-row b { color: #52616e; letter-spacing: 0.12em; }
+.settings-code-row b {
+  max-inline-size: 100%;
+  color: #52616e;
+  letter-spacing: 0.12em;
+  overflow-wrap: anywhere;
+}
 .settings-code-row small { max-width: 24ch; font-size: 0.68rem; line-height: 1.3; }
+
+.settings-code-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.settings-code-actions button {
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid rgba(65, 82, 101, 0.14);
+  border-radius: 999px;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.42);
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-code-actions button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
 
 .settings-row-danger {
   color: #9a4642;

@@ -1,5 +1,6 @@
 import threading
 import unittest
+from datetime import datetime, timedelta
 
 from tests.test_database_atomic_creation import database
 
@@ -16,6 +17,7 @@ class CarState:
     def __init__(self):
         self.lock = threading.Lock()
         self.events = []
+        self.event_times = []
         self.next_id = 1
 
     def active_driver(self, family_id):
@@ -67,6 +69,7 @@ class Connection:
             return Cursor(self.state.active_driver(parameters[0]))
         if "INSERT INTO car_events" in sql:
             user_id, driver_name, status, _event_time, family_id = parameters
+            self.state.event_times.append(_event_time)
             event_id = self.state.next_id
             self.state.next_id += 1
             self.state.events.append((event_id, user_id, driver_name, status, family_id))
@@ -136,6 +139,17 @@ class AtomicCarTransitionTests(unittest.TestCase):
             [(event[1], event[3]) for event in self.state.events],
             [(1, "connected"), (1, "disconnected"), (2, "connected")],
         )
+
+    def test_all_new_connect_handover_and_disconnect_events_use_utc_offsets(self):
+        database.connect_car_atomically(1, "A1", 10)
+        database.connect_car_atomically(2, "A2", 10)
+        database.disconnect_car_atomically(2, 10)
+
+        self.assertEqual(len(self.state.event_times), 4)
+        for value in self.state.event_times:
+            timestamp = datetime.fromisoformat(value)
+            self.assertIsNotNone(timestamp.tzinfo)
+            self.assertEqual(timestamp.utcoffset(), timedelta(0))
 
     def test_valid_disconnect_then_duplicate_disconnect(self):
         database.connect_car_atomically(1, "A1", 10)

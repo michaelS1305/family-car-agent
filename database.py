@@ -310,7 +310,7 @@ def _get_active_driver_on_connection(conn, family_id):
 
 
 def _insert_car_event_on_connection(conn, user_id, driver_name, status, family_id):
-    event_time = datetime.now().isoformat()
+    event_time = datetime.now(timezone.utc).isoformat()
     row = conn.execute(
         """
         INSERT INTO car_events (user_id, driver_name, status, event_time, family_id)

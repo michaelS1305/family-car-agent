@@ -51,10 +51,25 @@ test('account values use a two-column grid and email comes read-only from Supaba
   assert.doesNotMatch(settingsSource, /type="email"|onChange=.*userEmail/)
 })
 
-test('phase one never fetches or reveals the CarPlay connection credential', () => {
-  assert.match(settingsSource, /קוד מוסתר/)
-  assert.match(settingsSource, /חשיפה מאובטחת תתווסף בהמשך/)
-  assert.doesNotMatch(settingsSource, /prepareCarPlaySetup|\/api\/carplay\/setup|shortcut_token|connection_code/)
+test('personal CarPlay code is masked by default and uses the existing authenticated setup source', () => {
+  assert.match(settingsSource, /prepareCarPlaySetup\(accessToken, \{ signal: controller\.signal \}\)/)
+  assert.match(settingsSource, /\[connectionCodeVisible, setConnectionCodeVisible\] = useState\(false\)/)
+  assert.match(settingsSource, /connectionCodeVisible \? connectionCode : '••••••••••••'/)
+  assert.match(settingsSource, /connectionCodeVisible \? 'הסתרת הקוד' : 'הצגת הקוד'/)
+  assert.match(settingsSource, /setConnectionCodeVisible\(\(visible\) => !visible\)/)
+})
+
+test('personal CarPlay code can be copied exactly while it remains masked', () => {
+  assert.match(settingsSource, /await copyConnectionCode\(connectionCode\)/)
+  assert.match(settingsSource, /onClick=\{\(\) => void copyCode\(\)\}/)
+  const copyHandler = settingsSource.slice(
+    settingsSource.indexOf('const copyCode = async'),
+    settingsSource.indexOf('const pushBusy'),
+  )
+  assert.doesNotMatch(copyHandler, /connectionCodeVisible/)
+  assert.doesNotMatch(settingsSource, /localStorage|sessionStorage|shortcut_token|family_id|user_id/)
+  assert.match(settingsSource, /aria-pressed=\{connectionCodeVisible\}/)
+  assert.match(appCssSource, /\.settings-code-actions button[\s\S]*?min-height: 44px/)
 })
 
 test('account actions reuse Family navigation and existing bounded logout cleanup', () => {
