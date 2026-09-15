@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { formatHistoryTime } from '../src/historyTime.ts'
 
 const historySource = readFileSync(
   new URL('../src/components/HistoryScreen.tsx', import.meta.url),
+  'utf8',
+)
+const historyTimeSource = readFileSync(
+  new URL('../src/historyTime.ts', import.meta.url),
   'utf8',
 )
 const dashboardSource = readFileSync(
@@ -29,6 +34,7 @@ test('active usage is rendered first without a fabricated end time', () => {
   assert.match(historySource, /הרכב כרגע בשימוש/)
   assert.match(historySource, /history\.active_usage\.name/)
   assert.match(historySource, /history\.active_usage\.started_at/)
+  assert.match(historySource, /formatHistoryTime\(history\.active_usage\.started_at\)/)
   assert.doesNotMatch(
     historySource.slice(activePosition, completedPosition),
     /ended_at|שעת סיום/,
@@ -41,10 +47,17 @@ test('available, completed, empty, loading and retry states are truthful', () =>
   assert.match(historySource, /usage\.name/)
   assert.match(historySource, /usage\.started_at/)
   assert.match(historySource, /usage\.ended_at/)
+  assert.match(historySource, /formatHistoryTime\(usage\.started_at\).*formatHistoryTime\(usage\.ended_at\)/s)
   assert.match(historySource, /אין עדיין היסטוריית שימוש ברכב/)
   assert.match(historySource, /טוענים היסטוריה…/)
   assert.match(historySource, /נסו שוב/)
   assert.doesNotMatch(historySource, /עריכה|מחיקה|הוספת/)
+})
+
+test('history displays UTC events in Asia/Jerusalem with DST', () => {
+  assert.equal(formatHistoryTime('2026-09-15T15:00:00Z'), '18:00')
+  assert.equal(formatHistoryTime('2026-01-15T12:00:00Z'), '14:00')
+  assert.equal((historyTimeSource.match(/timeZone: 'Asia\/Jerusalem'/g) ?? []).length, 2)
 })
 
 test('one realtime subscription fans out canonical invalidation to status and history', () => {

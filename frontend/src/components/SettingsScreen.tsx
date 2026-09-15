@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { PushConfig } from '../api/apiClient'
+import { prepareCarPlaySetup, type PushConfig } from '../api/apiClient'
+import { copyConnectionCode } from '../carplay/carPlaySetupDraft'
 import { LEGAL_DOCUMENTS, type LegalDocumentKind } from '../legal/legalDocuments'
 import {
   activatePushNotifications, currentNotificationPermission, disableCurrentDevicePush,
@@ -49,11 +50,18 @@ export function SettingsScreen({ open, userName, userEmail, accessToken, version
   const [pushLoadAttempt, setPushLoadAttempt] = useState(0)
   const [loggingOut, setLoggingOut] = useState(false)
   const [permission, setPermission] = useState(permissionLabel)
+  const [connectionCode, setConnectionCode] = useState('')
+  const [connectionCodeVisible, setConnectionCodeVisible] = useState(false)
+  const [connectionCodeCopied, setConnectionCodeCopied] = useState(false)
+  const [connectionCodeError, setConnectionCodeError] = useState('')
 
   useEffect(() => { if (open) backButtonRef.current?.focus({ preventScroll: true }) }, [open])
   useEffect(() => {
     if (open) return
-    const frame = window.requestAnimationFrame(() => setPage('main'))
+    const frame = window.requestAnimationFrame(() => {
+      setPage('main'); setConnectionCode(''); setConnectionCodeVisible(false)
+      setConnectionCodeCopied(false); setConnectionCodeError('')
+    })
     return () => window.cancelAnimationFrame(frame)
   }, [open])
   useEffect(() => {
@@ -75,6 +83,25 @@ export function SettingsScreen({ open, userName, userEmail, accessToken, version
     })
     return () => { active = false }
   }, [accessToken, open, pushLoadAttempt])
+
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    const controller = new AbortController()
+    void Promise.resolve().then(async () => {
+      if (!active) return
+      setConnectionCode(''); setConnectionCodeVisible(false)
+      setConnectionCodeCopied(false); setConnectionCodeError('')
+      try {
+        const setup = await prepareCarPlaySetup(accessToken, { signal: controller.signal })
+        if (active) setConnectionCode(setup.connection_code)
+      } catch (error: unknown) {
+        if (!active || (error instanceof DOMException && error.name === 'AbortError')) return
+        setConnectionCodeError('לא הצלחנו לטעון את קוד החיבור.')
+      }
+    })
+    return () => { active = false; controller.abort() }
+  }, [accessToken, open])
 
   const enablePush = () => {
     if (!pushConfig || pushState === 'enabling') { setPushError('לא הצלחנו להכין את ההתראות. נסו שוב.'); return }
@@ -100,6 +127,15 @@ export function SettingsScreen({ open, userName, userEmail, accessToken, version
     if (pushState !== 'unsupported') enablePush()
   }
   const logout = async () => { if (loggingOut) return; setLoggingOut(true); try { await onLogout() } finally { setLoggingOut(false) } }
+  const copyCode = async () => {
+    if (!connectionCode) return
+    try {
+      await copyConnectionCode(connectionCode)
+      setConnectionCodeCopied(true); setConnectionCodeError('')
+    } catch {
+      setConnectionCodeError('לא הצלחנו להעתיק את קוד החיבור.')
+    }
+  }
   const pushBusy = pushState === 'loading' || pushState === 'enabling' || pushState === 'disabling'
   const detailBack = () => setPage('main')
 
@@ -124,7 +160,7 @@ export function SettingsScreen({ open, userName, userEmail, accessToken, version
         <div className="settings-row settings-row-static"><span>שם</span><strong>{userName}</strong></div>
         <button type="button" className="settings-row" onClick={onOpenFamily}><span>המשפחה שלי</span><span className="settings-row-value">פתיחת ניהול המשפחה ‹</span></button>
         <div className="settings-row settings-row-static"><span>אימייל</span><strong dir="ltr">{userEmail || 'לא זמין'}</strong></div>
-        <div className="settings-row settings-row-static settings-code-row"><span>קוד חיבור ל־CarPlay</span><span className="settings-row-value"><b aria-label="קוד מוסתר">••••••••</b><small>נעול — חשיפה מאובטחת תתווסף בהמשך</small></span></div>
+        <div className="settings-row settings-row-static settings-code-row"><span>קוד חיבור ל־CarPlay</span><span className="settings-row-value"><b dir="ltr" aria-label={connectionCodeVisible ? 'קוד החיבור מוצג' : 'קוד החיבור מוסתר'}>{connectionCodeVisible ? connectionCode : '••••••••••••'}</b><span className="settings-code-actions"><button type="button" disabled={!connectionCode} aria-pressed={connectionCodeVisible} onClick={() => setConnectionCodeVisible((visible) => !visible)}>{connectionCodeVisible ? 'הסתרת הקוד' : 'הצגת הקוד'}</button><button type="button" disabled={!connectionCode} onClick={() => void copyCode()}>{connectionCodeCopied ? 'הקוד הועתק ✓' : 'העתקת הקוד'}</button></span>{connectionCodeError ? <small role="status">{connectionCodeError}</small> : null}</span></div>
       </div></section>
       <section className="settings-group" aria-labelledby="settings-display-title"><h3 id="settings-display-title">תצוגה</h3><div className="settings-card">
         <div className="settings-control-row"><span>מצב תצוגה</span><div className="settings-segmented" aria-label="מצב תצוגה">{THEME_OPTIONS.map((option) => <button type="button" key={option.value} aria-pressed={theme === option.value} onClick={() => setTheme(option.value)}>{option.label}</button>)}</div></div>

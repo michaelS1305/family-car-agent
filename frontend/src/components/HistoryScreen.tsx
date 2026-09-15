@@ -4,27 +4,13 @@ import {
   getCarHistory,
   type CarHistory,
 } from '../api/apiClient'
+import { formatHistoryDate, formatHistoryTime } from '../historyTime'
 import { DashboardCategoryIcon } from './DashboardCategoryIcon'
-
-const HISTORY_DATE = new Intl.DateTimeFormat('he-IL', {
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-})
-
-const HISTORY_TIME = new Intl.DateTimeFormat('he-IL', {
-  hour: '2-digit',
-  minute: '2-digit',
-})
 
 function historyError(error: unknown) {
   return error instanceof ApiRequestError
     ? error.message
     : 'לא הצלחנו לטעון את היסטוריית הרכב.'
-}
-
-function eventDate(value: string) {
-  return new Date(value)
 }
 
 export function HistoryScreen({
@@ -115,7 +101,7 @@ export function HistoryScreen({
               <section className="history-current is-active" aria-label="הרכב כרגע בשימוש">
                 <span><i aria-hidden="true" /> הרכב כרגע בשימוש</span>
                 <strong>{history.active_usage.name}</strong>
-                <p>נלקח ב־{HISTORY_DATE.format(eventDate(history.active_usage.started_at))}, {HISTORY_TIME.format(eventDate(history.active_usage.started_at))}</p>
+                <p>נלקח ב־{formatHistoryDate(history.active_usage.started_at)}, {formatHistoryTime(history.active_usage.started_at)}</p>
               </section>
             ) : (
               <section className="history-current is-available" aria-label="הרכב זמין כעת">
@@ -128,13 +114,11 @@ export function HistoryScreen({
                 <h3 id="recent-usage-title">שימושים אחרונים</h3>
                 <div className="history-list">
                   {history.recent_usage.map((usage) => {
-                    const started = eventDate(usage.started_at)
-                    const ended = eventDate(usage.ended_at)
                     return (
                       <article className="history-card" key={`${usage.name}|${usage.started_at}|${usage.ended_at}`}>
                         <strong>{usage.name}</strong>
-                        <span>{HISTORY_DATE.format(started)}</span>
-                        <time>{HISTORY_TIME.format(started)}–{HISTORY_TIME.format(ended)}</time>
+                        <span>{formatHistoryDate(usage.started_at)}</span>
+                        <time>{formatHistoryTime(usage.started_at)}–{formatHistoryTime(usage.ended_at)}</time>
                       </article>
                     )
                   })}

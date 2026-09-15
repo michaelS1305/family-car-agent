@@ -42,22 +42,26 @@ class HistoryServiceTests(unittest.TestCase):
 
     def test_active_usage_is_separate_and_has_no_fabricated_end(self):
         database_stub.get_car_usage_history.return_value = [
-            ("מיכאל", "2026-09-06T08:00:00", None, True, 9),
-            ("נועה", "2026-09-05T10:00:00", "2026-09-05T11:00:00", False, 7),
+            ("מיכאל", "2026-09-06T08:00:00+00:00", None, True, 9),
+            ("נועה", "2026-09-05T10:00:00+00:00", "2026-09-05T11:00:00+00:00", False, 7),
         ]
         result = service.get_car_history(self.user())
         self.assertEqual(result["active_usage"], {
             "name": "מיכאל",
-            "started_at": "2026-09-06T08:00:00",
+            "started_at": "2026-09-06T08:00:00+00:00",
         })
         self.assertNotIn("ended_at", result["active_usage"])
         self.assertEqual(result["recent_usage"][0]["name"], "נועה")
         self.assertNotIn("sort_id", repr(result))
+        self.assertEqual(
+            result["recent_usage"][0]["ended_at"],
+            "2026-09-05T11:00:00+00:00",
+        )
 
     def test_completed_usage_preserves_canonical_reverse_order_and_safe_fields(self):
         database_stub.get_car_usage_history.return_value = [
-            ("נועה", "2026-09-05T10:00:00", "2026-09-05T11:00:00", False, 7),
-            ("מיכאל", "2026-09-04T08:00:00", "2026-09-04T09:00:00", False, 3),
+            ("נועה", "2026-09-05T10:00:00+00:00", "2026-09-05T11:00:00+00:00", False, 7),
+            ("מיכאל", "2026-09-04T08:00:00+00:00", "2026-09-04T09:00:00+00:00", False, 3),
         ]
         result = service.get_car_history(self.user())
         self.assertEqual([usage["name"] for usage in result["recent_usage"]], ["נועה", "מיכאל"])
