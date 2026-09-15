@@ -4,6 +4,7 @@ from psycopg_pool import ConnectionPool
 from psycopg.errors import ForeignKeyViolation, UniqueViolation
 import secrets
 from datetime import datetime, timezone
+from uuid import uuid4
 from reservation_rules import (
     local_now as reservation_now,
     validate_create, validate_update, validate_target, ReservationValidationError,
@@ -61,9 +62,17 @@ class InvalidJoinStepError(Exception):
     pass
 
 
+class CarTransitionBusyError(Exception):
+    pass
+
+
 PWA_FAMILY_CREATION_LOCK_ID = 1178686273
 RESERVATION_LOCK_NAMESPACE = 1178686274
 CAR_TRANSITION_LOCK_NAMESPACE = 1178686275
+CAR_RATE_FAMILY_LOCK_NAMESPACE = 1178686276
+CAR_RATE_USER_LOCK_NAMESPACE = 1178686277
+CAR_USER_RATE_LIMIT = 5
+CAR_FAMILY_RATE_LIMIT = 10
 
 JOIN_SESSION_COLUMNS = """
     auth_user_id,
@@ -322,14 +331,106 @@ def _insert_car_event_on_connection(conn, user_id, driver_name, status, family_i
     return {"event_id": row[0], "event_time": event_time}
 
 
-def connect_car_atomically(user_id, driver_name, family_id):
-    """Apply one family-scoped connect/handover transition and commit it atomically."""
+def _cleanup_car_transition_admissions():
+    try:
+        with pool.connection() as conn:
+            conn.execute(
+                """
+                WITH expired AS (
+                    SELECT admission_id
+                    FROM carplay_transition_admissions
+                    WHERE admitted_at <= clock_timestamp() - INTERVAL '10 minutes'
+                    ORDER BY admitted_at, admission_id
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 100
+                )
+                DELETE FROM carplay_transition_admissions admissions
+                USING expired
+                WHERE admissions.admission_id = expired.admission_id
+                """
+            )
+    except Exception:
+        logger.warning("operation=car_transition_admission_cleanup status=failed")
+
+
+def admit_car_transition_request(user_id, family_id):
+    """Atomically apply the shared user/family rolling admission policy."""
     with pool.connection() as conn:
         with conn.transaction():
             conn.execute(
                 "SELECT pg_advisory_xact_lock(%s, %s)",
-                (CAR_TRANSITION_LOCK_NAMESPACE, family_id),
+                (CAR_RATE_FAMILY_LOCK_NAMESPACE, family_id),
             )
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s)",
+                (CAR_RATE_USER_LOCK_NAMESPACE, user_id),
+            )
+            now = conn.execute("SELECT clock_timestamp()").fetchone()[0]
+            user_window = conn.execute(
+                """
+                SELECT count(*), EXTRACT(EPOCH FROM (
+                    MIN(admitted_at) + INTERVAL '60 seconds' - %s
+                ))
+                FROM carplay_transition_admissions
+                WHERE user_id = %s
+                  AND admitted_at > %s - INTERVAL '60 seconds'
+                """,
+                (now, user_id, now),
+            ).fetchone()
+            family_window = conn.execute(
+                """
+                SELECT count(*), EXTRACT(EPOCH FROM (
+                    MIN(admitted_at) + INTERVAL '60 seconds' - %s
+                ))
+                FROM carplay_transition_admissions
+                WHERE family_id = %s
+                  AND admitted_at > %s - INTERVAL '60 seconds'
+                """,
+                (now, family_id, now),
+            ).fetchone()
+
+            user_limited = user_window[0] >= CAR_USER_RATE_LIMIT
+            family_limited = family_window[0] >= CAR_FAMILY_RATE_LIMIT
+            if user_limited or family_limited:
+                retry_values = []
+                if user_limited:
+                    retry_values.append(float(user_window[1]))
+                if family_limited:
+                    retry_values.append(float(family_window[1]))
+                result = {
+                    "admitted": False,
+                    "code": (
+                        "CARPLAY_USER_RATE_LIMITED"
+                        if user_limited
+                        else "CARPLAY_FAMILY_RATE_LIMITED"
+                    ),
+                    "retry_after_seconds": max(retry_values),
+                }
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO carplay_transition_admissions
+                        (admission_id, user_id, family_id, admitted_at)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (str(uuid4()), user_id, family_id, now),
+                )
+                result = {"admitted": True}
+
+    _cleanup_car_transition_admissions()
+    return result
+
+
+def connect_car_atomically(user_id, driver_name, family_id):
+    """Apply one family-scoped connect/handover transition and commit it atomically."""
+    with pool.connection() as conn:
+        with conn.transaction():
+            acquired = conn.execute(
+                "SELECT pg_try_advisory_xact_lock(%s, %s)",
+                (CAR_TRANSITION_LOCK_NAMESPACE, family_id),
+            ).fetchone()[0]
+            if not acquired:
+                raise CarTransitionBusyError()
             active_driver = _get_active_driver_on_connection(conn, family_id)
             if active_driver and active_driver[1] == user_id:
                 return {
@@ -365,10 +466,12 @@ def disconnect_car_atomically(user_id, family_id):
     """Disconnect only the canonical active driver under the family lock."""
     with pool.connection() as conn:
         with conn.transaction():
-            conn.execute(
-                "SELECT pg_advisory_xact_lock(%s, %s)",
+            acquired = conn.execute(
+                "SELECT pg_try_advisory_xact_lock(%s, %s)",
                 (CAR_TRANSITION_LOCK_NAMESPACE, family_id),
-            )
+            ).fetchone()[0]
+            if not acquired:
+                raise CarTransitionBusyError()
             active_driver = _get_active_driver_on_connection(conn, family_id)
             if not active_driver:
                 return {"transition": "none", "reason": "already_available"}

@@ -348,6 +348,12 @@ class CarAndNotificationIsolationTests(unittest.TestCase):
     def setUp(self):
         self.database_stub = types.ModuleType("database")
         self.database_stub.get_active_driver = Mock(return_value=None)
+        self.database_stub.admit_car_transition_request = Mock(
+            return_value={"admitted": True}
+        )
+        self.database_stub.CarTransitionBusyError = type(
+            "CarTransitionBusyError", (Exception,), {}
+        )
         self.database_stub.connect_car_atomically = Mock(
             return_value={
                 "transition": "connected",
@@ -374,6 +380,9 @@ class CarAndNotificationIsolationTests(unittest.TestCase):
                 self.service.connect_user(token)
                 self.database_stub.connect_car_atomically.assert_called_once_with(
                     user[0], user[1], user[2]
+                )
+                self.database_stub.admit_car_transition_request.assert_called_with(
+                    user[0], user[2]
                 )
                 self.push_service_stub.dispatch_car_transition_notification.assert_called_once_with(
                     family_id=user[2],
@@ -407,6 +416,7 @@ class CarAndNotificationIsolationTests(unittest.TestCase):
         result = self.service.connect_user("token-a")
 
         self.assertEqual(result["message"], "User is already the current driver")
+        self.database_stub.admit_car_transition_request.assert_called_once_with(1, 10)
         self.push_service_stub.dispatch_car_transition_notification.assert_not_called()
 
     def test_valid_final_disconnect_notifies_only_after_atomic_transition(self):
@@ -426,6 +436,7 @@ class CarAndNotificationIsolationTests(unittest.TestCase):
 
         self.assertEqual(result["message"], "הרכב שוחרר בהצלחה")
         self.database_stub.disconnect_car_atomically.assert_called_once_with(1, 10)
+        self.database_stub.admit_car_transition_request.assert_called_once_with(1, 10)
         self.push_service_stub.dispatch_car_transition_notification.assert_called_once_with(
             family_id=10,
             actor_user_id=1,

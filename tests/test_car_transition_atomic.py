@@ -15,7 +15,8 @@ class Cursor:
 
 class CarState:
     def __init__(self):
-        self.lock = threading.Lock()
+        self.locks = {}
+        self.locks_guard = threading.Lock()
         self.events = []
         self.event_times = []
         self.next_id = 1
@@ -46,25 +47,28 @@ class Transaction:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if self.connection.locked:
-            self.connection.state.lock.release()
-            self.connection.locked = False
+        if self.connection.acquired_lock:
+            self.connection.acquired_lock.release()
+            self.connection.acquired_lock = None
         return False
 
 
 class Connection:
     def __init__(self, state):
         self.state = state
-        self.locked = False
+        self.acquired_lock = None
 
     def transaction(self):
         return Transaction(self)
 
     def execute(self, sql, parameters):
-        if "pg_advisory_xact_lock" in sql:
-            self.state.lock.acquire()
-            self.locked = True
-            return Cursor((True,))
+        if "pg_try_advisory_xact_lock" in sql:
+            with self.state.locks_guard:
+                lock = self.state.locks.setdefault(parameters[1], threading.Lock())
+            acquired = lock.acquire(blocking=False)
+            if acquired:
+                self.acquired_lock = lock
+            return Cursor((acquired,))
         if "FROM car_events c" in sql:
             return Cursor(self.state.active_driver(parameters[0]))
         if "INSERT INTO car_events" in sql:
@@ -167,10 +171,31 @@ class AtomicCarTransitionTests(unittest.TestCase):
         })
         self.assertEqual(len(self.state.events), 1)
 
+    def test_same_family_busy_fails_fast_without_events(self):
+        holder = Connection(self.state)
+        self.assertTrue(holder.execute(
+            "SELECT pg_try_advisory_xact_lock(%s, %s)",
+            (database.CAR_TRANSITION_LOCK_NAMESPACE, 10),
+        ).fetchone()[0])
+        try:
+            with self.assertRaises(database.CarTransitionBusyError):
+                database.connect_car_atomically(1, "A1", 10)
+            self.assertEqual(self.state.events, [])
+        finally:
+            holder.acquired_lock.release()
+            holder.acquired_lock = None
+
     def test_family_locks_are_scoped_independently(self):
-        database.connect_car_atomically(1, "A1", 10)
-        database.connect_car_atomically(3, "B1", 20)
-        self.assertEqual(self.state.active_driver(10), ("A1", 1))
+        holder = Connection(self.state)
+        self.assertTrue(holder.execute(
+            "SELECT pg_try_advisory_xact_lock(%s, %s)",
+            (database.CAR_TRANSITION_LOCK_NAMESPACE, 10),
+        ).fetchone()[0])
+        try:
+            database.connect_car_atomically(3, "B1", 20)
+        finally:
+            holder.acquired_lock.release()
+            holder.acquired_lock = None
         self.assertEqual(self.state.active_driver(20), ("B1", 3))
 
 

@@ -24,8 +24,11 @@ class DisconnectSecurityTests(unittest.TestCase):
     def setUp(self):
         self.db = types.ModuleType('database')
         for name in ('get_user_by_token', 'get_active_driver', 'get_family_by_id',
-                     'connect_car_atomically', 'disconnect_car_atomically'):
+                     'connect_car_atomically', 'disconnect_car_atomically',
+                     'admit_car_transition_request'):
             setattr(self.db, name, Mock())
+        self.db.CarTransitionBusyError = type('CarTransitionBusyError', (Exception,), {})
+        self.db.admit_car_transition_request.return_value = {'admitted': True}
         self.push = types.ModuleType('push_service')
         self.push.dispatch_car_transition_notification = Mock()
         spec = importlib.util.spec_from_file_location('isolated_disconnect', ROOT / 'car_service.py')
@@ -40,6 +43,7 @@ class DisconnectSecurityTests(unittest.TestCase):
         }
 
     def assert_no_effects(self):
+        self.db.admit_car_transition_request.assert_not_called()
         self.db.disconnect_car_atomically.assert_not_called()
         self.db.connect_car_atomically.assert_not_called()
         self.push.dispatch_car_transition_notification.assert_not_called()
@@ -98,6 +102,7 @@ class DisconnectSecurityTests(unittest.TestCase):
         self.assertEqual(result, {'message': 'הרכב שוחרר בהצלחה', 'result': {
             'message': 'Car disconnected', 'user': 'Driver', 'event_time': 'test-time'}})
         self.db.disconnect_car_atomically.assert_called_once_with(1, 10)
+        self.db.admit_car_transition_request.assert_called_once_with(1, 10)
         self.push.dispatch_car_transition_notification.assert_called_once()
 
     def test_outside_response_has_no_distance(self):

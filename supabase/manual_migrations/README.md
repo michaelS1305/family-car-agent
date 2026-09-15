@@ -56,3 +56,8 @@ separately. Do not rely on default privileges to enforce this boundary.
 2026-09-15. It creates backend-only, PostgreSQL-authoritative rolling admission
 and active-permit state; it stores no address, coordinates, provider URL, or API
 key. Do not run it from application startup.
+
+`2026091501_carplay_transition_rate_limit.sql` is a pending manual migration.
+Run it successfully before deploying its matching backend. It adds backend-only,
+PostgreSQL-authoritative rolling admission history for CarPlay connect/disconnect
+requests; it stores only server-derived user/family references and admission time.
