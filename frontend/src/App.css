@@ -2506,7 +2506,7 @@ html[data-effective-theme='dark'] .final-processing-message {
   color: var(--app-text-secondary) !important;
 }
 
-html[data-effective-theme='dark'] :is(.connection-code-panel strong, .family-code-panel strong) {
+html[data-effective-theme='dark'] .connection-code-panel strong {
   color: #a9cbbb;
 }
 
@@ -2549,7 +2549,6 @@ html[data-effective-theme='dark'] :is(.driver-eligibility, .family-address-confi
 html[data-effective-theme='dark'] :is(
   .auth-card,
   .address-preview,
-  .family-code-panel,
   .connection-code-panel,
   .chat-bubble-assistant,
   .chat-loading,
@@ -3252,43 +3251,6 @@ html[data-effective-theme='dark'] :is(button, input, textarea, select):focus-vis
   margin: 18px 0 0;
   color: #6b747c;
   line-height: 1.65;
-}
-
-.family-code-panel {
-  width: min(100%, 440px);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  margin-top: 46px;
-  padding: 24px;
-  border: 1.5px solid #dedad5;
-  border-radius: 22px;
-  background: #ffffff;
-}
-
-.family-code-panel span,
-.family-code-panel small {
-  color: #7b817f;
-}
-
-.family-code-panel strong {
-  margin: 10px 0 14px;
-  color: #263241;
-  font-size: 2.5rem;
-  letter-spacing: 0.16em;
-}
-
-.family-code-panel button {
-  border: 0;
-  color: #3d5e72;
-  background: transparent;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.family-code-panel small {
-  margin-top: 18px;
-  line-height: 1.55;
 }
 
 .success-button {

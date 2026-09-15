@@ -36,7 +36,6 @@ database_stub = stub_module(
     AuthUserIdentityNotFoundError=AuthUserIdentityNotFoundError,
     FamilyAlreadyExistsAtLocationError=FamilyAlreadyExistsAtLocationError,
     create_family_with_first_user=Mock(),
-    get_family_by_code=Mock(),
     get_family_by_location=Mock(),
     get_user_by_auth_user_id=Mock(),
 )
@@ -77,7 +76,6 @@ class FamilyCreationServiceTests(unittest.TestCase):
     def setUp(self):
         for mocked_function in (
             database_stub.create_family_with_first_user,
-            database_stub.get_family_by_code,
             database_stub.get_family_by_location,
             database_stub.get_user_by_auth_user_id,
             geocoding_stub.geocode_address,
@@ -86,7 +84,6 @@ class FamilyCreationServiceTests(unittest.TestCase):
             mocked_function.reset_mock(return_value=True, side_effect=True)
 
         database_stub.get_user_by_auth_user_id.return_value = None
-        database_stub.get_family_by_code.return_value = None
         database_stub.get_family_by_location.return_value = None
         geocoding_stub.geocode_address.return_value = {
             "address": "120 Dizengoff Street, Tel Aviv",
@@ -98,12 +95,18 @@ class FamilyCreationServiceTests(unittest.TestCase):
         )
         service._address_resolutions.clear()
         service._auth_resolution_tokens.clear()
+        self.code_patch = patch.object(
+            service,
+            "_generate_family_code",
+            return_value="k7m2q9",
+        )
+        self.code_patch.start()
+        self.addCleanup(self.code_patch.stop)
 
     def create(self, **overrides):
         values = {
             "auth_user_id": "auth-user-uuid",
             "family_name": " כהן ",
-            "family_code": "482731",
             "address_resolution_token": "missing-resolution-token",
             "user_name": " מיכאל ",
         }
@@ -128,7 +131,7 @@ class FamilyCreationServiceTests(unittest.TestCase):
         geocoding_stub.geocode_address.assert_not_called()
         database_stub.create_family_with_first_user.assert_called_once_with(
             name="כהן",
-            family_code="482731",
+            family_code="k7m2q9",
             home_address="תל אביב, דיזנגוף, 120",
             user_name="מיכאל",
             home_latitude=32.0809,
@@ -136,10 +139,6 @@ class FamilyCreationServiceTests(unittest.TestCase):
             auth_user_id="auth-user-uuid",
             prevent_duplicate_location=True,
         )
-
-    def test_invalid_family_code(self):
-        self.assert_error("INVALID_FAMILY_CODE", family_code="12345")
-        geocoding_stub.geocode_address.assert_not_called()
 
     def test_numeric_family_and_personal_names_are_rejected(self):
         self.assert_error("INVALID_FAMILY_NAME", family_name="111")
@@ -192,10 +191,6 @@ class FamilyCreationServiceTests(unittest.TestCase):
                     expected_name,
                 )
 
-    def test_duplicate_family_code(self):
-        database_stub.get_family_by_code.return_value = (7, "כהן")
-        self.assert_error("FAMILY_CODE_TAKEN")
-
     def test_invalid_address_format(self):
         with self.assertRaises(service.FamilyCreationError) as raised:
             self.resolve_address("תל אביב")
@@ -225,13 +220,42 @@ class FamilyCreationServiceTests(unittest.TestCase):
         self.assert_error("AUTH_USER_ALREADY_MAPPED")
         geocoding_stub.geocode_address.assert_not_called()
 
-    def test_atomic_race_errors_are_mapped_to_structured_codes(self):
+    def test_generated_code_collision_retries_with_a_new_server_code(self):
+        service._generate_family_code.side_effect = ["aaaaaa", "00ab12"]
+        database_stub.create_family_with_first_user.side_effect = [
+            FamilyCodeTakenError(),
+            None,
+        ]
+        resolved = self.resolve_address()
+        self.create(address_resolution_token=resolved.resolution_token)
+
+        self.assertEqual(
+            [call.kwargs["family_code"] for call in database_stub.create_family_with_first_user.call_args_list],
+            ["aaaaaa", "00ab12"],
+        )
+
+    def test_generated_code_retry_is_bounded_and_exhaustion_is_generic(self):
         database_stub.create_family_with_first_user.side_effect = FamilyCodeTakenError()
         resolved = self.resolve_address()
-        self.assert_error(
-            "FAMILY_CODE_TAKEN",
-            address_resolution_token=resolved.resolution_token,
+
+        with self.assertRaises(service.FamilyCreationError) as raised:
+            self.create(address_resolution_token=resolved.resolution_token)
+
+        self.assertEqual(raised.exception.code, "SERVER_ERROR")
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            database_stub.create_family_with_first_user.call_count,
+            service.FAMILY_CODE_GENERATION_ATTEMPTS,
         )
+        self.assertNotIn("k7m2q9", raised.exception.message)
+
+    def test_secure_generator_uses_exact_alphabet_and_supports_leading_zero(self):
+        self.code_patch.stop()
+        self.addCleanup(lambda: None)
+        with patch.object(service.secrets, "choice", side_effect=list("00ab12")) as choice:
+            self.assertEqual(service._generate_family_code(), "00ab12")
+        self.assertEqual(choice.call_count, 6)
+        self.assertTrue(all(call.args == (service.FAMILY_CODE_ALPHABET,) for call in choice.call_args_list))
 
     def test_missing_auth_user_becomes_structured_session_error(self):
         resolved = self.resolve_address()
@@ -264,13 +288,26 @@ class FamilyCreationServiceTests(unittest.TestCase):
             service.create_family_for_auth_user(
                 auth_user_id="different-auth-user",
                 family_name="כהן",
-                family_code="482731",
                 address_resolution_token=resolved.resolution_token,
                 user_name="מיכאל",
             )
 
         self.assertEqual(raised.exception.code, "ADDRESS_RESOLUTION_EXPIRED")
         database_stub.create_family_with_first_user.assert_not_called()
+        service._generate_family_code.assert_not_called()
+
+    def test_oversized_names_are_rejected_before_database_or_code_generation(self):
+        for field in ("family_name", "user_name"):
+            with self.subTest(field=field):
+                database_stub.get_user_by_auth_user_id.reset_mock()
+                service._generate_family_code.reset_mock()
+                self.assert_error(
+                    "INVALID_FAMILY_NAME" if field == "family_name" else "INVALID_USER_NAME",
+                    **{field: "א" * 101},
+                )
+                database_stub.get_user_by_auth_user_id.assert_not_called()
+                database_stub.create_family_with_first_user.assert_not_called()
+                service._generate_family_code.assert_not_called()
 
     def test_resolution_token_is_discarded_only_after_success(self):
         resolved = self.resolve_address()
@@ -295,6 +332,7 @@ class FamilyCreationServiceTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "ADDRESS_RESOLUTION_EXPIRED")
         database_stub.create_family_with_first_user.assert_not_called()
+        service._generate_family_code.assert_not_called()
 
 
 if __name__ == "__main__":

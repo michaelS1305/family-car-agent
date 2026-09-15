@@ -512,7 +512,6 @@ def create_family(
         return create_family_for_auth_user(
             auth_user_id=authenticated_user.auth_user_id,
             family_name=request.family_name,
-            family_code=request.family_code,
             address_resolution_token=request.address_resolution_token,
             user_name=request.user_name,
         )

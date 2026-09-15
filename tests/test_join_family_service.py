@@ -198,6 +198,57 @@ class JoinFamilyServiceTests(unittest.TestCase):
         self.assertEqual(raised.exception.detail()["locked_until"], locked_until.isoformat())
         self.assertIn("בדקו את הפרטים", raised.exception.message)
 
+    def test_canonical_family_codes_reach_the_matched_family_verifier(self):
+        for family_code in ("k7m2q9", "00ab12", "abcdef", "123456"):
+            with self.subTest(family_code=family_code):
+                database_stub.verify_pwa_join_family_code.reset_mock()
+                database_stub.verify_pwa_join_family_code.return_value = {
+                    "success": True,
+                    "session": session(step="user_name", family_code_attempts=0),
+                }
+
+                service.submit_join_family_code("auth-user-uuid", family_code)
+
+                database_stub.verify_pwa_join_family_code.assert_called_once_with(
+                    "auth-user-uuid",
+                    family_code,
+                )
+
+    def test_noncanonical_family_codes_use_existing_server_attempt_protection(self):
+        invalid_codes = (
+            "ABC123",
+            "Abc123",
+            "abc-12",
+            "abc_12",
+            "abc 12",
+            "אבג123",
+            "１２３４５６",
+            "abc12",
+            "abc1234",
+            "!@#$%^",
+        )
+        for family_code in invalid_codes:
+            with self.subTest(family_code=family_code):
+                database_stub.record_pwa_join_failure.reset_mock()
+                database_stub.verify_pwa_join_family_code.reset_mock()
+                database_stub.record_pwa_join_failure.return_value = {
+                    "success": False,
+                    "attempts_remaining": 2,
+                    "locked_until": None,
+                    "session": session(family_code_attempts=1),
+                }
+
+                with self.assertRaises(service.JoinFamilyError) as raised:
+                    service.submit_join_family_code("auth-user-uuid", family_code)
+
+                self.assertEqual(raised.exception.code, "INVALID_FAMILY_CODE")
+                database_stub.verify_pwa_join_family_code.assert_not_called()
+                database_stub.record_pwa_join_failure.assert_called_once_with(
+                    "auth-user-uuid",
+                    "family_code",
+                    ("family_code",),
+                )
+
     def test_invalid_address_does_not_count_or_geocode(self):
         with self.assertRaises(service.JoinFamilyError) as raised:
             service.submit_join_family_address("auth-user-uuid", "כתובת לא מלאה")
@@ -381,6 +432,18 @@ class JoinFamilyServiceTests(unittest.TestCase):
                 with self.assertRaises(service.JoinFamilyError) as raised:
                     service.complete_join_family("verified-auth-user", value)
                 self.assertEqual(raised.exception.code, "INVALID_USER_NAME")
+        database_stub.complete_pwa_join.assert_not_called()
+
+    def test_oversized_names_are_rejected_before_join_database_work(self):
+        with self.assertRaises(service.JoinFamilyError) as family_error:
+            service.submit_join_family_name("verified-auth-user", "א" * 101)
+        self.assertEqual(family_error.exception.code, "INVALID_FAMILY_NAME")
+        database_stub.record_pwa_join_failure.assert_not_called()
+        database_stub.submit_pwa_join_family_name.assert_not_called()
+
+        with self.assertRaises(service.JoinFamilyError) as user_error:
+            service.complete_join_family("verified-auth-user", "א" * 101)
+        self.assertEqual(user_error.exception.code, "INVALID_USER_NAME")
         database_stub.complete_pwa_join.assert_not_called()
 
     def test_complete_translates_concurrent_mapping_to_idempotent_error_code(self):

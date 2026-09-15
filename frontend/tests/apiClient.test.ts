@@ -165,7 +165,6 @@ test('missing auth user returns a structured invalid-session error', async () =>
   await assert.rejects(
     createFamily('stale-token', {
       family_name: 'כהן',
-      family_code: '482731',
       address_resolution_token: 'opaque-resolution-token',
       user_name: 'מיכאל',
     }, {
@@ -223,7 +222,6 @@ test('successful create sends no client identity fields', async () => {
     'access-token',
     {
       family_name: 'כהן',
-      family_code: '482731',
       address_resolution_token: 'opaque-resolution-token',
       user_name: 'מיכאל',
     },
@@ -239,7 +237,6 @@ test('successful create sends no client identity fields', async () => {
   assert.deepEqual(result, { created: true })
   assert.deepEqual(receivedBody, {
     family_name: 'כהן',
-    family_code: '482731',
     address_resolution_token: 'opaque-resolution-token',
     user_name: 'מיכאל',
   })
@@ -248,13 +245,12 @@ test('successful create sends no client identity fields', async () => {
   assert.equal('family_id' in (receivedBody as object), false)
 })
 
-test('structured validation and duplicate errors are preserved', async () => {
+test('structured create validation errors are preserved without a code occupancy contract', async () => {
   await assert.rejects(
     createFamily(
       'token',
       {
         family_name: 'כהן',
-        family_code: '482731',
         address_resolution_token: 'opaque-resolution-token',
         user_name: 'מיכאל',
       },
@@ -262,15 +258,15 @@ test('structured validation and duplicate errors are preserved', async () => {
         baseUrl: 'http://backend.test',
         fetcher: async () => jsonResponse(409, {
           detail: {
-            code: 'FAMILY_CODE_TAKEN',
-            message: 'קוד המשפחה הזה כבר תפוס. בחרו קוד אחר.',
+            code: 'FAMILY_ALREADY_EXISTS_AT_ADDRESS',
+            message: 'כבר קיימת משפחה בכתובת הזו.',
           },
         }),
       },
     ),
     (error: unknown) => (
       error instanceof OnboardingApiError
-      && error.code === 'FAMILY_CODE_TAKEN'
+      && error.code === 'FAMILY_ALREADY_EXISTS_AT_ADDRESS'
       && error.status === 409
     ),
   )
@@ -279,7 +275,6 @@ test('structured validation and duplicate errors are preserved', async () => {
 test('create maps 401 and network failure without parsing text', async () => {
   const payload = {
     family_name: 'כהן',
-    family_code: '482731',
     address_resolution_token: 'opaque-resolution-token',
     user_name: 'מיכאל',
   }

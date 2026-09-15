@@ -5,7 +5,6 @@ import { createCreateFamilySubmitter } from '../src/onboarding/createFamilySubmi
 
 const payload = {
   family_name: 'כהן',
-  family_code: '482731',
   address_resolution_token: 'opaque-resolution-token',
   user_name: 'מיכאל',
 }
@@ -60,7 +59,7 @@ test('recoverable failure preserves the draft and does not recheck identity', as
   let rechecked = false
   const submit = createCreateFamilySubmitter({
     createRequest: async () => {
-      throw new OnboardingApiError('FAMILY_CODE_TAKEN', 'taken', 409)
+      throw new OnboardingApiError('ADDRESS_RESOLUTION_EXPIRED', 'expired', 409)
     },
     clearDraft: () => { cleared = true },
     markCreated: () => { markedCreated = true },

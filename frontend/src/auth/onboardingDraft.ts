@@ -2,20 +2,35 @@ import type { CreateValidationAttempts } from '../onboarding/createValidationAtt
 
 export type OnboardingFlow = 'create' | 'join'
 
-export type OnboardingFormData = {
+export type CreateOnboardingFormData = {
   familyName: string
-  familyCode: string
   address: string
   userName: string
   resolvedAddress?: string
   addressResolutionToken?: string
 }
 
-export type OnboardingDraft = {
-  flow: OnboardingFlow
+export type JoinOnboardingFormData = CreateOnboardingFormData & {
+  familyCode: string
+}
+
+export type OnboardingFormData = CreateOnboardingFormData & {
+  familyCode?: string
+}
+
+type OnboardingDraftState = {
   step: number
-  form: OnboardingFormData
   createAttempts?: CreateValidationAttempts
+}
+
+export type OnboardingDraft = OnboardingDraftState & (
+  | { flow: 'create'; form: CreateOnboardingFormData }
+  | { flow: 'join'; form: JoinOnboardingFormData }
+)
+
+type OnboardingDraftInput = OnboardingDraftState & {
+  flow: OnboardingFlow
+  form: OnboardingFormData
 }
 
 export type PendingCreateSuccess = {
@@ -24,7 +39,6 @@ export type PendingCreateSuccess = {
   authUserId: string
   createdAt: string
   familyName: string
-  familyCode: string
   userName: string
 }
 
@@ -58,12 +72,12 @@ function isDraft(value: unknown): value is OnboardingDraft {
     (draft.flow === 'create' || draft.flow === 'join')
     && Number.isInteger(draft.step)
     && Number(draft.step) >= 0
-    && Number(draft.step) <= (draft.flow === 'create' ? 4 : 5)
+    && Number(draft.step) <= (draft.flow === 'create' ? 3 : 5)
     && Boolean(form)
     && typeof form?.familyName === 'string'
-    && typeof form.familyCode === 'string'
     && typeof form.address === 'string'
     && typeof form.userName === 'string'
+    && (draft.flow === 'create' || typeof form.familyCode === 'string')
     && (form.resolvedAddress === undefined || typeof form.resolvedAddress === 'string')
     && (
       form.addressResolutionToken === undefined
@@ -72,15 +86,37 @@ function isDraft(value: unknown): value is OnboardingDraft {
     && (
       attempts === undefined
       || (
-        Number.isInteger(attempts.familyCode)
-        && attempts.familyCode >= 0
-        && attempts.familyCode <= 3
-        && Number.isInteger(attempts.address)
+        Number.isInteger(attempts.address)
         && attempts.address >= 0
         && attempts.address <= 3
       )
     )
   )
+}
+
+function toFlowSpecificDraft(draft: OnboardingDraftInput): OnboardingDraft {
+  if (draft.flow === 'join') {
+    return {
+      ...draft,
+      flow: 'join',
+      form: {
+        ...draft.form,
+        familyCode: draft.form.familyCode ?? '',
+      },
+    }
+  }
+  return {
+    flow: 'create',
+    step: draft.step,
+    createAttempts: draft.createAttempts,
+    form: {
+      familyName: draft.form.familyName,
+      address: draft.form.address,
+      userName: draft.form.userName,
+      resolvedAddress: draft.form.resolvedAddress,
+      addressResolutionToken: draft.form.addressResolutionToken,
+    },
+  }
 }
 
 function isPendingCreateSuccess(value: unknown): value is PendingCreateSuccess {
@@ -96,8 +132,6 @@ function isPendingCreateSuccess(value: unknown): value is PendingCreateSuccess {
     && !Number.isNaN(Date.parse(pending.createdAt))
     && typeof pending.familyName === 'string'
     && pending.familyName.trim().length > 0
-    && typeof pending.familyCode === 'string'
-    && /^\d{6}$/.test(pending.familyCode)
     && typeof pending.userName === 'string'
     && pending.userName.trim().length > 0
   )
@@ -135,7 +169,7 @@ export function loadOnboardingDraft(storage = getBrowserSessionStorage()) {
     if (!storedDraft) return null
 
     const parsedDraft: unknown = JSON.parse(storedDraft)
-    if (isDraft(parsedDraft)) return parsedDraft
+    if (isDraft(parsedDraft)) return toFlowSpecificDraft(parsedDraft)
     removeInvalidStoredValue(storage, draftKey)
     return null
   } catch {
@@ -145,11 +179,11 @@ export function loadOnboardingDraft(storage = getBrowserSessionStorage()) {
 }
 
 export function saveOnboardingDraft(
-  draft: OnboardingDraft,
+  draft: OnboardingDraftInput,
   storage = getBrowserSessionStorage(),
 ) {
   try {
-    storage?.setItem(draftKey, JSON.stringify(draft))
+    storage?.setItem(draftKey, JSON.stringify(toFlowSpecificDraft(draft)))
   } catch {
     // The flow still works when browser storage is unavailable.
   }

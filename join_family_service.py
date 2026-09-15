@@ -14,6 +14,7 @@ from database import (
 from geocoding_service import geocode_address
 from geocoding_capacity import GeocodingAdmissionError, geocode_with_capacity
 from onboarding_rules import (
+    HUMAN_NAME_MAX_LENGTH,
     is_valid_family_code,
     normalize_human_name,
     parse_home_address,
@@ -34,7 +35,7 @@ ERROR_MESSAGES = {
     "JOIN_FAMILY_ADDRESS_NOT_FOUND": (
         "לא מצאנו משפחה בכתובת הזו. בדוק את האיות ואת מספר הבית ונסה שוב."
     ),
-    "INVALID_FAMILY_CODE": "קוד המשפחה אינו נכון.",
+    "INVALID_FAMILY_CODE": "קוד המשפחה חייב להכיל 6 אותיות אנגליות קטנות או ספרות.",
     "INVALID_USER_NAME": "השם הפרטי יכול להכיל אותיות, רווחים, מקף או גרש, ללא ספרות.",
     "AUTH_USER_ALREADY_MAPPED": "החשבון כבר משויך למשתמש במערכת.",
     "JOIN_LOCKED": "תהליך ההצטרפות נעול זמנית לאחר שלושה ניסיונות.",
@@ -153,6 +154,8 @@ def start_join_family(auth_user_id):
 
 
 def submit_join_family_name(auth_user_id, family_name):
+    if not isinstance(family_name, str) or len(family_name) > HUMAN_NAME_MAX_LENGTH:
+        raise JoinFamilyError("INVALID_FAMILY_NAME", 400)
     normalized_name = normalize_human_name(family_name)
     if normalized_name is None:
         result = _call_database(
@@ -223,8 +226,7 @@ def confirm_join_family_address(auth_user_id, confirmed):
 
 
 def submit_join_family_code(auth_user_id, family_code):
-    normalized_code = family_code.strip()
-    if not is_valid_family_code(normalized_code):
+    if not is_valid_family_code(family_code):
         result = _call_database(
             record_pwa_join_failure,
             auth_user_id,
@@ -236,7 +238,7 @@ def submit_join_family_code(auth_user_id, family_code):
     result = _call_database(
         verify_pwa_join_family_code,
         auth_user_id,
-        normalized_code,
+        family_code,
     )
     if not result["success"]:
         _raise_attempt_failure(result, "INVALID_FAMILY_CODE")
@@ -244,6 +246,8 @@ def submit_join_family_code(auth_user_id, family_code):
 
 
 def complete_join_family(auth_user_id, user_name):
+    if not isinstance(user_name, str) or len(user_name) > HUMAN_NAME_MAX_LENGTH:
+        raise JoinFamilyError("INVALID_USER_NAME", 400)
     normalized_name = normalize_human_name(user_name)
     if normalized_name is None:
         raise JoinFamilyError("INVALID_USER_NAME", 400)
