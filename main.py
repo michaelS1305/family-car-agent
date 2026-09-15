@@ -145,9 +145,15 @@ def get_me(current_user: CurrentUser = Depends(get_current_user)):
 
 
 def _raise_family_profile_error(error):
+    headers = None
+    detail = {"code": error.code, "message": error.message}
+    if getattr(error, "retry_after_seconds", None) is not None:
+        headers = {"Retry-After": str(error.retry_after_seconds)}
+        detail["retry_after_seconds"] = error.retry_after_seconds
     raise HTTPException(
         status_code=error.status_code,
-        detail={"code": error.code, "message": error.message},
+        detail=detail,
+        headers=headers,
     ) from error
 
 
@@ -414,9 +420,15 @@ def set_carplay_status(
 
 
 def _raise_family_creation_error(error):
+    headers = None
+    detail = {"code": error.code, "message": error.message}
+    if getattr(error, "retry_after_seconds", None) is not None:
+        headers = {"Retry-After": str(error.retry_after_seconds)}
+        detail["retry_after_seconds"] = error.retry_after_seconds
     raise HTTPException(
         status_code=error.status_code,
-        detail={"code": error.code, "message": error.message},
+        detail=detail,
+        headers=headers,
     ) from error
 
 
@@ -431,9 +443,13 @@ def _raise_family_creation_server_error(error):
 
 
 def _raise_join_family_error(error):
+    headers = None
+    if getattr(error, "retry_after_seconds", None) is not None:
+        headers = {"Retry-After": str(error.retry_after_seconds)}
     raise HTTPException(
         status_code=error.status_code,
         detail=error.detail(),
+        headers=headers,
     ) from error
 
 

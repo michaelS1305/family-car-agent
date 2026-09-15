@@ -28,6 +28,7 @@ database_stub.JoinSessionLockedError = FakeJoinSessionLockedError
 for function_name in (
     "complete_pwa_join",
     "confirm_pwa_join_address",
+    "precheck_pwa_join_address",
     "record_pwa_join_failure",
     "start_pwa_join_session",
     "submit_pwa_join_address",
@@ -38,6 +39,9 @@ for function_name in (
 
 geocoding_stub = types.ModuleType("geocoding_service")
 geocoding_stub.geocode_address = Mock()
+capacity_stub = types.ModuleType("geocoding_capacity")
+capacity_stub.GeocodingAdmissionError = type("GeocodingAdmissionError", (Exception,), {})
+capacity_stub.geocode_with_capacity = Mock()
 
 
 def load_service():
@@ -49,6 +53,7 @@ def load_service():
         {
             "database": database_stub,
             "geocoding_service": geocoding_stub,
+            "geocoding_capacity": capacity_stub,
         },
     ):
         spec.loader.exec_module(module)
@@ -83,6 +88,10 @@ class JoinFamilyServiceTests(unittest.TestCase):
             if isinstance(value, Mock):
                 value.reset_mock(return_value=True, side_effect=True)
         geocoding_stub.geocode_address.reset_mock(return_value=True, side_effect=True)
+        capacity_stub.geocode_with_capacity.reset_mock(return_value=True, side_effect=True)
+        capacity_stub.geocode_with_capacity.side_effect = (
+            lambda _auth_user_id, geocode, **kwargs: geocode(**kwargs)
+        )
 
     def test_start_returns_no_internal_identity_or_family_id(self):
         database_stub.start_pwa_join_session.return_value = session()
@@ -189,25 +198,15 @@ class JoinFamilyServiceTests(unittest.TestCase):
         self.assertEqual(raised.exception.detail()["locked_until"], locked_until.isoformat())
         self.assertIn("בדקו את הפרטים", raised.exception.message)
 
-    def test_invalid_address_counts_without_geocoding(self):
-        database_stub.record_pwa_join_failure.return_value = {
-            "success": False,
-            "attempts_remaining": 1,
-            "locked_until": None,
-            "session": session(step="address", address_attempts=2),
-        }
-
+    def test_invalid_address_does_not_count_or_geocode(self):
         with self.assertRaises(service.JoinFamilyError) as raised:
             service.submit_join_family_address("auth-user-uuid", "כתובת לא מלאה")
 
         geocoding_stub.geocode_address.assert_not_called()
-        database_stub.record_pwa_join_failure.assert_called_once_with(
-            "auth-user-uuid",
-            "address",
-            ("address", "address_confirmed", "family_code"),
-        )
-        self.assertEqual(raised.exception.attempts_remaining, 1)
-        self.assertIn("ניסיון אחרון", raised.exception.message)
+        capacity_stub.geocode_with_capacity.assert_not_called()
+        database_stub.record_pwa_join_failure.assert_not_called()
+        database_stub.precheck_pwa_join_address.assert_not_called()
+        self.assertEqual(raised.exception.code, "INVALID_ADDRESS_FORMAT")
 
     def test_valid_address_is_geocoded_and_family_id_is_not_returned(self):
         geocoding_stub.geocode_address.return_value = {
@@ -232,6 +231,7 @@ class JoinFamilyServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(result["step"], "address_confirmed")
+        database_stub.precheck_pwa_join_address.assert_called_once_with("auth-user-uuid")
         self.assertNotIn("family_id", result)
         database_stub.submit_pwa_join_address.assert_called_once_with(
             "auth-user-uuid",
@@ -289,7 +289,43 @@ class JoinFamilyServiceTests(unittest.TestCase):
             service.submit_join_family_address("auth-user-uuid", "דימונה, רחוב אחר, 20")
 
         self.assertEqual(raised.exception.code, "JOIN_FAMILY_ADDRESS_NOT_FOUND")
-        self.assertEqual(raised.exception.attempts_remaining, 2)
+        self.assertIsNone(raised.exception.attempts_remaining)
+        database_stub.record_pwa_join_failure.assert_not_called()
+
+    def test_public_session_omits_legacy_address_attempts(self):
+        result = service._public_session(session(step="address", address_attempts=3))
+        self.assertEqual(result["attempts_remaining"], {
+            "family_name": 3,
+            "family_code": 3,
+        })
+
+    def test_ineligible_join_is_rejected_before_geocoding(self):
+        cases = (
+            (FakeInvalidJoinStepError(), "INVALID_JOIN_STEP"),
+            (FakeAuthUserAlreadyMappedError(), "AUTH_USER_ALREADY_MAPPED"),
+            (
+                FakeJoinSessionLockedError(datetime(2026, 9, 14, tzinfo=timezone.utc)),
+                "JOIN_LOCKED",
+            ),
+        )
+        for error, code in cases:
+            with self.subTest(code=code):
+                database_stub.precheck_pwa_join_address.side_effect = error
+                with self.assertRaises(service.JoinFamilyError) as raised:
+                    service.submit_join_family_address(
+                        "auth-user-uuid", "תל אביב, דיזנגוף, 120"
+                    )
+                self.assertEqual(raised.exception.code, code)
+                capacity_stub.geocode_with_capacity.assert_not_called()
+                geocoding_stub.geocode_address.assert_not_called()
+                database_stub.precheck_pwa_join_address.reset_mock(side_effect=True)
+
+    def test_address_over_200_characters_does_not_geocode(self):
+        with self.assertRaises(service.JoinFamilyError) as raised:
+            service.submit_join_family_address("auth-user-uuid", "א" * 201)
+        self.assertEqual(raised.exception.code, "ADDRESS_TOO_LONG")
+        database_stub.precheck_pwa_join_address.assert_not_called()
+        capacity_stub.geocode_with_capacity.assert_not_called()
 
     def test_different_city_is_rejected_by_distance_match(self):
         geocoding_stub.geocode_address.return_value = {

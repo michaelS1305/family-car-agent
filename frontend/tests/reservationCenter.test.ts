@@ -17,8 +17,8 @@ const familySource = readFileSync(
 )
 
 test('reservation and family categories remain dedicated screens', () => {
-  assert.match(dashboardSource, /activeCategory\.id === 'family'[\s\S]*?<FamilyScreen/)
-  assert.match(dashboardSource, /activeCategory\.id === 'reservations'[\s\S]*?<ReservationCenterScreen/)
+  assert.match(dashboardSource, /activeCategory\.id==='family'[\s\S]*?<FamilyScreen/)
+  assert.match(dashboardSource, /activeCategory\.id==='reservations'[\s\S]*?<ReservationCenterScreen/)
   assert.doesNotMatch(dashboardSource, /<CategoryPlaceholderScreen/)
   assert.match(familySource, /אנשי המשפחה/)
 })

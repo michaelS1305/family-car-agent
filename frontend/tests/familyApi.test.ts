@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { getFamily, resolveFamilyAddress, updateFamilyAddress, updateFamilyMemberRole } from '../src/api/apiClient.ts'
+import { ApiRequestError, getFamily, resolveFamilyAddress, updateFamilyAddress, updateFamilyMemberRole } from '../src/api/apiClient.ts'
 
 const family = {
   name: 'כהן',
@@ -83,4 +83,28 @@ test('address resolve and update send no browser identity or coordinates', async
   assert.deepEqual(JSON.parse(requests[0].body), { home_address: 'דימונה, המעפיל, 1210' })
   assert.deepEqual(JSON.parse(requests[1].body), { resolution_token: 'opaque' })
   assert.doesNotMatch(requests.map(({ body }) => body).join(' '), /user_id|family_id|latitude|longitude/)
+})
+
+test('address capacity errors preserve the useful structured Hebrew response without retry', async () => {
+  let calls = 0
+  await assert.rejects(
+    resolveFamilyAddress('token', 'דימונה, המעפיל, 1210', {
+      baseUrl: 'https://api.example.com',
+      fetcher: async () => {
+        calls += 1
+        return new Response(JSON.stringify({
+          detail: {
+            code: 'GEOCODING_CAPACITY_FULL',
+            message: 'שירות בדיקת הכתובות עמוס כרגע. נסו שוב בעוד רגע.',
+          },
+        }), { status: 503 })
+      },
+    }),
+    (error: unknown) => (
+      error instanceof ApiRequestError
+      && error.code === 'GEOCODING_CAPACITY_FULL'
+      && error.message.includes('עמוס')
+    ),
+  )
+  assert.equal(calls, 1)
 })

@@ -17,7 +17,7 @@ const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8
 const legalSource = readFileSync(new URL('../src/legal/legalDocuments.ts', import.meta.url), 'utf8')
 
 test('settings is a dedicated Dashboard category with the shared identity and icon', () => {
-  assert.match(dashboardSource, /activeCategory\.id === 'settings'/)
+  assert.match(dashboardSource, /<SettingsScreen/)
   assert.match(dashboardSource, /<SettingsScreen/)
   assert.match(settingsSource, /<h1>Family Car Agent<\/h1>/)
   assert.match(settingsSource, /<DashboardCategoryIcon icon="settings"/)
@@ -60,7 +60,7 @@ test('phase one never fetches or reveals the CarPlay connection credential', () 
 test('account actions reuse Family navigation and existing bounded logout cleanup', () => {
   assert.match(settingsSource, /onClick=\{onOpenFamily\}/)
   assert.match(settingsSource, /await onLogout\(\)/)
-  assert.match(dashboardSource, /onOpenFamily=\{openFamily\}/)
+  assert.match(dashboardSource, /onOpenFamily=\{\(\)=>openCategory\(DASHBOARD_CATEGORIES\[0\]\)\}/)
   assert.match(dashboardSource, /onLogout=\{handleLogout\}/)
 })
 

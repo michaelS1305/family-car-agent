@@ -174,4 +174,5 @@ def get_current_user(
         name=internal_user[1],
         family_id=internal_user[2],
         carplay_setup_status=internal_user[3],
+        auth_user_id=auth_user_id,
     )

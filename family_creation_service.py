@@ -14,6 +14,7 @@ from database import (
     get_user_by_auth_user_id,
 )
 from geocoding_service import geocode_address
+from geocoding_capacity import GeocodingAdmissionError, geocode_with_capacity
 from onboarding_rules import (
     is_valid_family_code,
     normalize_human_name,
@@ -26,6 +27,7 @@ ERROR_MESSAGES = {
     "INVALID_FAMILY_CODE": "קוד המשפחה חייב להכיל בדיוק 6 ספרות.",
     "FAMILY_CODE_TAKEN": "קוד המשפחה הזה כבר תפוס. בחרו קוד אחר.",
     "INVALID_ADDRESS_FORMAT": "יש לכתוב כתובת בפורמט: עיר, רחוב, מספר בית.",
+    "ADDRESS_TOO_LONG": "הכתובת ארוכה מדי. ניתן להזין עד 200 תווים.",
     "ADDRESS_NOT_FOUND": "לא הצלחנו למצוא את הכתובת. בדקו את הפרטים ונסו שוב.",
     "ADDRESS_RESOLUTION_EXPIRED": "תוקף אימות הכתובת פג. יש לבדוק ולאשר אותה מחדש.",
     "FAMILY_ALREADY_EXISTS_AT_ADDRESS": (
@@ -36,15 +38,19 @@ ERROR_MESSAGES = {
     "AUTH_USER_ALREADY_MAPPED": "החשבון כבר משויך למשתמש במערכת.",
     "AUTH_SESSION_INVALID": "ההתחברות שלך כבר לא תקפה. התחבר מחדש כדי להמשיך.",
     "SERVER_ERROR": "לא הצלחנו להשלים את הפעולה כרגע. נסו שוב בעוד רגע.",
+    "GEOCODING_RATE_LIMITED": "בוצעו יותר מדי בדיקות כתובת. נסו שוב מאוחר יותר.",
+    "GEOCODING_USER_BUSY": "בדיקת כתובת אחרת עדיין מתבצעת. נסו שוב בעוד רגע.",
+    "GEOCODING_CAPACITY_FULL": "שירות בדיקת הכתובות עמוס כרגע. נסו שוב בעוד רגע.",
 }
 
 
 class FamilyCreationError(Exception):
-    def __init__(self, code, status_code):
+    def __init__(self, code, status_code, retry_after_seconds=None):
         super().__init__(ERROR_MESSAGES[code])
         self.code = code
         self.status_code = status_code
         self.message = ERROR_MESSAGES[code]
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True)
@@ -121,7 +127,9 @@ def _ensure_auth_user_is_unmapped(auth_user_id):
         raise FamilyCreationError("AUTH_USER_ALREADY_MAPPED", 409)
 
 
-def _resolve_address(home_address):
+def _resolve_address(auth_user_id, home_address):
+    if len(home_address) > 200:
+        raise FamilyCreationError("ADDRESS_TOO_LONG", 400)
     parsed_address = parse_home_address(home_address)
     if not parsed_address:
         raise FamilyCreationError("INVALID_ADDRESS_FORMAT", 400)
@@ -130,11 +138,15 @@ def _resolve_address(home_address):
     normalized_address = f"{city}, {street}, {house_number}"
 
     try:
-        location = geocode_address(
-            city=city,
-            street=street,
-            house_number=house_number,
+        location = geocode_with_capacity(
+            auth_user_id,
+            geocode_address,
+            city=city, street=street, house_number=house_number,
         )
+    except GeocodingAdmissionError as exc:
+        raise FamilyCreationError(
+            exc.code, exc.status_code, exc.retry_after_seconds
+        ) from exc
     except Exception as exc:
         raise FamilyCreationError("SERVER_ERROR", 503) from exc
 
@@ -156,7 +168,9 @@ def _resolve_address(home_address):
 
 def resolve_create_family_address(auth_user_id, home_address):
     _ensure_auth_user_is_unmapped(auth_user_id)
-    resolved = _resolve_address(home_address)
+    resolved = _resolve_address(auth_user_id, home_address)
+    # The identity may have been mapped while the provider call was in flight.
+    _ensure_auth_user_is_unmapped(auth_user_id)
     token = _store_address_resolution(auth_user_id, resolved)
     return ResolvedAddress(
         normalized_address=resolved.normalized_address,

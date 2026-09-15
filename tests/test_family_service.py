@@ -22,9 +22,15 @@ def load_service():
     module = importlib.util.module_from_spec(spec)
     geocoding_stub = types.ModuleType("geocoding_service")
     geocoding_stub.geocode_address = Mock()
+    capacity_stub = types.ModuleType("geocoding_capacity")
+    capacity_stub.GeocodingAdmissionError = type("GeocodingAdmissionError", (Exception,), {})
+    capacity_stub.geocode_with_capacity = Mock(
+        side_effect=lambda _auth_user_id, geocode, **kwargs: geocode(**kwargs)
+    )
     with patch.dict(sys.modules, {
         "database": database_stub,
         "geocoding_service": geocoding_stub,
+        "geocoding_capacity": capacity_stub,
     }):
         spec.loader.exec_module(module)
     return module
@@ -57,7 +63,12 @@ class FamilyServiceTests(unittest.TestCase):
         database_stub.update_family_address.return_value = ("דימונה, המעפיל, 1210",)
 
     def current_user(self, user_id=17, family_id=42):
-        return CurrentUser(user_id=user_id, name="מיכאל", family_id=family_id)
+        return CurrentUser(
+            user_id=user_id,
+            name="מיכאל",
+            family_id=family_id,
+            auth_user_id="11111111-1111-4111-8111-111111111111",
+        )
 
     def test_authenticated_family_read_is_scoped_and_contains_no_internal_ids(self):
         response = service.get_family_for_current_user(self.current_user())
@@ -183,6 +194,15 @@ class FamilyServiceTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.code, "ADDRESS_NOT_FOUND")
         database_stub.update_family_address.assert_not_called()
+
+    def test_too_long_address_is_rejected_before_provider_admission(self):
+        with patch.object(service, "geocode_with_capacity") as admission:
+            with self.assertRaises(service.FamilyProfileError) as raised:
+                service.resolve_family_address_for_current_user(
+                    self.current_user(), "א" * 201,
+                )
+        self.assertEqual(raised.exception.code, "ADDRESS_TOO_LONG")
+        admission.assert_not_called()
 
     @patch.object(service, "geocode_address")
     def test_address_used_by_another_family_is_rejected_before_update(self, geocode):

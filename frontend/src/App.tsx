@@ -425,10 +425,11 @@ function FlowScreen(props: FlowScreenProps) {
       content = (
         <TextStep
           title="מה כתובת הבית?"
-          description="הכתובת נדרשת לאימות המשפחה ולבדיקת ניתוק אופציונלית בקרבת הבית. היא נפתרת באמצעות Google Maps. יש לכתוב: עיר, רחוב, מספר בית."
+          description="הכתובת נדרשת לאימות המשפחה ולבדיקת ניתוק אופציונלית בקרבת הבית. יש להזין את הכתובת כפי שהיא מופיעה ב-Google Maps. יש לכתוב: עיר, רחוב, מספר בית."
           label="כתובת הבית"
           value={form.address}
           placeholder="תל אביב, דיזנגוף, 120"
+          maxLength={200}
           error={error}
           isSubmitting={isSubmitting}
           onChange={(value) => onChange('address', value)}
@@ -479,10 +480,11 @@ function FlowScreen(props: FlowScreenProps) {
     content = (
       <TextStep
         title="מה כתובת הבית?"
-        description="הכתובת נדרשת לאימות המשפחה ולבדיקת ניתוק אופציונלית בקרבת הבית. היא נפתרת באמצעות Google Maps. יש לכתוב: עיר, רחוב, מספר בית."
+        description="הכתובת נדרשת לאימות המשפחה ולבדיקת ניתוק אופציונלית בקרבת הבית. יש להזין את הכתובת כפי שהיא מופיעה ב-Google Maps. יש לכתוב: עיר, רחוב, מספר בית."
         label="כתובת הבית"
         value={form.address}
         placeholder="תל אביב, דיזנגוף, 120"
+        maxLength={200}
         error={error}
         isSubmitting={isSubmitting}
         onChange={(value) => onChange('address', value)}

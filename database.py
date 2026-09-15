@@ -1807,6 +1807,18 @@ def record_pwa_join_failure(auth_user_id, field, allowed_steps):
             return _increment_join_failure_locked(conn, session, field)
 
 
+def precheck_pwa_join_address(auth_user_id):
+    """Validate Join eligibility without retaining a lock during geocoding."""
+    with pool.connection() as conn:
+        with conn.transaction():
+            session = _lock_pwa_join_session(conn, auth_user_id)
+            _require_join_step(
+                session,
+                {"address", "address_confirmed", "family_code"},
+            )
+            return session
+
+
 def submit_pwa_join_address(
     auth_user_id,
     normalized_address,
@@ -1829,7 +1841,7 @@ def submit_pwa_join_address(
                 longitude,
             )
             if not family:
-                return _increment_join_failure_locked(conn, session, "address")
+                return {"success": False, "session": session}
 
             row = conn.execute(
                 f"""

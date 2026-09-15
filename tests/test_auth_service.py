@@ -196,6 +196,7 @@ class SupabaseAuthenticationTests(unittest.TestCase):
                 name="מיכאל",
                 family_id=42,
                 carplay_setup_status="pending",
+                auth_user_id=self.auth_user_id,
             ),
         )
         lookup.assert_called_once_with(self.auth_user_id)

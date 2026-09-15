@@ -7,6 +7,7 @@ class CurrentUser:
     name: str
     family_id: int | None
     carplay_setup_status: str = "pending"
+    auth_user_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -4,6 +4,7 @@ from database import (
     JoinSessionLockedError,
     complete_pwa_join,
     confirm_pwa_join_address,
+    precheck_pwa_join_address,
     record_pwa_join_failure,
     start_pwa_join_session,
     submit_pwa_join_address,
@@ -11,6 +12,7 @@ from database import (
     verify_pwa_join_family_code,
 )
 from geocoding_service import geocode_address
+from geocoding_capacity import GeocodingAdmissionError, geocode_with_capacity
 from onboarding_rules import (
     is_valid_family_code,
     normalize_human_name,
@@ -28,6 +30,7 @@ ERROR_MESSAGES = {
     "INVALID_ADDRESS_FORMAT": (
         "הכתובת לא נראית מלאה. יש לכתוב: עיר, רחוב, מספר בית."
     ),
+    "ADDRESS_TOO_LONG": "הכתובת ארוכה מדי. ניתן להזין עד 200 תווים.",
     "JOIN_FAMILY_ADDRESS_NOT_FOUND": (
         "לא מצאנו משפחה בכתובת הזו. בדוק את האיות ואת מספר הבית ונסה שוב."
     ),
@@ -37,6 +40,9 @@ ERROR_MESSAGES = {
     "JOIN_LOCKED": "תהליך ההצטרפות נעול זמנית לאחר שלושה ניסיונות.",
     "INVALID_JOIN_STEP": "תהליך ההצטרפות אינו מסונכרן. התחילו אותו מחדש.",
     "SERVER_ERROR": "לא הצלחנו להשלים את הפעולה כרגע. נסו שוב בעוד רגע.",
+    "GEOCODING_RATE_LIMITED": "בוצעו יותר מדי בדיקות כתובת. נסו שוב מאוחר יותר.",
+    "GEOCODING_USER_BUSY": "בדיקת כתובת אחרת עדיין מתבצעת. נסו שוב בעוד רגע.",
+    "GEOCODING_CAPACITY_FULL": "שירות בדיקת הכתובות עמוס כרגע. נסו שוב בעוד רגע.",
 }
 
 
@@ -48,6 +54,7 @@ class JoinFamilyError(Exception):
         message=None,
         attempts_remaining=None,
         locked_until=None,
+        retry_after_seconds=None,
     ):
         resolved_message = message or ERROR_MESSAGES[code]
         super().__init__(resolved_message)
@@ -56,6 +63,7 @@ class JoinFamilyError(Exception):
         self.message = resolved_message
         self.attempts_remaining = attempts_remaining
         self.locked_until = locked_until
+        self.retry_after_seconds = retry_after_seconds
 
     def detail(self):
         detail = {"code": self.code, "message": self.message}
@@ -63,6 +71,8 @@ class JoinFamilyError(Exception):
             detail["attempts_remaining"] = self.attempts_remaining
         if self.locked_until is not None:
             detail["locked_until"] = _serialize_datetime(self.locked_until)
+        if self.retry_after_seconds is not None:
+            detail["retry_after_seconds"] = self.retry_after_seconds
         return detail
 
 
@@ -98,7 +108,6 @@ def _public_session(session):
         "resolved_address": session["resolved_address"],
         "attempts_remaining": {
             "family_name": 3 - session["family_name_attempts"],
-            "address": 3 - session["address_attempts"],
             "family_code": 3 - session["family_code_attempts"],
         },
         "reset": session.get("was_reset", False),
@@ -164,35 +173,32 @@ def submit_join_family_name(auth_user_id, family_name):
 
 
 def submit_join_family_address(auth_user_id, home_address):
+    if len(home_address) > 200:
+        raise JoinFamilyError("ADDRESS_TOO_LONG", 400)
     parsed_address = parse_home_address(home_address)
     if not parsed_address:
-        result = _call_database(
-            record_pwa_join_failure,
-            auth_user_id,
-            "address",
-            ("address", "address_confirmed", "family_code"),
-        )
-        _raise_attempt_failure(result, "INVALID_ADDRESS_FORMAT")
+        raise JoinFamilyError("INVALID_ADDRESS_FORMAT", 400)
+
+    _call_database(precheck_pwa_join_address, auth_user_id)
 
     city, street, house_number = parsed_address
     normalized_address = f"{city}, {street}, {house_number}"
     try:
-        location = geocode_address(
-            city=city,
-            street=street,
-            house_number=house_number,
+        location = geocode_with_capacity(
+            auth_user_id,
+            geocode_address,
+            city=city, street=street, house_number=house_number,
         )
+    except GeocodingAdmissionError as exc:
+        raise JoinFamilyError(
+            exc.code, exc.status_code,
+            retry_after_seconds=exc.retry_after_seconds,
+        ) from exc
     except Exception as exc:
         raise JoinFamilyError("SERVER_ERROR", 503) from exc
 
     if not location:
-        result = _call_database(
-            record_pwa_join_failure,
-            auth_user_id,
-            "address",
-            ("address", "address_confirmed", "family_code"),
-        )
-        _raise_attempt_failure(result, "JOIN_FAMILY_ADDRESS_NOT_FOUND")
+        raise JoinFamilyError("JOIN_FAMILY_ADDRESS_NOT_FOUND", 404)
 
     result = _call_database(
         submit_pwa_join_address,
@@ -203,7 +209,7 @@ def submit_join_family_address(auth_user_id, home_address):
         location["longitude"],
     )
     if not result["success"]:
-        _raise_attempt_failure(result, "JOIN_FAMILY_ADDRESS_NOT_FOUND")
+        raise JoinFamilyError("JOIN_FAMILY_ADDRESS_NOT_FOUND", 404)
     return _public_session(result["session"])
 
 

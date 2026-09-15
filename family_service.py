@@ -10,16 +10,18 @@ from database import (
     update_family_member_role,
 )
 from geocoding_service import geocode_address
+from geocoding_capacity import GeocodingAdmissionError, geocode_with_capacity
 from identity import CurrentUser
 from onboarding_rules import parse_home_address
 
 
 class FamilyProfileError(Exception):
-    def __init__(self, code, message, status_code):
+    def __init__(self, code, message, status_code, retry_after_seconds=None):
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True)
@@ -142,6 +144,10 @@ def _require_family_creator(current_user: CurrentUser):
 
 def resolve_family_address_for_current_user(current_user: CurrentUser, home_address):
     _require_family_creator(current_user)
+    if len(home_address) > 200:
+        raise FamilyProfileError(
+            "ADDRESS_TOO_LONG", "הכתובת ארוכה מדי. ניתן להזין עד 200 תווים.", 400
+        )
     parsed = parse_home_address(home_address)
     if not parsed:
         raise FamilyProfileError(
@@ -153,7 +159,20 @@ def resolve_family_address_for_current_user(current_user: CurrentUser, home_addr
     city, street, house_number = parsed
     normalized_address = f"{city}, {street}, {house_number}"
     try:
-        location = geocode_address(city=city, street=street, house_number=house_number)
+        location = geocode_with_capacity(
+            current_user.auth_user_id,
+            geocode_address,
+            city=city, street=street, house_number=house_number,
+        )
+    except GeocodingAdmissionError as exc:
+        messages = {
+            "GEOCODING_RATE_LIMITED": "בוצעו יותר מדי בדיקות כתובת. נסו שוב מאוחר יותר.",
+            "GEOCODING_USER_BUSY": "בדיקת כתובת אחרת עדיין מתבצעת. נסו שוב בעוד רגע.",
+            "GEOCODING_CAPACITY_FULL": "שירות בדיקת הכתובות עמוס כרגע. נסו שוב בעוד רגע.",
+        }
+        raise FamilyProfileError(
+            exc.code, messages[exc.code], exc.status_code, exc.retry_after_seconds
+        ) from exc
     except Exception as exc:
         raise FamilyProfileError(
             "ADDRESS_SERVICE_UNAVAILABLE",
@@ -166,6 +185,9 @@ def resolve_family_address_for_current_user(current_user: CurrentUser, home_addr
             "לא הצלחנו למצוא את הכתובת. בדקו את הפרטים ונסו שוב.",
             422,
         )
+
+    # Recheck creator/family authorization after the unlocked provider wait.
+    _require_family_creator(current_user)
 
     existing = get_family_by_location(location["latitude"], location["longitude"])
     if existing is not None and existing[0] != current_user.family_id:

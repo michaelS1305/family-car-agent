@@ -12,7 +12,8 @@ const dashboardSource = readFileSync(
 )
 
 test('family category opens the real screen without a generic placeholder', () => {
-  assert.match(dashboardSource, /activeCategory\.id === 'family'/)
+  assert.match(dashboardSource, /activeCategory\.id==='family'/)
+  assert.match(dashboardSource, /onClick=\{\(\)=>openCategory\(category\)\}/)
   assert.match(dashboardSource, /<FamilyScreen accessToken=\{accessToken\}/)
   assert.doesNotMatch(dashboardSource, /<CategoryPlaceholderScreen/)
 })
@@ -44,7 +45,7 @@ test('copy action copies only the family code', () => {
   assert.doesNotMatch(familySource, /clipboard\.writeText\(family\.home_address\)/)
 })
 
-test('back uses the existing dashboard close path so rotary selection stays mounted', () => {
+test('back uses the existing dashboard close path so direct navigation stays mounted', () => {
   assert.match(familySource, /onClick=\{onBack\}/)
   assert.match(dashboardSource, /<div className="dashboard-content" inert=\{categoryOpen\}>/)
   assert.match(dashboardSource, /onBack=\{closeCategory\}/)
@@ -56,5 +57,8 @@ test('creator address editing uses resolve then explicit confirmation while memb
   assert.match(familySource, /updateFamilyAddress\(accessToken, resolvedAddress\.token\)/)
   assert.match(familySource, /אישור שינוי/)
   assert.match(familySource, /הכתובת הקודמת נשארה ללא שינוי/)
+  assert.match(familySource, /יש להזין את הכתובת כפי שהיא מופיעה ב-Google Maps/)
+  assert.match(familySource, /maxLength=\{200\}/)
+  assert.match(familySource, /error instanceof ApiRequestError/)
   assert.doesNotMatch(familySource, /family_id|user_id|car_events/)
 })
