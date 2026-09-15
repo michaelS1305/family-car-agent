@@ -43,7 +43,13 @@ from models import (
 from database import (
     init_db,
 )
-from car_service import CarStatusError, connect_user, disconnect_user, get_car_status
+from car_service import (
+    CarStatusError,
+    CarTransitionError,
+    connect_user,
+    disconnect_user,
+    get_car_status,
+)
 from history_service import CarHistoryError, get_car_history
 from chat_service import ChatError, get_chat_history, process_chat_message
 from carplay_setup_service import (
@@ -222,6 +228,14 @@ def _raise_push_error(error):
     raise HTTPException(
         status_code=error.status_code,
         detail={"code": error.code, "message": error.message},
+    ) from error
+
+
+def _raise_car_transition_error(error):
+    raise HTTPException(
+        status_code=error.status_code,
+        detail={"code": error.code, "message": error.message},
+        headers={"Retry-After": str(error.retry_after_seconds)},
     ) from error
 
 
@@ -614,13 +628,19 @@ def complete_join(
 
 @app.post("/car/connect")
 def connect_car(connection: CarConnection):
-    return connect_user(connection.shortcut_token)
+    try:
+        return connect_user(connection.shortcut_token)
+    except CarTransitionError as error:
+        _raise_car_transition_error(error)
 
 
 @app.post("/car/disconnect")
 def disconnect_car(connection: CarDisconnectRequest):
-    return disconnect_user(
-        connection.shortcut_token,
-        connection.latitude,
-        connection.longitude,
-    )
+    try:
+        return disconnect_user(
+            connection.shortcut_token,
+            connection.latitude,
+            connection.longitude,
+        )
+    except CarTransitionError as error:
+        _raise_car_transition_error(error)

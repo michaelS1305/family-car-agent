@@ -1,11 +1,13 @@
 from database import (
+    CarTransitionBusyError,
+    admit_car_transition_request,
     connect_car_atomically,
     disconnect_car_atomically,
     get_active_driver,
     get_user_by_token,
     get_family_by_id,
 )
-from math import radians, sin, cos, sqrt, atan2, isfinite
+from math import radians, sin, cos, sqrt, atan2, isfinite, ceil
 
 from identity import CurrentUser
 from push_service import dispatch_car_transition_notification
@@ -17,6 +19,41 @@ class CarStatusError(Exception):
         self.code = code
         self.message = message
         self.status_code = status_code
+
+
+class CarTransitionError(Exception):
+    def __init__(self, code, message, status_code, retry_after_seconds):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        self.retry_after_seconds = max(1, ceil(retry_after_seconds))
+
+
+def _admit_transition(user_id, family_id):
+    admission = admit_car_transition_request(user_id, family_id)
+    if admission["admitted"]:
+        return
+    message = (
+        "בוצעו יותר מדי פעולות. נסו שוב בעוד מעט."
+        if admission["code"] == "CARPLAY_USER_RATE_LIMITED"
+        else "בוצעו יותר מדי פעולות במשפחה. נסו שוב בעוד מעט."
+    )
+    raise CarTransitionError(
+        admission["code"],
+        message,
+        429,
+        admission["retry_after_seconds"],
+    )
+
+
+def _transition_busy_error():
+    return CarTransitionError(
+        "CARPLAY_TRANSITION_BUSY",
+        "מתבצעת כעת פעולה אחרת ברכב. נסו שוב.",
+        409,
+        1,
+    )
 
 
 def get_car_status(current_user: CurrentUser):
@@ -45,7 +82,11 @@ def connect_user(shortcut_token):
             "message": "User family not found"
         }
 
-    transition = connect_car_atomically(user[0], user[1], family_id)
+    _admit_transition(user[0], family_id)
+    try:
+        transition = connect_car_atomically(user[0], user[1], family_id)
+    except CarTransitionBusyError as error:
+        raise _transition_busy_error() from error
     if transition["transition"] == "none":
         return {
             "message": "User is already the current driver",
@@ -144,7 +185,11 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
             "message": "הרכב לא שוחרר כי הוא לא נמצא ליד הבית"
         }
 
-    transition = disconnect_car_atomically(user[0], family_id)
+    _admit_transition(user[0], family_id)
+    try:
+        transition = disconnect_car_atomically(user[0], family_id)
+    except CarTransitionBusyError as error:
+        raise _transition_busy_error() from error
     if transition["transition"] == "none":
         if transition["reason"] == "already_available":
             return {"message": "הרכב כבר פנוי"}

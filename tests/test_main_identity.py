@@ -107,9 +107,20 @@ database_stub = stub_module(
     "database",
     init_db=Mock(),
 )
+
+
+class FakeCarTransitionError(Exception):
+    def __init__(self, code="CARPLAY_USER_RATE_LIMITED", status_code=429, retry_after_seconds=7):
+        self.code = code
+        self.message = "Retry later"
+        self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
+
+
 car_stub = stub_module(
     "car_service",
     CarStatusError=type("CarStatusError", (Exception,), {}),
+    CarTransitionError=FakeCarTransitionError,
     connect_user=Mock(),
     disconnect_user=Mock(),
     get_car_status=Mock(return_value="available"),
@@ -293,6 +304,28 @@ def load_main_module(environment=None):
 
 
 main = load_main_module()
+
+
+class CarTransitionRouteTests(unittest.TestCase):
+    def tearDown(self):
+        car_stub.connect_user.reset_mock(side_effect=True)
+        car_stub.disconnect_user.reset_mock(side_effect=True)
+
+    def test_rate_and_busy_errors_are_structured_with_retry_after(self):
+        connection = types.SimpleNamespace(shortcut_token="secret", latitude=31, longitude=35)
+        for route, service, error in (
+            (main.connect_car, car_stub.connect_user, FakeCarTransitionError()),
+            (main.disconnect_car, car_stub.disconnect_user,
+             FakeCarTransitionError("CARPLAY_TRANSITION_BUSY", 409, 1)),
+        ):
+            with self.subTest(code=error.code):
+                service.side_effect = error
+                with self.assertRaises(FakeHTTPException) as raised:
+                    route(connection)
+                self.assertEqual(raised.exception.status_code, error.status_code)
+                self.assertEqual(raised.exception.detail["code"], error.code)
+                self.assertEqual(raised.exception.headers["Retry-After"], str(error.retry_after_seconds))
+                service.reset_mock(side_effect=True)
 
 
 class StartupConfigurationTests(unittest.TestCase):
