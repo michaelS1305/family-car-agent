@@ -1,9 +1,11 @@
 from dataclasses import dataclass
-import secrets
-import threading
-import time
 
 from database import (
+    AddressConfirmationInvalidError,
+    FamilyAddressForbiddenError,
+    AuthUserIdentityNotFoundError,
+    FamilyAlreadyExistsAtLocationError,
+    issue_family_address_confirmation,
     FamilyCodeTakenError,
     regenerate_family_code,
     get_family_by_location,
@@ -32,22 +34,6 @@ class FamilyMember:
     name: str
     role: str | None
     is_family_admin: bool
-
-
-@dataclass(frozen=True)
-class StoredFamilyAddressResolution:
-    user_id: int
-    family_id: int
-    normalized_address: str
-    display_address: str
-    latitude: float
-    longitude: float
-    expires_at: float
-
-
-FAMILY_ADDRESS_RESOLUTION_TTL_SECONDS = 15 * 60
-_address_resolution_lock = threading.Lock()
-_address_resolutions = {}
 
 
 def _require_family(current_user: CurrentUser):
@@ -206,33 +192,26 @@ def resolve_family_address_for_current_user(current_user: CurrentUser, home_addr
     # Recheck creator/family authorization after the unlocked provider wait.
     _require_family_creator(current_user)
 
-    existing = get_family_by_location(location["latitude"], location["longitude"])
-    if existing is not None and existing[0] != current_user.family_id:
+    existing = get_family_by_location(
+        location["latitude"], location["longitude"], exclude_family_id=current_user.family_id,
+    )
+    if existing is not None:
         raise FamilyProfileError(
             "FAMILY_ALREADY_EXISTS_AT_ADDRESS",
             "כבר קיימת משפחה אחרת בכתובת הזו.",
             409,
         )
 
-    token = secrets.token_urlsafe(32)
-    stored = StoredFamilyAddressResolution(
-        user_id=current_user.user_id,
-        family_id=current_user.family_id,
-        normalized_address=normalized_address,
-        display_address=location["address"],
-        latitude=location["latitude"],
-        longitude=location["longitude"],
-        expires_at=time.monotonic() + FAMILY_ADDRESS_RESOLUTION_TTL_SECONDS,
-    )
-    with _address_resolution_lock:
-        stale_tokens = [
-            item_token
-            for item_token, item in _address_resolutions.items()
-            if item.user_id == current_user.user_id
-        ]
-        for stale_token in stale_tokens:
-            _address_resolutions.pop(stale_token, None)
-        _address_resolutions[token] = stored
+    try:
+        token = issue_family_address_confirmation(
+            current_user.auth_user_id, normalized_address, location["address"],
+            location["latitude"], location["longitude"],
+            user_id=current_user.user_id, family_id=current_user.family_id,
+        )
+    except (FamilyAddressForbiddenError, AuthUserIdentityNotFoundError) as exc:
+        raise FamilyProfileError(
+            "FAMILY_ADDRESS_FORBIDDEN", "רק מנהל המשפחה יכול לשנות את כתובת המשפחה.", 403,
+        ) from exc
 
     return {
         "normalized_address": normalized_address,
@@ -243,34 +222,24 @@ def resolve_family_address_for_current_user(current_user: CurrentUser, home_addr
 
 def update_family_address_for_current_user(current_user: CurrentUser, resolution_token):
     _require_family_creator(current_user)
-    with _address_resolution_lock:
-        stored = _address_resolutions.get(resolution_token)
-        if (
-            stored is None
-            or stored.user_id != current_user.user_id
-            or stored.family_id != current_user.family_id
-            or stored.expires_at <= time.monotonic()
-        ):
-            _address_resolutions.pop(resolution_token, None)
-            raise FamilyProfileError(
-                "ADDRESS_RESOLUTION_EXPIRED",
-                "תוקף בדיקת הכתובת פג. יש לבדוק אותה מחדש.",
-                409,
-            )
-        _address_resolutions.pop(resolution_token, None)
-
-    updated = update_family_address(
-        current_user.user_id,
-        current_user.family_id,
-        stored.normalized_address,
-        stored.latitude,
-        stored.longitude,
-    )
-    if updated is None:
+    try:
+        updated = update_family_address(
+            current_user.user_id, current_user.family_id,
+            current_user.auth_user_id, resolution_token,
+        )
+    except AddressConfirmationInvalidError as exc:
+        raise FamilyProfileError(
+            "ADDRESS_RESOLUTION_EXPIRED", "תוקף בדיקת הכתובת פג. יש לבדוק אותה מחדש.", 409,
+        ) from exc
+    except FamilyAlreadyExistsAtLocationError as exc:
+        raise FamilyProfileError(
+            "FAMILY_ALREADY_EXISTS_AT_ADDRESS", "כבר קיימת משפחה אחרת בכתובת הזו.", 409,
+        ) from exc
+    except FamilyAddressForbiddenError as exc:
         raise FamilyProfileError(
             "FAMILY_ADDRESS_FORBIDDEN",
             "רק מנהל המשפחה יכול לשנות את כתובת המשפחה.",
             403,
-        )
+        ) from exc
 
     return {"home_address": updated[0]}

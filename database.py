@@ -3,6 +3,7 @@ import logging
 from psycopg_pool import ConnectionPool
 from psycopg.errors import ForeignKeyViolation, UniqueViolation
 import secrets
+import hashlib
 from datetime import datetime, timezone
 from uuid import uuid4
 from reservation_rules import (
@@ -49,6 +50,14 @@ class UserNotFoundError(Exception):
 
 
 class FamilyAlreadyExistsAtLocationError(Exception):
+    pass
+
+
+class AddressConfirmationInvalidError(Exception):
+    pass
+
+
+class FamilyAddressForbiddenError(Exception):
     pass
 
 
@@ -1399,6 +1408,92 @@ def regenerate_family_code(user_id, family_id):
             return code
 
 
+def _confirmation_digest(raw_token):
+    if not isinstance(raw_token, str) or not raw_token:
+        raise AddressConfirmationInvalidError()
+    try:
+        return hashlib.sha256(raw_token.encode("ascii")).digest()
+    except UnicodeEncodeError:
+        raise AddressConfirmationInvalidError() from None
+
+
+def _require_address_creator(conn, auth_user_id, user_id, family_id):
+    # Revalidate both the JWT mapping and permanent creator under row locks.
+    if not conn.execute(
+        """SELECT f.id FROM families f JOIN users u ON u.id = f.created_by_user_id
+           WHERE f.id = %s AND u.id = %s AND u.auth_user_id = %s
+             AND u.family_id = f.id FOR UPDATE OF f, u""",
+        (family_id, user_id, auth_user_id),
+    ).fetchone():
+        raise FamilyAddressForbiddenError()
+
+
+def issue_family_address_confirmation(
+    auth_user_id, normalized_address, display_address, latitude, longitude,
+    *, user_id=None, family_id=None,
+):
+    """Server-only resolved payload. Google is called before entering here."""
+    purpose = "create_family" if user_id is None else "family_address_update"
+    raw_token = secrets.token_urlsafe(32)
+    digest = _confirmation_digest(raw_token)
+    with pool.connection() as conn:
+        with conn.transaction():
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (PWA_FAMILY_CREATION_LOCK_ID,))
+            # Lock the previous confirmation before any family rows, just as
+            # consumption does. Rollback restores it if replacement fails.
+            if purpose == "create_family":
+                conn.execute(
+                    "DELETE FROM family_address_confirmations WHERE purpose = 'create_family' AND auth_user_id = %s",
+                    (auth_user_id,),
+                )
+                if conn.execute("SELECT id FROM users WHERE auth_user_id = %s", (auth_user_id,)).fetchone():
+                    raise AuthUserAlreadyMappedError()
+            else:
+                conn.execute(
+                    "DELETE FROM family_address_confirmations WHERE purpose = 'family_address_update' AND user_id = %s",
+                    (user_id,),
+                )
+                _require_address_creator(conn, auth_user_id, user_id, family_id)
+            # Explicitly check auth existence; the FK remains the final guard.
+            if not conn.execute("SELECT id FROM auth.users WHERE id = %s FOR KEY SHARE", (auth_user_id,)).fetchone():
+                raise AuthUserIdentityNotFoundError()
+            conn.execute(
+                """INSERT INTO family_address_confirmations
+                   (token_digest, purpose, auth_user_id, user_id, family_id,
+                    normalized_address, display_address, latitude, longitude)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (digest, purpose, auth_user_id, user_id, family_id,
+                 normalized_address, display_address, latitude, longitude),
+            )
+            # Bounded and under the same advisory-first ordering. Recheck at
+            # DELETE time; never inspect/log payloads during cleanup.
+            conn.execute(
+                """DELETE FROM family_address_confirmations
+                   WHERE token_digest IN (
+                     SELECT token_digest FROM family_address_confirmations
+                     WHERE expires_at <= clock_timestamp() ORDER BY expires_at LIMIT 100
+                   ) AND expires_at <= clock_timestamp()"""
+            )
+    return raw_token
+
+
+def _lock_address_confirmation(conn, raw_token, auth_user_id, purpose, user_id=None, family_id=None):
+    digest = _confirmation_digest(raw_token)
+    row = conn.execute(
+        """SELECT normalized_address, latitude, longitude, expires_at
+           FROM family_address_confirmations
+           WHERE token_digest = %s AND auth_user_id = %s AND purpose = %s
+             AND user_id IS NOT DISTINCT FROM %s AND family_id IS NOT DISTINCT FROM %s
+           FOR UPDATE""",
+        (digest, auth_user_id, purpose, user_id, family_id),
+    ).fetchone()
+    # Separate statement after obtaining the row lock: expiry is not evaluated
+    # using a timestamp from before a lock wait or from transaction start.
+    if row is None or not conn.execute("SELECT %s > clock_timestamp()", (row[3],)).fetchone()[0]:
+        raise AddressConfirmationInvalidError()
+    return digest, row[:3]
+
+
 def create_family_with_first_user(
     name,
     home_address,
@@ -1406,7 +1501,7 @@ def create_family_with_first_user(
     home_latitude=None,
     home_longitude=None,
     auth_user_id=None,
-    prevent_duplicate_location=False,
+    resolution_token=None,
 ):
     try:
         with pool.connection() as conn:
@@ -1414,6 +1509,12 @@ def create_family_with_first_user(
                 conn.execute(
                     "SELECT pg_advisory_xact_lock(%s)", (PWA_FAMILY_CREATION_LOCK_ID,),
                 )
+                confirmation_digest = None
+                if resolution_token is not None:
+                    confirmation_digest, payload = _lock_address_confirmation(
+                        conn, resolution_token, auth_user_id, "create_family",
+                    )
+                    home_address, home_latitude, home_longitude = payload
                 if auth_user_id is not None:
                     mapped_user = conn.execute(
                         "SELECT id FROM users WHERE auth_user_id = %s",
@@ -1422,17 +1523,11 @@ def create_family_with_first_user(
                     if mapped_user:
                         raise AuthUserAlreadyMappedError()
 
-                    if (
-                        prevent_duplicate_location
-                        and home_latitude is not None
-                        and home_longitude is not None
-                        and _get_family_by_location(
-                            conn,
-                            home_latitude,
-                            home_longitude,
-                        )
-                    ):
-                        raise FamilyAlreadyExistsAtLocationError()
+                if (
+                    home_latitude is not None and home_longitude is not None
+                    and _get_family_by_location(conn, home_latitude, home_longitude)
+                ):
+                    raise FamilyAlreadyExistsAtLocationError()
 
                 created_at = datetime.now().isoformat()
 
@@ -1496,6 +1591,8 @@ def create_family_with_first_user(
                 ).fetchone()
                 if updated_user is None:
                     raise RuntimeError("Failed to assign family creator to family")
+                if confirmation_digest is not None:
+                    conn.execute("DELETE FROM family_address_confirmations WHERE token_digest = %s", (confirmation_digest,))
 
             return family_id
     except UniqueViolation as exc:
@@ -1518,13 +1615,14 @@ def create_family_with_first_user(
             raise AuthUserIdentityNotFoundError() from exc
         raise
 
-def _get_family_by_location(conn, latitude, longitude, radius_meters=50):
+def _get_family_by_location(conn, latitude, longitude, radius_meters=50, exclude_family_id=None):
     cursor = conn.execute(
             """
             SELECT id, name, home_address, home_latitude, home_longitude
             FROM families
             WHERE home_latitude IS NOT NULL
               AND home_longitude IS NOT NULL
+              AND (%s::integer IS NULL OR id <> %s)
               AND (
                   6371000 * 2 * ASIN(
                       SQRT(
@@ -1542,6 +1640,8 @@ def _get_family_by_location(conn, latitude, longitude, radius_meters=50):
             LIMIT 1
             """,
             (
+                exclude_family_id,
+                exclude_family_id,
                 latitude,
                 latitude,
                 longitude,
@@ -1554,13 +1654,14 @@ def _get_family_by_location(conn, latitude, longitude, radius_meters=50):
     return cursor.fetchone()
 
 
-def get_family_by_location(latitude, longitude, radius_meters=50):
+def get_family_by_location(latitude, longitude, radius_meters=50, exclude_family_id=None):
     with pool.connection() as conn:
         return _get_family_by_location(
             conn,
             latitude,
             longitude,
             radius_meters,
+            exclude_family_id,
         )
 
 
@@ -1750,14 +1851,21 @@ def update_family_member_role(
 def update_family_address(
     caller_user_id,
     family_id,
-    home_address,
-    home_latitude,
-    home_longitude,
+    auth_user_id,
+    resolution_token,
 ):
-    """Update all canonical address fields in one authorized SQL statement."""
+    """Consume server-resolved payload with the authorized, serialized mutation."""
     with pool.connection() as conn:
         with conn.transaction():
-            return conn.execute(
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (PWA_FAMILY_CREATION_LOCK_ID,))
+            digest, payload = _lock_address_confirmation(
+                conn, resolution_token, auth_user_id, "family_address_update", caller_user_id, family_id,
+            )
+            _require_address_creator(conn, auth_user_id, caller_user_id, family_id)
+            home_address, home_latitude, home_longitude = payload
+            if _get_family_by_location(conn, home_latitude, home_longitude, exclude_family_id=family_id):
+                raise FamilyAlreadyExistsAtLocationError()
+            updated = conn.execute(
                 """
                 UPDATE families
                 SET home_address = %s,
@@ -1776,6 +1884,10 @@ def update_family_address(
                     caller_user_id,
                 ),
             ).fetchone()
+            if updated is None:
+                raise FamilyAddressForbiddenError()
+            conn.execute("DELETE FROM family_address_confirmations WHERE token_digest = %s", (digest,))
+            return updated
 
 
 def _join_session_from_row(row, was_reset=False):
