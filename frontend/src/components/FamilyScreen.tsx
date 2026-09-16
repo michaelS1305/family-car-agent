@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   ApiRequestError,
   getFamily,
+  regenerateFamilyCode,
   resolveFamilyAddress,
   updateFamilyAddress,
   updateFamilyMemberRole,
@@ -31,6 +32,9 @@ export function FamilyScreen({ accessToken, open, onBack }: {
   const [error, setError] = useState('')
   const [updatingMember, setUpdatingMember] = useState<string | null>(null)
   const [copyFeedback, setCopyFeedback] = useState('')
+  const [confirmingCode, setConfirmingCode] = useState(false)
+  const [codeBusy, setCodeBusy] = useState(false)
+  const codeRequestRef = useRef(false)
   const [editingAddress, setEditingAddress] = useState(false)
   const [addressInput, setAddressInput] = useState('')
   const [resolvedAddress, setResolvedAddress] = useState<{ display: string; token: string } | null>(null)
@@ -69,6 +73,24 @@ export function FamilyScreen({ accessToken, open, onBack }: {
       setError('לא הצלחנו לעדכן את התפקיד. נסו שוב.')
     } finally {
       setUpdatingMember(null)
+    }
+  }
+
+  const regenerateCode = async () => {
+    if (!family?.can_edit_roles || !confirmingCode || codeRequestRef.current) return
+    codeRequestRef.current = true
+    setCodeBusy(true)
+    setError('')
+    try {
+      const updated = await regenerateFamilyCode(accessToken)
+      setFamily((current) => current ? { ...current, family_code: updated.family_code } : current)
+      setCopyFeedback('')
+      setConfirmingCode(false)
+    } catch {
+      setError('לא הצלחנו ליצור קוד חדש. נסו שוב.')
+    } finally {
+      codeRequestRef.current = false
+      setCodeBusy(false)
     }
   }
 
@@ -236,6 +258,13 @@ export function FamilyScreen({ accessToken, open, onBack }: {
               <h3>קוד משפחתי</h3>
               <strong dir="ltr">{family.family_code}</strong>
               <button type="button" onClick={() => void copyFamilyCode()}>העתק</button>
+              {family.can_edit_roles ? (
+                confirmingCode ? <div className="family-address-confirmation">
+                  <p>יצירת קוד חדש תבטל את הקוד הקודם להצטרפות למשפחה. בני המשפחה הקיימים לא יושפעו.</p>
+                  <button type="button" disabled={codeBusy} onClick={() => void regenerateCode()}>{codeBusy ? 'יוצרים קוד…' : 'אישור יצירת קוד חדש'}</button>
+                  <button type="button" disabled={codeBusy} onClick={() => setConfirmingCode(false)}>ביטול</button>
+                </div> : <button type="button" onClick={() => setConfirmingCode(true)}>יצירת קוד חדש</button>
+              ) : null}
               <span role="status" aria-live="polite">{copyFeedback}</span>
             </section>
           </div>

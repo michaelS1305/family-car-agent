@@ -1322,9 +1322,85 @@ def get_recent_conversation(user_id, limit=10):
 
         return list(reversed(messages))
 
+
+FAMILY_CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
+FAMILY_CODE_SAMPLE_LIMIT = 20
+FAMILY_CODE_ASSIGNMENT_ATTEMPTS = 5
+
+
+def _allocate_family_code(conn, assign, excluded_code=None):
+    """Caller holds PWA_FAMILY_CREATION_LOCK_ID until transaction commit.
+
+    Sample at most 20 CSPRNG candidates per assignment attempt. Prefer the first
+    never-used candidate; otherwise use the first sampled released candidate.
+    Retry only the active-code UNIQUE collision, at most five assignments.
+    Each assignment/history pair uses a savepoint so collisions leave no history.
+    """
+    for _ in range(FAMILY_CODE_ASSIGNMENT_ATTEMPTS):
+        released = None
+        candidate = None
+        for _ in range(FAMILY_CODE_SAMPLE_LIMIT):
+            code = "".join(secrets.choice(FAMILY_CODE_ALPHABET) for _ in range(6))
+            if code == excluded_code:
+                continue
+            active, historical = conn.execute(
+                """SELECT EXISTS (SELECT 1 FROM families WHERE family_code = %s),
+                          EXISTS (SELECT 1 FROM family_code_history WHERE code = %s)""",
+                (code, code),
+            ).fetchone()
+            if active:
+                continue
+            if not historical:
+                candidate = code
+                break
+            if released is None:
+                released = code
+        candidate = candidate or released
+        if candidate is None:
+            continue
+        try:
+            with conn.transaction():
+                result = assign(candidate)
+                conn.execute(
+                    "INSERT INTO family_code_history (code) VALUES (%s) ON CONFLICT (code) DO NOTHING",
+                    (candidate,),
+                )
+            return candidate, result
+        except UniqueViolation as exc:
+            if exc.diag.constraint_name != "families_family_code_key":
+                raise
+    raise FamilyCodeTakenError()
+
+
+def regenerate_family_code(user_id, family_id):
+    with pool.connection() as conn:
+        with conn.transaction():
+            # Same order as Create, Join verification and completion: advisory
+            # lock first, then family/session rows. No network I/O under locks.
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (PWA_FAMILY_CREATION_LOCK_ID,))
+            family = conn.execute(
+                "SELECT family_code, created_by_user_id FROM families WHERE id = %s FOR UPDATE",
+                (family_id,),
+            ).fetchone()
+            if not family or family[1] is None or family[1] != user_id:
+                return None
+            code, _ = _allocate_family_code(
+                conn,
+                lambda code: conn.execute(
+                    "UPDATE families SET family_code = %s WHERE id = %s", (code, family_id),
+                ),
+                excluded_code=family[0],
+            )
+            conn.execute(
+                """UPDATE pwa_join_sessions SET step = 'family_code', updated_at = NOW()
+                   WHERE family_id = %s AND step = 'user_name'""",
+                (family_id,),
+            )
+            return code
+
+
 def create_family_with_first_user(
     name,
-    family_code,
     home_address,
     user_name,
     home_latitude=None,
@@ -1335,25 +1411,16 @@ def create_family_with_first_user(
     try:
         with pool.connection() as conn:
             with conn.transaction():
+                conn.execute(
+                    "SELECT pg_advisory_xact_lock(%s)", (PWA_FAMILY_CREATION_LOCK_ID,),
+                )
                 if auth_user_id is not None:
-                    conn.execute(
-                        "SELECT pg_advisory_xact_lock(%s)",
-                        (PWA_FAMILY_CREATION_LOCK_ID,),
-                    )
-
                     mapped_user = conn.execute(
                         "SELECT id FROM users WHERE auth_user_id = %s",
                         (auth_user_id,),
                     ).fetchone()
                     if mapped_user:
                         raise AuthUserAlreadyMappedError()
-
-                    existing_code = conn.execute(
-                        "SELECT id FROM families WHERE family_code = %s",
-                        (family_code,),
-                    ).fetchone()
-                    if existing_code:
-                        raise FamilyCodeTakenError()
 
                     if (
                         prevent_duplicate_location
@@ -1386,32 +1453,33 @@ def create_family_with_first_user(
                 )
                 creator_user_id = user_cursor.fetchone()[0]
 
-                cursor = conn.execute(
-                    """
-                    INSERT INTO families (
-                        name,
-                        family_code,
-                        home_address,
-                        home_latitude,
-                        home_longitude,
-                        created_at,
-                        created_by_user_id
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                    """,
-                    (
-                        name,
-                        family_code,
-                        home_address,
-                        home_latitude,
-                        home_longitude,
-                        created_at,
-                        creator_user_id,
-                    )
-                )
+                def assign_code(family_code):
+                    return conn.execute(
+                        """
+                        INSERT INTO families (
+                            name,
+                            family_code,
+                            home_address,
+                            home_latitude,
+                            home_longitude,
+                            created_at,
+                            created_by_user_id
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        (
+                            name,
+                            family_code,
+                            home_address,
+                            home_latitude,
+                            home_longitude,
+                            created_at,
+                            creator_user_id,
+                        )
+                    ).fetchone()[0]
 
-                family_id = cursor.fetchone()[0]
+                _, family_id = _allocate_family_code(conn, assign_code)
 
                 updated_user = conn.execute(
                     """
@@ -1729,6 +1797,10 @@ def _join_session_from_row(row, was_reset=False):
 
 
 def _lock_pwa_join_session(conn, auth_user_id):
+    # All Join DB transitions share this order, including binding family_id:
+    # otherwise its FK check could wait on a family held by regeneration while
+    # regeneration waits on this session. Geocoding runs outside these scopes.
+    conn.execute("SELECT pg_advisory_xact_lock(%s)", (PWA_FAMILY_CREATION_LOCK_ID,))
     mapped_user = conn.execute(
         "SELECT id FROM users WHERE auth_user_id = %s",
         (auth_user_id,),

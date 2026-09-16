@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { ApiRequestError, getFamily, resolveFamilyAddress, updateFamilyAddress, updateFamilyMemberRole } from '../src/api/apiClient.ts'
+import { ApiRequestError, getFamily, regenerateFamilyCode, resolveFamilyAddress, updateFamilyAddress, updateFamilyMemberRole } from '../src/api/apiClient.ts'
 
 const family = {
   name: 'כהן',
@@ -15,6 +15,26 @@ const family = {
     is_family_admin: true,
   }],
 }
+
+test('regenerate sends only an empty body and authenticated bearer, validates canonical result', async () => {
+  const result = await regenerateFamilyCode('access-token', {
+    baseUrl: 'https://api.example.com',
+    fetcher: async (url, init) => {
+      assert.equal(String(url), 'https://api.example.com/api/family/code/regenerate')
+      assert.equal(init?.method, 'POST')
+      assert.equal(init?.body, '{}')
+      assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer access-token')
+      return new Response(JSON.stringify({ family_code: 'abc123' }))
+    },
+  })
+  assert.deepEqual(result, { family_code: 'abc123' })
+  for (const code of ['ABC123', 'abc12', 'abc1234', 'אבג123']) {
+    await assert.rejects(regenerateFamilyCode('token', {
+      baseUrl: 'https://api.example.com',
+      fetcher: async () => new Response(JSON.stringify({ family_code: code })),
+    }), ApiRequestError)
+  }
+})
 
 test('family read sends bearer auth without client identity parameters', async () => {
   let capturedUrl = ''

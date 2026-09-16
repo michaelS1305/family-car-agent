@@ -10,6 +10,8 @@ from identity import CurrentUser
 
 
 database_stub = types.ModuleType("database")
+database_stub.FamilyCodeTakenError = type("FamilyCodeTakenError", (Exception,), {})
+database_stub.regenerate_family_code = Mock()
 database_stub.get_family_profile = Mock()
 database_stub.update_family_member_role = Mock()
 database_stub.get_family_by_location = Mock()
@@ -40,6 +42,22 @@ service = load_service()
 
 
 class FamilyServiceTests(unittest.TestCase):
+    def test_regeneration_scopes_to_current_identity_and_maps_denial(self):
+        user = self.current_user()
+        with patch.object(service, "regenerate_family_code", return_value="abc123") as operation:
+            self.assertEqual(service.regenerate_code_for_current_user(user), {"family_code": "abc123"})
+            operation.assert_called_once_with(user.user_id, user.family_id)
+        with patch.object(service, "regenerate_family_code", return_value=None):
+            with self.assertRaises(service.FamilyProfileError) as error:
+                service.regenerate_code_for_current_user(user)
+            self.assertEqual(error.exception.status_code, 403)
+
+    def test_regeneration_exhaustion_is_generic(self):
+        with patch.object(service, "regenerate_family_code", side_effect=service.FamilyCodeTakenError()):
+            with self.assertRaises(service.FamilyProfileError) as error:
+                service.regenerate_code_for_current_user(self.current_user())
+            self.assertEqual(error.exception.status_code, 503)
+
     def setUp(self):
         service._address_resolutions.clear()
         database_stub.get_family_profile.reset_mock(return_value=True, side_effect=True)

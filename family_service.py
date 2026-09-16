@@ -4,6 +4,8 @@ import threading
 import time
 
 from database import (
+    FamilyCodeTakenError,
+    regenerate_family_code,
     get_family_by_location,
     get_family_profile,
     update_family_address,
@@ -104,6 +106,21 @@ def get_family_for_current_user(current_user: CurrentUser):
             for row in member_rows
         ],
     }
+
+
+def regenerate_code_for_current_user(current_user: CurrentUser):
+    _require_family(current_user)
+    try:
+        code = regenerate_family_code(current_user.user_id, current_user.family_id)
+    except FamilyCodeTakenError as exc:
+        raise FamilyProfileError(
+            "FAMILY_CODE_UNAVAILABLE", "לא הצלחנו ליצור קוד חדש כרגע. נסו שוב.", 503,
+        ) from exc
+    if code is None:
+        raise FamilyProfileError(
+            "FAMILY_CODE_FORBIDDEN", "רק מנהל המשפחה יכול ליצור קוד חדש.", 403,
+        )
+    return {"family_code": code}
 
 
 def set_family_member_role(current_user: CurrentUser, member_ref, role):

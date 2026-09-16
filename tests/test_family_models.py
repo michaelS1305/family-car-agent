@@ -3,6 +3,7 @@ import unittest
 from pydantic import ValidationError
 
 from models import (
+    FamilyCodeRegenerateRequest,
     CreateFamilyAddressRequest,
     CreateFamilyRequest,
     FamilyAddressResolveRequest,
@@ -15,6 +16,14 @@ from models import (
     ReservationUpdateRequest,
     JoinFamilyAddressRequest,
 )
+
+
+class FamilyCodeRegenerateModelTests(unittest.TestCase):
+    def test_empty_only(self):
+        self.assertEqual(FamilyCodeRegenerateRequest().model_dump(), {})
+        for key in ("family_id", "user_id", "auth_user_id", "family_code", "candidate", "admin"):
+            with self.subTest(key=key), self.assertRaises(ValidationError):
+                FamilyCodeRegenerateRequest(**{key: "anything"})
 
 
 class FamilyRoleModelTests(unittest.TestCase):

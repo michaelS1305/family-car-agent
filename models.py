@@ -121,6 +121,14 @@ class FamilyResponse(BaseModel):
     members: list[FamilyMemberResponse]
 
 
+class FamilyCodeRegenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class FamilyCodeResponse(BaseModel):
+    family_code: str
+
+
 class FamilyRoleUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

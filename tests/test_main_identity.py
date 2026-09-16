@@ -89,6 +89,8 @@ models_stub = stub_module(
     FamilyAddressUpdateRequest=type("FamilyAddressUpdateRequest", (), {}),
     FamilyAddressUpdateResponse=type("FamilyAddressUpdateResponse", (), {}),
     FamilyResponse=type("FamilyResponse", (), {}),
+    FamilyCodeRegenerateRequest=type("FamilyCodeRegenerateRequest", (), {}),
+    FamilyCodeResponse=type("FamilyCodeResponse", (), {}),
     FamilyRoleUpdateRequest=type("FamilyRoleUpdateRequest", (), {}),
     JoinFamilyAddressConfirmationRequest=type("JoinFamilyAddressConfirmationRequest", (), {}),
     JoinFamilyAddressRequest=type("JoinFamilyAddressRequest", (), {}),
@@ -211,6 +213,7 @@ family_profile_stub = stub_module(
     "family_service",
     FamilyProfileError=FakeFamilyProfileError,
     get_family_for_current_user=Mock(),
+    regenerate_code_for_current_user=Mock(),
     resolve_family_address_for_current_user=Mock(),
     set_family_member_role=Mock(),
     update_family_address_for_current_user=Mock(),
@@ -426,6 +429,14 @@ class ApiMeRouteTests(unittest.TestCase):
 
 
 class FamilyProfileRouteTests(unittest.TestCase):
+    def test_regeneration_uses_only_authenticated_identity(self):
+        current_user = CurrentUser(user_id=17, name="test", family_id=42)
+        with patch.object(main, "regenerate_code_for_current_user", return_value={"family_code": "abc123"}) as operation:
+            result = main.regenerate_current_family_code(types.SimpleNamespace(family_id=999), current_user)
+        operation.assert_called_once_with(current_user)
+        self.assertEqual(result, {"family_code": "abc123"})
+        self.assertIs(inspect.signature(main.regenerate_current_family_code).parameters["current_user"].default.dependency, auth_stub.get_current_user)
+
     def setUp(self):
         family_profile_stub.get_family_for_current_user.reset_mock(
             return_value=True,

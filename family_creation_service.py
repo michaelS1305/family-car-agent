@@ -67,8 +67,6 @@ class StoredAddressResolution:
 
 
 ADDRESS_RESOLUTION_TTL_SECONDS = 15 * 60
-FAMILY_CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
-FAMILY_CODE_GENERATION_ATTEMPTS = 5
 _resolution_lock = threading.Lock()
 _address_resolutions = {}
 _auth_resolution_tokens = {}
@@ -126,10 +124,6 @@ def _required_text(value, error_code):
 def _ensure_auth_user_is_unmapped(auth_user_id):
     if get_user_by_auth_user_id(auth_user_id) is not None:
         raise FamilyCreationError("AUTH_USER_ALREADY_MAPPED", 409)
-
-
-def _generate_family_code():
-    return "".join(secrets.choice(FAMILY_CODE_ALPHABET) for _ in range(6))
 
 
 def _resolve_address(auth_user_id, home_address):
@@ -200,30 +194,24 @@ def create_family_for_auth_user(
         address_resolution_token,
     )
 
-    for _ in range(FAMILY_CODE_GENERATION_ATTEMPTS):
-        generated_family_code = _generate_family_code()
-        try:
-            create_family_with_first_user(
-                name=normalized_family_name,
-                family_code=generated_family_code,
-                home_address=resolved_address.normalized_address,
-                user_name=normalized_user_name,
-                home_latitude=resolved_address.latitude,
-                home_longitude=resolved_address.longitude,
-                auth_user_id=auth_user_id,
-                prevent_duplicate_location=True,
-            )
-            break
-        except FamilyCodeTakenError:
-            continue
-        except AuthUserAlreadyMappedError as exc:
-            raise FamilyCreationError("AUTH_USER_ALREADY_MAPPED", 409) from exc
-        except AuthUserIdentityNotFoundError as exc:
-            raise FamilyCreationError("AUTH_SESSION_INVALID", 401) from exc
-        except FamilyAlreadyExistsAtLocationError as exc:
-            raise FamilyCreationError("FAMILY_ALREADY_EXISTS_AT_ADDRESS", 409) from exc
-    else:
-        raise FamilyCreationError("SERVER_ERROR", 503)
+    try:
+        create_family_with_first_user(
+            name=normalized_family_name,
+            home_address=resolved_address.normalized_address,
+            user_name=normalized_user_name,
+            home_latitude=resolved_address.latitude,
+            home_longitude=resolved_address.longitude,
+            auth_user_id=auth_user_id,
+            prevent_duplicate_location=True,
+        )
+    except FamilyCodeTakenError as exc:
+        raise FamilyCreationError("SERVER_ERROR", 503) from exc
+    except AuthUserAlreadyMappedError as exc:
+        raise FamilyCreationError("AUTH_USER_ALREADY_MAPPED", 409) from exc
+    except AuthUserIdentityNotFoundError as exc:
+        raise FamilyCreationError("AUTH_SESSION_INVALID", 401) from exc
+    except FamilyAlreadyExistsAtLocationError as exc:
+        raise FamilyCreationError("FAMILY_ALREADY_EXISTS_AT_ADDRESS", 409) from exc
 
     _discard_address_resolution(auth_user_id, address_resolution_token)
     return {"created": True}

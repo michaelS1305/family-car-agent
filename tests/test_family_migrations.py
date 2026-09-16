@@ -47,5 +47,46 @@ class FamilyMigrationContractTests(unittest.TestCase):
         )
 
 
+class FamilyCodeHistoryMigrationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.sql = (MIGRATIONS / "2026091601_family_code_history.sql").read_text(
+            encoding="utf-8"
+        )
+
+    def test_validation_precedes_creation_and_backfill_under_lock(self):
+        sql = self.sql
+        self.assertLess(sql.index("BEGIN;"), sql.index("DO $preflight$"))
+        self.assertLess(sql.index("LOCK TABLE"), sql.index("octet_length(family_code)"))
+        self.assertLess(sql.index("octet_length(family_code)"), sql.index("CREATE TABLE"))
+        self.assertLess(sql.index("CREATE TABLE"), sql.index("INSERT INTO"))
+        for guard in (
+            "attnotnull", "atttypid = 'text'::regtype", "contype = 'u'",
+            "conkey = ARRAY[code_attribute]", "convalidated",
+            "to_regclass('public.family_code_history') IS NOT NULL",
+            'family_code COLLATE "C" ~ \'^[a-z0-9]{6}$\'',
+        ):
+            self.assertIn(guard, sql)
+        self.assertIn("SELECT family_code FROM public.families;", sql)
+        self.assertTrue(sql.rstrip().endswith("COMMIT;"))
+
+    def test_persistent_registry_is_minimal_and_backend_only(self):
+        sql = self.sql
+        self.assertIn('code text COLLATE "C" PRIMARY KEY', sql)
+        self.assertIn("octet_length(code) = 6 AND code ~ '^[a-z0-9]{6}$'", sql)
+        self.assertIn("REVOKE ALL PRIVILEGES (code)", sql)
+        self.assertEqual(sql.count("FROM PUBLIC, anon, authenticated;"), 2)
+        statements = "\n".join(
+            line for line in sql.splitlines() if not line.lstrip().startswith("--")
+        )
+        for forbidden in (
+            "REFERENCES", "ALTER TABLE", "UPDATE ", "DELETE ", "TRUNCATE ",
+            "CREATE TRIGGER", "CREATE POLICY", "ROW LEVEL SECURITY",
+            "DEFAULT PRIVILEGES", "2026090602", "created_by_user_id",
+            "pwa_join_sessions", "ON CONFLICT",
+        ):
+            self.assertNotIn(forbidden, statements)
+
+
 if __name__ == "__main__":
     unittest.main()

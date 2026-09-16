@@ -168,11 +168,13 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         self.transaction_context = RecordingContext()
         self.connection.transaction.return_value = self.transaction_context
         database.pool.connection.return_value = self.connection_context
+        allocator = patch.object(database, "_allocate_family_code", side_effect=lambda conn, assign: ("482731", assign("482731")))
+        allocator.start()
+        self.addCleanup(allocator.stop)
 
     def call_atomic_creation(self):
         return database.create_family_with_first_user(
             name="כהן",
-            family_code="482731",
             home_address="תל אביב, דיזנגוף, 120",
             user_name="מיכאל",
             home_latitude=32.0809,
@@ -186,37 +188,37 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         family_cursor.fetchone.return_value = (7,)
         update_cursor = Mock(name="update_cursor")
         update_cursor.fetchone.return_value = (17,)
-        self.connection.execute.side_effect = [user_cursor, family_cursor, update_cursor]
+        self.connection.execute.side_effect = [Mock(), user_cursor, family_cursor, update_cursor]
 
         family_id = self.call_atomic_creation()
 
         self.assertEqual(family_id, 7)
         database.pool.connection.assert_called_once_with()
         self.connection.transaction.assert_called_once_with()
-        self.assertEqual(self.connection.execute.call_count, 3)
+        self.assertEqual(self.connection.execute.call_count, 4)
         self.assertTrue(self.transaction_context.committed)
         self.assertFalse(self.transaction_context.rolled_back)
 
-        user_insert = self.connection.execute.call_args_list[0]
+        user_insert = self.connection.execute.call_args_list[1]
         self.assertIn("INSERT INTO users", user_insert.args[0])
         self.assertEqual(
             user_insert.args[1],
             ("מיכאל", None),
         )
-        family_insert = self.connection.execute.call_args_list[1]
+        family_insert = self.connection.execute.call_args_list[2]
         self.assertIn("created_by_user_id", family_insert.args[0])
         self.assertEqual(family_insert.args[1][-1], 17)
-        self.assertIn("UPDATE users", self.connection.execute.call_args_list[2].args[0])
+        self.assertIn("UPDATE users", self.connection.execute.call_args_list[3].args[0])
 
     def test_family_insert_failure_rolls_back_first_user_insert(self):
         user_cursor = Mock(name="user_cursor")
         user_cursor.fetchone.return_value = (17,)
-        self.connection.execute.side_effect = [user_cursor, RuntimeError("family insert failed")]
+        self.connection.execute.side_effect = [Mock(), user_cursor, RuntimeError("family insert failed")]
 
         with self.assertRaisesRegex(RuntimeError, "family insert failed"):
             self.call_atomic_creation()
 
-        self.assertEqual(self.connection.execute.call_count, 2)
+        self.assertEqual(self.connection.execute.call_count, 3)
         self.assertTrue(self.transaction_context.rolled_back)
         self.assertFalse(self.transaction_context.committed)
 
@@ -227,7 +229,7 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         family_cursor.fetchone.return_value = (7,)
         update_cursor = Mock(name="update_cursor")
         update_cursor.fetchone.return_value = None
-        self.connection.execute.side_effect = [user_cursor, family_cursor, update_cursor]
+        self.connection.execute.side_effect = [Mock(), user_cursor, family_cursor, update_cursor]
 
         with self.assertRaisesRegex(RuntimeError, "assign family creator"):
             self.call_atomic_creation()
@@ -242,6 +244,7 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         user_cursor = Mock(name="user_cursor")
         user_cursor.fetchone.return_value = (17,)
         self.connection.execute.side_effect = [
+            Mock(),
             user_cursor,
             DuplicateFamilyCodeError("duplicate family code"),
         ]
@@ -249,7 +252,7 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         with self.assertRaisesRegex(DuplicateFamilyCodeError, "duplicate family code"):
             self.call_atomic_creation()
 
-        self.assertEqual(self.connection.execute.call_count, 2)
+        self.assertEqual(self.connection.execute.call_count, 3)
         self.assertIn("INSERT INTO families", self.connection.execute.call_args.args[0])
         self.assertTrue(self.transaction_context.rolled_back)
         self.assertFalse(self.transaction_context.committed)
@@ -271,7 +274,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         self.connection.execute.side_effect = [
             lock_cursor,
             mapped_cursor,
-            code_cursor,
             location_cursor,
             user_cursor,
             family_cursor,
@@ -280,7 +282,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
 
         family_id = database.create_family_with_first_user(
             name="כהן",
-            family_code="482731",
             home_address="תל אביב, דיזנגוף, 120",
             user_name="מיכאל",
             home_latitude=32.0809,
@@ -310,7 +311,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         with self.assertRaises(database.AuthUserAlreadyMappedError):
             database.create_family_with_first_user(
                 name="כהן",
-                family_code="482731",
                 home_address="תל אביב, דיזנגוף, 120",
                 user_name="מיכאל",
                 home_latitude=32.0809,
@@ -332,14 +332,12 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         self.connection.execute.side_effect = [
             Mock(name="lock_cursor"),
             mapped_cursor,
-            code_cursor,
             location_cursor,
         ]
 
         with self.assertRaises(database.FamilyAlreadyExistsAtLocationError):
             database.create_family_with_first_user(
                 name="כהן",
-                family_code="482731",
                 home_address="תל אביב, דיזנגוף, 120",
                 user_name="מיכאל",
                 home_latitude=32.0809,
@@ -348,7 +346,7 @@ class AtomicFamilyCreationTests(unittest.TestCase):
                 prevent_duplicate_location=True,
             )
 
-        self.assertEqual(self.connection.execute.call_count, 4)
+        self.assertEqual(self.connection.execute.call_count, 3)
         self.assertTrue(self.transaction_context.rolled_back)
 
     def test_missing_auth_user_fk_is_structured_and_rolls_back_everything(self):
@@ -365,7 +363,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         self.connection.execute.side_effect = [
             Mock(name="lock_cursor"),
             mapped_cursor,
-            code_cursor,
             location_cursor,
             foreign_key_error,
         ]
@@ -374,7 +371,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
             with self.assertRaises(database.AuthUserIdentityNotFoundError):
                 database.create_family_with_first_user(
                     name="כהן",
-                    family_code="482731",
                     home_address="תל אביב, דיזנגוף, 120",
                     user_name="מיכאל",
                     home_latitude=32.0809,
@@ -537,6 +533,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
 
     def test_complete_join_inserts_user_and_deletes_session_in_one_transaction(self):
         self.connection.execute.side_effect = [
+            self.cursor(),
             self.cursor(None),
             self.cursor(),
             self.cursor(None),
@@ -552,16 +549,17 @@ class AtomicPwaJoinTests(unittest.TestCase):
         self.assertEqual(result, {"created": True, "user_id": 17, "family_id": 7})
         self.assertTrue(self.transaction_context.committed)
         self.assertFalse(self.transaction_context.rolled_back)
-        user_insert = self.connection.execute.call_args_list[6]
+        user_insert = self.connection.execute.call_args_list[7]
         self.assertIn("INSERT INTO users", user_insert.args[0])
         self.assertEqual(user_insert.args[1], ("מיכאל", 7, "auth-user-uuid"))
         self.assertIn(
             "DELETE FROM pwa_join_sessions",
-            self.connection.execute.call_args_list[7].args[0],
+            self.connection.execute.call_args_list[8].args[0],
         )
 
     def test_user_insert_failure_rolls_back_without_deleting_join_session(self):
         self.connection.execute.side_effect = [
+            self.cursor(),
             self.cursor(None),
             self.cursor(),
             self.cursor(None),
@@ -593,6 +591,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
         locked_session[6] = 3
         locked_session[9] = "locked-until"
         self.connection.execute.side_effect = [
+            self.cursor(),
             self.cursor(None),
             self.cursor(),
             self.cursor(None),
@@ -612,11 +611,11 @@ class AtomicPwaJoinTests(unittest.TestCase):
         self.assertEqual(result["locked_until"], "locked-until")
         self.assertIn(
             "FOR UPDATE",
-            self.connection.execute.call_args_list[3].args[0],
+            self.connection.execute.call_args_list[4].args[0],
         )
         self.assertIn(
             "INTERVAL '15 minutes'",
-            self.connection.execute.call_args_list[6].args[0],
+            self.connection.execute.call_args_list[7].args[0],
         )
         self.assertTrue(self.transaction_context.committed)
 
@@ -630,6 +629,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
         advanced_session[1] = "address"
         advanced_session[2] = "סנדרוביץ'"
         self.connection.execute.side_effect = [
+            self.cursor(),
             self.cursor(None),
             self.cursor(),
             self.cursor(None),
@@ -662,6 +662,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
         advanced_session[1] = "address"
         advanced_session[2] = "סנדרוביץ'"
         self.connection.execute.side_effect = [
+            self.cursor(),
             self.cursor(None),
             self.cursor(),
             self.cursor(None),
@@ -678,7 +679,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["session"]["family_name_attempts"], 2)
-        fallback_lookup = self.connection.execute.call_args_list[5]
+        fallback_lookup = self.connection.execute.call_args_list[6]
         self.assertIn("NORMALIZE(name, NFC)", fallback_lookup.args[0])
         self.assertIn("TRANSLATE", fallback_lookup.args[0])
         self.assertIn("REGEXP_REPLACE", fallback_lookup.args[0])
@@ -715,6 +716,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
         reset_session[4] = None
         reset_session[5] = None
         self.connection.execute.side_effect = [
+            self.cursor(),
             self.cursor(None),
             self.cursor(),
             self.cursor(tuple(reset_session)),
@@ -724,12 +726,13 @@ class AtomicPwaJoinTests(unittest.TestCase):
 
         self.assertEqual(result["step"], "family_name")
         self.assertTrue(result["was_reset"])
-        reset_sql = self.connection.execute.call_args_list[2].args[0]
+        reset_sql = self.connection.execute.call_args_list[3].args[0]
         self.assertIn("locked_until <= NOW()", reset_sql)
         self.assertIn("family_code_attempts = 0", reset_sql)
 
     def test_concurrent_completion_that_loses_session_is_idempotent(self):
         self.connection.execute.side_effect = [
+            self.cursor(),
             self.cursor(None),
             self.cursor(),
             self.cursor(None),
@@ -741,7 +744,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
             database.complete_pwa_join("auth-user-uuid", "מיכאל")
 
         self.assertTrue(self.transaction_context.rolled_back)
-        self.assertEqual(self.connection.execute.call_count, 5)
+        self.assertEqual(self.connection.execute.call_count, 6)
 
     def test_concurrent_completion_rechecks_mapping_after_recreated_session(self):
         recreated_session = list(self.session_row())
@@ -752,6 +755,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
         recreated_session[5] = None
 
         self.connection.execute.side_effect = [
+            self.cursor(),
             self.cursor(None),
             self.cursor(),
             self.cursor(None),
@@ -764,8 +768,8 @@ class AtomicPwaJoinTests(unittest.TestCase):
 
         self.assertTrue(self.transaction_context.rolled_back)
         self.assertFalse(self.transaction_context.committed)
-        self.assertEqual(self.connection.execute.call_count, 5)
-        mapping_recheck = self.connection.execute.call_args_list[4]
+        self.assertEqual(self.connection.execute.call_count, 6)
+        mapping_recheck = self.connection.execute.call_args_list[5]
         self.assertIn(
             "SELECT id FROM users WHERE auth_user_id = %s",
             mapping_recheck.args[0],

@@ -61,3 +61,39 @@ key. Do not run it from application startup.
 Run it successfully before deploying its matching backend. It adds backend-only,
 PostgreSQL-authoritative rolling admission history for CarPlay connect/disconnect
 requests; it stores only server-derived user/family references and admission time.
+
+`2026091601_family_code_history.sql` is prepared only, not executed. It creates a
+backend-only persistent set of previously assigned codes and backfills all current
+family codes. No timestamps or ownership metadata are required for the preference
+rule. Released codes remain reusable; `families.family_code` remains authoritative
+for current assignments. Codes deleted before this registry existed cannot be
+reconstructed by this backfill. Preserve this table in test-data cleanups.
+
+Later cutover: first prepare and validate the matching application implementation,
+then pause Create/Join traffic and drain in-flight requests on every old worker.
+Run the migration manually as postgres, deploy the history-aware Create/regeneration
+allocator to every worker, verify it, then resume Create/Join and enable regeneration.
+Do not serve regeneration alongside old Join workers: their transactions do not
+participate in the new code-verification/invalidation lock protocol. The migration's
+table lock protects its backfill only until COMMIT; it does not stop old workers
+from creating unrecorded codes afterward. Do not execute this preparation alone
+while old workers continue serving Create traffic. If rollout fails, keep Create
+paused; do not resume old writers without a separately reviewed recovery plan.
+
+The migration checks TEXT UNIQUE NOT NULL and canonical ASCII codes before creating
+anything, and fails on existing registry objects rather than silently rerunning.
+Errors roll back the whole transaction. No existing code or Join session changes.
+There are no foreign keys or sequences, so family DELETE/TRUNCATE CASCADE cannot
+erase history. Browser/PUBLIC table and column privileges are revoked; postgres
+owns the table. No RLS, function ACL or default-privilege changes are made.
+It is independent of pending `2026090602_family_creator_contract.sql`.
+After commit, dropping the registry would lose persistent usage knowledge; any
+rollback must preserve that data and coordinate with the matching application.
+
+The shared allocator samples up to 20 random six-character codes per round. It
+chooses the first never-used sample, or the first released sample only if that
+round finds no never-used code. Active/current codes are excluded. At most five
+rounds/assignment attempts run; only the family-code UNIQUE collision is retried.
+Assignment and history insertion share a transaction/savepoint. Creation,
+regeneration and Join DB transitions acquire the existing family-creation advisory
+lock before row locks; no provider call runs under it. History is never removed.
