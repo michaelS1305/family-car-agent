@@ -370,6 +370,20 @@ export function getFamily(
   return familyRequest('/api/family', accessToken, { method: 'GET' }, isFamilyProfile, options)
 }
 
+export function regenerateFamilyCode(
+  accessToken: string,
+  options: RequestOptions = {},
+): Promise<{ family_code: string }> {
+  return familyRequest('/api/family/code/regenerate', accessToken, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  }, (value): value is { family_code: string } => (
+    typeof value === 'object' && value !== null && 'family_code' in value
+    && typeof value.family_code === 'string' && /^[a-z0-9]{6}$/.test(value.family_code)
+  ), options)
+}
+
 export function updateFamilyMemberRole(
   accessToken: string,
   memberRef: string,

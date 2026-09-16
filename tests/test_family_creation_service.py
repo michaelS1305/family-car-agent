@@ -95,13 +95,6 @@ class FamilyCreationServiceTests(unittest.TestCase):
         )
         service._address_resolutions.clear()
         service._auth_resolution_tokens.clear()
-        self.code_patch = patch.object(
-            service,
-            "_generate_family_code",
-            return_value="k7m2q9",
-        )
-        self.code_patch.start()
-        self.addCleanup(self.code_patch.stop)
 
     def create(self, **overrides):
         values = {
@@ -131,7 +124,6 @@ class FamilyCreationServiceTests(unittest.TestCase):
         geocoding_stub.geocode_address.assert_not_called()
         database_stub.create_family_with_first_user.assert_called_once_with(
             name="כהן",
-            family_code="k7m2q9",
             home_address="תל אביב, דיזנגוף, 120",
             user_name="מיכאל",
             home_latitude=32.0809,
@@ -220,19 +212,12 @@ class FamilyCreationServiceTests(unittest.TestCase):
         self.assert_error("AUTH_USER_ALREADY_MAPPED")
         geocoding_stub.geocode_address.assert_not_called()
 
-    def test_generated_code_collision_retries_with_a_new_server_code(self):
-        service._generate_family_code.side_effect = ["aaaaaa", "00ab12"]
-        database_stub.create_family_with_first_user.side_effect = [
-            FamilyCodeTakenError(),
-            None,
-        ]
+    def test_create_delegates_allocation_to_atomic_database_operation(self):
         resolved = self.resolve_address()
         self.create(address_resolution_token=resolved.resolution_token)
 
-        self.assertEqual(
-            [call.kwargs["family_code"] for call in database_stub.create_family_with_first_user.call_args_list],
-            ["aaaaaa", "00ab12"],
-        )
+        database_stub.create_family_with_first_user.assert_called_once()
+        self.assertNotIn("family_code", database_stub.create_family_with_first_user.call_args.kwargs)
 
     def test_generated_code_retry_is_bounded_and_exhaustion_is_generic(self):
         database_stub.create_family_with_first_user.side_effect = FamilyCodeTakenError()
@@ -245,17 +230,9 @@ class FamilyCreationServiceTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 503)
         self.assertEqual(
             database_stub.create_family_with_first_user.call_count,
-            service.FAMILY_CODE_GENERATION_ATTEMPTS,
+            1,
         )
         self.assertNotIn("k7m2q9", raised.exception.message)
-
-    def test_secure_generator_uses_exact_alphabet_and_supports_leading_zero(self):
-        self.code_patch.stop()
-        self.addCleanup(lambda: None)
-        with patch.object(service.secrets, "choice", side_effect=list("00ab12")) as choice:
-            self.assertEqual(service._generate_family_code(), "00ab12")
-        self.assertEqual(choice.call_count, 6)
-        self.assertTrue(all(call.args == (service.FAMILY_CODE_ALPHABET,) for call in choice.call_args_list))
 
     def test_missing_auth_user_becomes_structured_session_error(self):
         resolved = self.resolve_address()
@@ -294,20 +271,17 @@ class FamilyCreationServiceTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "ADDRESS_RESOLUTION_EXPIRED")
         database_stub.create_family_with_first_user.assert_not_called()
-        service._generate_family_code.assert_not_called()
 
     def test_oversized_names_are_rejected_before_database_or_code_generation(self):
         for field in ("family_name", "user_name"):
             with self.subTest(field=field):
                 database_stub.get_user_by_auth_user_id.reset_mock()
-                service._generate_family_code.reset_mock()
                 self.assert_error(
                     "INVALID_FAMILY_NAME" if field == "family_name" else "INVALID_USER_NAME",
                     **{field: "א" * 101},
                 )
                 database_stub.get_user_by_auth_user_id.assert_not_called()
                 database_stub.create_family_with_first_user.assert_not_called()
-                service._generate_family_code.assert_not_called()
 
     def test_resolution_token_is_discarded_only_after_success(self):
         resolved = self.resolve_address()
@@ -332,7 +306,6 @@ class FamilyCreationServiceTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "ADDRESS_RESOLUTION_EXPIRED")
         database_stub.create_family_with_first_user.assert_not_called()
-        service._generate_family_code.assert_not_called()
 
 
 if __name__ == "__main__":

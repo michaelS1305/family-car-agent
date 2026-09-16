@@ -26,6 +26,8 @@ from models import (
     FamilyAddressUpdateRequest,
     FamilyAddressUpdateResponse,
     FamilyResponse,
+    FamilyCodeRegenerateRequest,
+    FamilyCodeResponse,
     FamilyRoleUpdateRequest,
     JoinFamilyAddressConfirmationRequest,
     JoinFamilyAddressRequest,
@@ -66,6 +68,7 @@ from family_creation_service import (
 from family_service import (
     FamilyProfileError,
     get_family_for_current_user,
+    regenerate_code_for_current_user,
     resolve_family_address_for_current_user,
     set_family_member_role,
     update_family_address_for_current_user,
@@ -167,6 +170,17 @@ def _raise_family_profile_error(error):
 def get_family(current_user: CurrentUser = Depends(get_current_user)):
     try:
         return get_family_for_current_user(current_user)
+    except FamilyProfileError as error:
+        _raise_family_profile_error(error)
+
+
+@app.post("/api/family/code/regenerate", response_model=FamilyCodeResponse)
+def regenerate_current_family_code(
+    request: FamilyCodeRegenerateRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return regenerate_code_for_current_user(current_user)
     except FamilyProfileError as error:
         _raise_family_profile_error(error)
 
