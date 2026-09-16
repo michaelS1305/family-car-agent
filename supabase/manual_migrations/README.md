@@ -97,3 +97,29 @@ rounds/assignment attempts run; only the family-code UNIQUE collision is retried
 Assignment and history insertion share a transaction/savepoint. Creation,
 regeneration and Join DB transitions acquire the existing family-creation advisory
 lock before row locks; no provider call runs under it. History is never removed.
+
+`2026091602_family_address_confirmations.sql` is prepared only, not executed.
+It adds a backend-only, ephemeral pending-confirmation table; no memory backfill
+is included. The matching application uses SHA-256 digests (32-byte BYTEA), never raw
+tokens, identify confirmations. Create binds auth identity; Update additionally
+binds internal user/family. Independent FKs enforce existence, not membership or
+creator status: application transactions recheck those relationships.
+Successful confirmation must consume the row in the same transaction as the
+authorized address mutation; rollback must preserve it. Enforce expiry using
+PostgreSQL time after lock waits. Replacement must reset the 15-minute expiry.
+The purpose-specific unique indexes preserve one Create per auth user and one
+Update per internal user. Expired unused rows need bounded application cleanup;
+no scheduler is installed. Deleting a referenced identity/family cascades only
+its pending confirmations, without changing existing deletion restrictions.
+The postgres-owned table explicitly revokes PUBLIC/anon/authenticated table and
+column access; no RLS policies, extensions, default ACLs or existing rows change.
+The migration fails on conflicting objects/rerun and rolls back transactionally.
+It is independent of Family CONTRACT and family-code history. A later deployment
+must apply this migration before starting the matching backend and consistently
+use shared storage across workers; old in-memory confirmations
+may expire and require address revalidation. Do not assume they are backfilled.
+Issuance and consumption acquire the family-creation advisory lock before
+confirmation/family row locks. Google runs outside these transactions. Both
+Create and Update recheck the inclusive 50-metre location invariant under that
+same lock; Update excludes its own family before LIMIT. Successful writes delete
+the confirmation atomically. Issuance also deletes at most 100 expired rows.

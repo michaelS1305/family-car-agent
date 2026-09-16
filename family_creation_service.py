@@ -1,9 +1,8 @@
 from dataclasses import dataclass
-import secrets
-import threading
-import time
 
 from database import (
+    AddressConfirmationInvalidError,
+    issue_family_address_confirmation,
     AuthUserAlreadyMappedError,
     AuthUserIdentityNotFoundError,
     FamilyAlreadyExistsAtLocationError,
@@ -57,59 +56,6 @@ class ResolvedAddress:
     latitude: float
     longitude: float
     resolution_token: str | None = None
-
-
-@dataclass(frozen=True)
-class StoredAddressResolution:
-    auth_user_id: str
-    address: ResolvedAddress
-    expires_at: float
-
-
-ADDRESS_RESOLUTION_TTL_SECONDS = 15 * 60
-_resolution_lock = threading.Lock()
-_address_resolutions = {}
-_auth_resolution_tokens = {}
-
-
-def _store_address_resolution(auth_user_id, resolved):
-    token = secrets.token_urlsafe(32)
-    stored = StoredAddressResolution(
-        auth_user_id=auth_user_id,
-        address=resolved,
-        expires_at=time.monotonic() + ADDRESS_RESOLUTION_TTL_SECONDS,
-    )
-    with _resolution_lock:
-        previous_token = _auth_resolution_tokens.get(auth_user_id)
-        if previous_token:
-            _address_resolutions.pop(previous_token, None)
-        _address_resolutions[token] = stored
-        _auth_resolution_tokens[auth_user_id] = token
-    return token
-
-
-def _get_address_resolution(auth_user_id, token):
-    if not isinstance(token, str) or not token:
-        raise FamilyCreationError("ADDRESS_RESOLUTION_EXPIRED", 409)
-    with _resolution_lock:
-        stored = _address_resolutions.get(token)
-        if stored is None or stored.auth_user_id != auth_user_id:
-            raise FamilyCreationError("ADDRESS_RESOLUTION_EXPIRED", 409)
-        if stored.expires_at <= time.monotonic():
-            _address_resolutions.pop(token, None)
-            if _auth_resolution_tokens.get(auth_user_id) == token:
-                _auth_resolution_tokens.pop(auth_user_id, None)
-            raise FamilyCreationError("ADDRESS_RESOLUTION_EXPIRED", 409)
-        return stored.address
-
-
-def _discard_address_resolution(auth_user_id, token):
-    with _resolution_lock:
-        stored = _address_resolutions.get(token)
-        if stored and stored.auth_user_id == auth_user_id:
-            _address_resolutions.pop(token, None)
-        if _auth_resolution_tokens.get(auth_user_id) == token:
-            _auth_resolution_tokens.pop(auth_user_id, None)
 
 
 def _required_text(value, error_code):
@@ -170,7 +116,15 @@ def resolve_create_family_address(auth_user_id, home_address):
     resolved = _resolve_address(auth_user_id, home_address)
     # The identity may have been mapped while the provider call was in flight.
     _ensure_auth_user_is_unmapped(auth_user_id)
-    token = _store_address_resolution(auth_user_id, resolved)
+    try:
+        token = issue_family_address_confirmation(
+            auth_user_id, resolved.normalized_address, resolved.display_address,
+            resolved.latitude, resolved.longitude,
+        )
+    except AuthUserAlreadyMappedError as exc:
+        raise FamilyCreationError("AUTH_USER_ALREADY_MAPPED", 409) from exc
+    except AuthUserIdentityNotFoundError as exc:
+        raise FamilyCreationError("AUTH_SESSION_INVALID", 401) from exc
     return ResolvedAddress(
         normalized_address=resolved.normalized_address,
         display_address=resolved.display_address,
@@ -189,21 +143,19 @@ def create_family_for_auth_user(
     normalized_family_name = _required_text(family_name, "INVALID_FAMILY_NAME")
     normalized_user_name = _required_text(user_name, "INVALID_USER_NAME")
     _ensure_auth_user_is_unmapped(auth_user_id)
-    resolved_address = _get_address_resolution(
-        auth_user_id,
-        address_resolution_token,
-    )
+    if not isinstance(address_resolution_token, str) or not address_resolution_token:
+        raise FamilyCreationError("ADDRESS_RESOLUTION_EXPIRED", 409)
 
     try:
         create_family_with_first_user(
             name=normalized_family_name,
-            home_address=resolved_address.normalized_address,
+            home_address=None,
             user_name=normalized_user_name,
-            home_latitude=resolved_address.latitude,
-            home_longitude=resolved_address.longitude,
             auth_user_id=auth_user_id,
-            prevent_duplicate_location=True,
+            resolution_token=address_resolution_token,
         )
+    except AddressConfirmationInvalidError as exc:
+        raise FamilyCreationError("ADDRESS_RESOLUTION_EXPIRED", 409) from exc
     except FamilyCodeTakenError as exc:
         raise FamilyCreationError("SERVER_ERROR", 503) from exc
     except AuthUserAlreadyMappedError as exc:
@@ -213,5 +165,4 @@ def create_family_for_auth_user(
     except FamilyAlreadyExistsAtLocationError as exc:
         raise FamilyCreationError("FAMILY_ALREADY_EXISTS_AT_ADDRESS", 409) from exc
 
-    _discard_address_resolution(auth_user_id, address_resolution_token)
     return {"created": True}

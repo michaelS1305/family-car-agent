@@ -1,5 +1,4 @@
 import importlib.util
-from dataclasses import replace
 from pathlib import Path
 import sys
 import types
@@ -16,6 +15,12 @@ database_stub.get_family_profile = Mock()
 database_stub.update_family_member_role = Mock()
 database_stub.get_family_by_location = Mock()
 database_stub.update_family_address = Mock()
+database_stub.issue_family_address_confirmation = Mock()
+for exception_name in (
+    "AddressConfirmationInvalidError", "FamilyAddressForbiddenError",
+    "AuthUserIdentityNotFoundError", "FamilyAlreadyExistsAtLocationError",
+):
+    setattr(database_stub, exception_name, type(exception_name, (Exception,), {}))
 
 
 def load_service():
@@ -59,7 +64,8 @@ class FamilyServiceTests(unittest.TestCase):
             self.assertEqual(error.exception.status_code, 503)
 
     def setUp(self):
-        service._address_resolutions.clear()
+        database_stub.issue_family_address_confirmation.reset_mock(return_value=True, side_effect=True)
+        database_stub.issue_family_address_confirmation.return_value = "opaque-confirmation-token"
         database_stub.get_family_profile.reset_mock(return_value=True, side_effect=True)
         database_stub.update_family_member_role.reset_mock(return_value=True, side_effect=True)
         database_stub.get_family_by_location.reset_mock(return_value=True, side_effect=True)
@@ -190,8 +196,16 @@ class FamilyServiceTests(unittest.TestCase):
             resolved["resolution_token"],
         )
         self.assertEqual(updated["home_address"], "דימונה, המעפיל, 1210")
+        database_stub.get_family_by_location.assert_called_once_with(
+            31.072, 35.036, exclude_family_id=42,
+        )
+        database_stub.issue_family_address_confirmation.assert_called_once_with(
+            self.current_user().auth_user_id, "דימונה, המעפיל, 1210",
+            "המעפיל 1210, דימונה, ישראל", 31.072, 35.036,
+            user_id=17, family_id=42,
+        )
         database_stub.update_family_address.assert_called_once_with(
-            17, 42, "דימונה, המעפיל, 1210", 31.072, 35.036,
+            17, 42, self.current_user().auth_user_id, resolved["resolution_token"],
         )
 
     @patch.object(service, "geocode_address")
@@ -240,13 +254,13 @@ class FamilyServiceTests(unittest.TestCase):
         database_stub.update_family_address.assert_not_called()
 
     @patch.object(service, "geocode_address")
-    def test_failed_authorized_update_preserves_old_address_and_consumes_resolution(self, geocode):
+    def test_failed_authorized_update_does_not_locally_burn_resolution(self, geocode):
         geocode.return_value = {
             "address": "המעפיל 1210, דימונה, ישראל",
             "latitude": 31.072,
             "longitude": 35.036,
         }
-        database_stub.update_family_address.return_value = None
+        database_stub.update_family_address.side_effect = service.FamilyAddressForbiddenError()
         resolved = service.resolve_family_address_for_current_user(
             self.current_user(), "דימונה, המעפיל, 1210",
         )
@@ -257,11 +271,11 @@ class FamilyServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.code, "FAMILY_ADDRESS_FORBIDDEN")
-        with self.assertRaises(service.FamilyProfileError) as replay:
-            service.update_family_address_for_current_user(
-                self.current_user(), resolved["resolution_token"],
-            )
-        self.assertEqual(replay.exception.code, "ADDRESS_RESOLUTION_EXPIRED")
+        database_stub.update_family_address.side_effect = None
+        result = service.update_family_address_for_current_user(
+            self.current_user(), resolved["resolution_token"],
+        )
+        self.assertEqual(result["home_address"], "דימונה, המעפיל, 1210")
 
     @patch.object(service, "geocode_address")
     def test_expired_address_resolution_fails_closed(self, geocode):
@@ -274,16 +288,13 @@ class FamilyServiceTests(unittest.TestCase):
             self.current_user(), "דימונה, המעפיל, 1210",
         )
         token = resolved["resolution_token"]
-        service._address_resolutions[token] = replace(
-            service._address_resolutions[token],
-            expires_at=0,
-        )
+        database_stub.update_family_address.side_effect = service.AddressConfirmationInvalidError()
 
         with self.assertRaises(service.FamilyProfileError) as raised:
             service.update_family_address_for_current_user(self.current_user(), token)
 
         self.assertEqual(raised.exception.code, "ADDRESS_RESOLUTION_EXPIRED")
-        database_stub.update_family_address.assert_not_called()
+        database_stub.update_family_address.assert_called_once()
 
     @patch.object(service, "geocode_address")
     def test_stale_or_foreign_resolution_fails_closed(self, geocode):

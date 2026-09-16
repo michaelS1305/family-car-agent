@@ -35,6 +35,8 @@ database_stub = stub_module(
     AuthUserAlreadyMappedError=AuthUserAlreadyMappedError,
     AuthUserIdentityNotFoundError=AuthUserIdentityNotFoundError,
     FamilyAlreadyExistsAtLocationError=FamilyAlreadyExistsAtLocationError,
+    AddressConfirmationInvalidError=type("AddressConfirmationInvalidError", (Exception,), {}),
+    issue_family_address_confirmation=Mock(),
     create_family_with_first_user=Mock(),
     get_family_by_location=Mock(),
     get_user_by_auth_user_id=Mock(),
@@ -76,6 +78,7 @@ class FamilyCreationServiceTests(unittest.TestCase):
     def setUp(self):
         for mocked_function in (
             database_stub.create_family_with_first_user,
+            database_stub.issue_family_address_confirmation,
             database_stub.get_family_by_location,
             database_stub.get_user_by_auth_user_id,
             geocoding_stub.geocode_address,
@@ -93,8 +96,7 @@ class FamilyCreationServiceTests(unittest.TestCase):
         capacity_stub.geocode_with_capacity.side_effect = (
             lambda _auth_user_id, geocode, **kwargs: geocode(**kwargs)
         )
-        service._address_resolutions.clear()
-        service._auth_resolution_tokens.clear()
+        database_stub.issue_family_address_confirmation.return_value = "opaque-confirmation-token-from-database"
 
     def create(self, **overrides):
         values = {
@@ -122,14 +124,16 @@ class FamilyCreationServiceTests(unittest.TestCase):
 
         self.assertEqual(result, {"created": True})
         geocoding_stub.geocode_address.assert_not_called()
+        database_stub.issue_family_address_confirmation.assert_called_once_with(
+            "auth-user-uuid", "תל אביב, דיזנגוף, 120",
+            "120 Dizengoff Street, Tel Aviv", 32.0809, 34.7806,
+        )
         database_stub.create_family_with_first_user.assert_called_once_with(
             name="כהן",
-            home_address="תל אביב, דיזנגוף, 120",
+            home_address=None,
             user_name="מיכאל",
-            home_latitude=32.0809,
-            home_longitude=34.7806,
             auth_user_id="auth-user-uuid",
-            prevent_duplicate_location=True,
+            resolution_token=resolved.resolution_token,
         )
 
     def test_numeric_family_and_personal_names_are_rejected(self):
@@ -245,7 +249,6 @@ class FamilyCreationServiceTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "AUTH_SESSION_INVALID")
         self.assertEqual(raised.exception.status_code, 401)
-        self.assertIn(resolved.resolution_token, service._address_resolutions)
 
     def test_address_resolution_returns_no_coordinates_to_api_contract_layer(self):
         resolved = service.resolve_create_family_address(
@@ -260,6 +263,7 @@ class FamilyCreationServiceTests(unittest.TestCase):
 
     def test_resolution_token_is_bound_to_authenticated_user(self):
         resolved = self.resolve_address()
+        database_stub.create_family_with_first_user.side_effect = service.AddressConfirmationInvalidError()
 
         with self.assertRaises(service.FamilyCreationError) as raised:
             service.create_family_for_auth_user(
@@ -270,7 +274,7 @@ class FamilyCreationServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.code, "ADDRESS_RESOLUTION_EXPIRED")
-        database_stub.create_family_with_first_user.assert_not_called()
+        self.assertEqual(database_stub.create_family_with_first_user.call_args.kwargs["auth_user_id"], "different-auth-user")
 
     def test_oversized_names_are_rejected_before_database_or_code_generation(self):
         for field in ("family_name", "user_name"):
@@ -285,6 +289,7 @@ class FamilyCreationServiceTests(unittest.TestCase):
 
     def test_resolution_token_is_discarded_only_after_success(self):
         resolved = self.resolve_address()
+        database_stub.create_family_with_first_user.side_effect = [None, service.AddressConfirmationInvalidError()]
 
         self.create(address_resolution_token=resolved.resolution_token)
 
@@ -293,19 +298,13 @@ class FamilyCreationServiceTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "ADDRESS_RESOLUTION_EXPIRED")
 
     def test_expired_resolution_requires_address_confirmation_again(self):
-        with patch.object(service.time, "monotonic", return_value=100):
-            resolved = self.resolve_address()
-
-        with patch.object(
-            service.time,
-            "monotonic",
-            return_value=100 + service.ADDRESS_RESOLUTION_TTL_SECONDS + 1,
-        ):
-            with self.assertRaises(service.FamilyCreationError) as raised:
-                self.create(address_resolution_token=resolved.resolution_token)
+        resolved = self.resolve_address()
+        database_stub.create_family_with_first_user.side_effect = service.AddressConfirmationInvalidError()
+        with self.assertRaises(service.FamilyCreationError) as raised:
+            self.create(address_resolution_token=resolved.resolution_token)
 
         self.assertEqual(raised.exception.code, "ADDRESS_RESOLUTION_EXPIRED")
-        database_stub.create_family_with_first_user.assert_not_called()
+        database_stub.create_family_with_first_user.assert_called_once()
 
 
 if __name__ == "__main__":

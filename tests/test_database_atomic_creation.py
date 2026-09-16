@@ -173,13 +173,14 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         self.addCleanup(allocator.stop)
 
     def call_atomic_creation(self):
-        return database.create_family_with_first_user(
-            name="כהן",
-            home_address="תל אביב, דיזנגוף, 120",
-            user_name="מיכאל",
-            home_latitude=32.0809,
-            home_longitude=34.7806,
-        )
+        with patch.object(database, "_get_family_by_location", return_value=None):
+            return database.create_family_with_first_user(
+                name="כהן",
+                home_address="תל אביב, דיזנגוף, 120",
+                user_name="מיכאל",
+                home_latitude=32.0809,
+                home_longitude=34.7806,
+            )
 
     def test_success_uses_one_connection_and_one_transaction(self):
         user_cursor = Mock(name="user_cursor")
@@ -287,7 +288,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
             home_latitude=32.0809,
             home_longitude=34.7806,
             auth_user_id="auth-user-uuid",
-            prevent_duplicate_location=True,
         )
 
         self.assertEqual(family_id, 7)
@@ -316,7 +316,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
                 home_latitude=32.0809,
                 home_longitude=34.7806,
                 auth_user_id="auth-user-uuid",
-                prevent_duplicate_location=True,
             )
 
         self.assertEqual(self.connection.execute.call_count, 2)
@@ -343,7 +342,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
                 home_latitude=32.0809,
                 home_longitude=34.7806,
                 auth_user_id="auth-user-uuid",
-                prevent_duplicate_location=True,
             )
 
         self.assertEqual(self.connection.execute.call_count, 3)
@@ -376,7 +374,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
                     home_latitude=32.0809,
                     home_longitude=34.7806,
                     auth_user_id="deleted-auth-user-uuid",
-                    prevent_duplicate_location=True,
                 )
 
         self.assertTrue(self.transaction_context.rolled_back)
@@ -467,12 +464,11 @@ class FamilyProfileDatabaseTests(unittest.TestCase):
         self.connection.transaction.return_value = transaction
         self.cursor.fetchone.return_value = ("דימונה, המעפיל, 1210",)
 
-        result = database.update_family_address(
-            17, 42, "דימונה, המעפיל, 1210", 31.072, 35.036,
-        )
+        with patch.object(database, "_lock_address_confirmation", return_value=(b"digest", ("דימונה, המעפיל, 1210", 31.072, 35.036))), patch.object(database, "_require_address_creator"), patch.object(database, "_get_family_by_location", return_value=None):
+            result = database.update_family_address(17, 42, "auth", "raw-token")
 
         self.assertEqual(result, ("דימונה, המעפיל, 1210",))
-        sql, parameters = self.connection.execute.call_args.args
+        sql, parameters = self.connection.execute.call_args_list[-2].args
         self.assertIn("created_by_user_id = %s", sql)
         self.assertIn("home_address = %s", sql)
         self.assertIn("home_latitude = %s", sql)
