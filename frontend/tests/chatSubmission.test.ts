@@ -1,5 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createPendingChatStorage } from '../src/chat/pendingChatStorage.ts'
+
+test('logout retires only departing account pending text and fences delayed writes', () => {
+  const values = new Map<string, string>([['other', 'keep'], ['family-car-agent:chat-pending:v1:B', 'keep']])
+  const store = createPendingChatStorage('A', { setItem: (key, value) => { values.set(key, value) }, removeItem: (key) => { values.delete(key) } })
+  const request = { requestId: 'same-id', message: 'private pending message' }
+  store.save(request)
+  assert.equal(JSON.parse(values.get('family-car-agent:chat-pending:v1:A')!).requestId, 'same-id')
+  store.retire()
+  store.save(request)
+  assert.equal(values.has('family-car-agent:chat-pending:v1:A'), false)
+  assert.deepEqual([...values], [['other', 'keep'], ['family-car-agent:chat-pending:v1:B', 'keep']])
+})
 import {
   createChatRequestRunner,
   pendingRequestNeedsRetry,

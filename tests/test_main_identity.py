@@ -723,6 +723,7 @@ class PushRouteTests(unittest.TestCase):
         )
         removal = types.SimpleNamespace(
             endpoint="https://push.example/device",
+            generation=None,
             user_id=999,
             family_id=888,
         )
@@ -732,7 +733,7 @@ class PushRouteTests(unittest.TestCase):
 
         push_stub.register_push_subscription.assert_called_once_with(current_user, registration)
         push_stub.unregister_push_subscription.assert_called_once_with(
-            current_user, "https://push.example/device"
+            current_user, "https://push.example/device", None
         )
 
 

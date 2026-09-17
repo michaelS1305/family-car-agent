@@ -1,10 +1,10 @@
 from typing import Literal
 from datetime import datetime
 from uuid import UUID
-from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from onboarding_rules import HUMAN_NAME_MAX_LENGTH
+from push_security import validate_push_endpoint
 
 
 class CarConnection(BaseModel):
@@ -34,10 +34,7 @@ class CarStatusResponse(BaseModel):
 
 
 def _validate_push_endpoint(value):
-    parsed = urlparse(value)
-    if parsed.scheme != "https" or not parsed.netloc or len(value) > 4096:
-        raise ValueError("endpoint must be a valid HTTPS URL")
-    return value
+    return validate_push_endpoint(value)
 
 
 class PushConfigResponse(BaseModel):
@@ -83,6 +80,7 @@ class PushSubscriptionRemoveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     endpoint: str
+    generation: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
     @field_validator("endpoint")
     @classmethod

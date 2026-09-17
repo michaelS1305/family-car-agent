@@ -34,7 +34,7 @@ class PushServiceTests(unittest.TestCase):
         self.service, self.database = load_push_service()
         self.user = CurrentUser(user_id=7, name="מיכאל", family_id=42)
         self.subscription = types.SimpleNamespace(
-            endpoint="https://push.example/subscription",
+            endpoint="https://fcm.googleapis.com/wp/subscription",
             expiration_time=None,
             keys=types.SimpleNamespace(p256dh="public-key", auth="auth-secret"),
         )
@@ -78,7 +78,7 @@ class PushServiceTests(unittest.TestCase):
             )
         self.database.upsert_push_subscription.assert_called_once_with(
             7,
-            "https://push.example/subscription",
+            "https://fcm.googleapis.com/wp/subscription",
             "public-key",
             "auth-secret",
             None,
@@ -94,25 +94,25 @@ class PushServiceTests(unittest.TestCase):
 
     def test_remove_is_idempotently_scoped_to_current_user(self):
         result = self.service.unregister_push_subscription(
-            self.user, "https://push.example/subscription"
+            self.user, "https://fcm.googleapis.com/wp/subscription"
         )
         self.assertEqual(result, {"removed": True})
         self.database.remove_push_subscription.assert_called_once_with(
-            7, "https://push.example/subscription"
+            7, "https://fcm.googleapis.com/wp/subscription"
         )
 
     def test_actor_is_excluded_by_family_scoped_lookup_and_other_devices_receive(self):
         self.database.get_family_push_subscriptions.return_value = [
             {
                 "id": 11,
-                "endpoint": "https://push.example/mother-phone",
+                "endpoint": "https://fcm.googleapis.com/wp/mother-phone",
                 "p256dh": "p1",
                 "auth": "a1",
                 "updated_at": "snapshot",
             },
             {
                 "id": 12,
-                "endpoint": "https://push.example/mother-desktop",
+                "endpoint": "https://fcm.googleapis.com/wp/mother-desktop",
                 "p256dh": "p2",
                 "auth": "a2",
                 "updated_at": "snapshot",
@@ -129,7 +129,7 @@ class PushServiceTests(unittest.TestCase):
                 event_id=81,
                 transition="connected",
             )
-        self.database.get_family_push_subscriptions.assert_called_once_with(42, 7)
+        self.database.get_family_push_subscriptions.assert_called_once_with(42, 7, 81)
         self.assertEqual(sender.call_count, 2)
         payload = sender.call_args.args[1]
         self.assertEqual(payload["body"], "מיכאל לקח את הרכב")
@@ -137,7 +137,7 @@ class PushServiceTests(unittest.TestCase):
 
     def test_disconnect_copy_is_deterministic(self):
         self.database.get_family_push_subscriptions.return_value = [
-            {"id": 11, "endpoint": "https://push.example/one", "p256dh": "p", "auth": "a", "updated_at": "s"}
+            {"id": 11, "endpoint": "https://fcm.googleapis.com/wp/one", "p256dh": "p", "auth": "a", "updated_at": "s"}
         ]
         sender = Mock()
         with patch.dict(os.environ, self.environment, clear=True), patch.object(
@@ -154,8 +154,8 @@ class PushServiceTests(unittest.TestCase):
 
     def test_one_provider_failure_does_not_stop_other_subscriptions(self):
         subscriptions = [
-            {"id": 1, "endpoint": "https://push.example/one", "p256dh": "p1", "auth": "a1", "updated_at": "s1"},
-            {"id": 2, "endpoint": "https://push.example/two", "p256dh": "p2", "auth": "a2", "updated_at": "s2"},
+            {"id": 1, "endpoint": "https://fcm.googleapis.com/wp/one", "p256dh": "p1", "auth": "a1", "updated_at": "s1"},
+            {"id": 2, "endpoint": "https://fcm.googleapis.com/wp/two", "p256dh": "p2", "auth": "a2", "updated_at": "s2"},
         ]
         self.database.get_family_push_subscriptions.return_value = subscriptions
         sender = Mock(side_effect=[RuntimeError("provider down"), None])
@@ -171,7 +171,7 @@ class PushServiceTests(unittest.TestCase):
 
     def test_only_404_and_410_remove_snapshot_subscription(self):
         subscription = {
-            "id": 1, "endpoint": "https://push.example/dead", "p256dh": "p",
+            "id": 1, "endpoint": "https://fcm.googleapis.com/wp/dead", "p256dh": "p",
             "auth": "a", "updated_at": "snapshot",
         }
         self.database.get_family_push_subscriptions.return_value = [subscription]
@@ -202,6 +202,15 @@ class PushServiceTests(unittest.TestCase):
             )
         self.database.get_family_push_subscriptions.assert_not_called()
         sender.assert_not_called()
+
+    def test_dispatch_limit_and_generation_are_enforced_even_for_legacy_results(self):
+        import hashlib
+        subscription = {"id": 1, "endpoint": "https://fcm.googleapis.com/wp/one", "p256dh": "p", "auth": "a", "updated_at": "s"}
+        self.database.get_family_push_subscriptions.return_value = [subscription] * 100
+        with patch.dict(os.environ, self.environment, clear=True), patch.object(self.service, '_webpush') as sender:
+            self.service.dispatch_car_transition_notification(family_id=42, actor_user_id=7, actor_name='name', event_id=1, transition='connected')
+        self.assertEqual(sender.call_count, 50)
+        self.assertEqual(sender.call_args.args[1]['generation'], hashlib.sha256(b'https://fcm.googleapis.com/wp/one\np\na').hexdigest())
 
 
 if __name__ == "__main__":

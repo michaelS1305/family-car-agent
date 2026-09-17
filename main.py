@@ -289,7 +289,7 @@ def unregister_push(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     try:
-        return unregister_push_subscription(current_user, request.endpoint)
+        return unregister_push_subscription(current_user, request.endpoint, request.generation)
     except PushServiceError as error:
         _raise_push_error(error)
 

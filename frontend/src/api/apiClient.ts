@@ -1192,6 +1192,7 @@ export async function removePushSubscription(
   accessToken: string,
   endpoint: string,
   options: RequestOptions = {},
+  generation?: string,
 ) {
   await pushRequest(
     '/api/push/subscriptions/remove',
@@ -1199,7 +1200,7 @@ export async function removePushSubscription(
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ endpoint }),
+      body: JSON.stringify({ endpoint, generation }),
     },
     options,
   )
