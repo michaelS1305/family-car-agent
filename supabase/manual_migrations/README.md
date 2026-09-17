@@ -123,3 +123,17 @@ confirmation/family row locks. Google runs outside these transactions. Both
 Create and Update recheck the inclusive 50-metre location invariant under that
 same lock; Update excludes its own family before LIMIT. Successful writes delete
 the confirmation atomically. Issuance also deletes at most 100 expired rows.
+
+`2026091701_revoke_browser_broadcast_execute.sql` was manually executed successfully
+in production. Operator-reported verification confirmed broadcaster EXECUTE is
+false for `anon`/`authenticated` and true for `postgres`/`service_role`.
+The receive helper retains EXECUTE for all four roles.
+It transactionally revokes only `anon`/`authenticated` EXECUTE on the exact
+`public.broadcast_car_status_changed()` trigger function. `postgres` and
+`service_role` access, both function definitions, the trigger, and Realtime RLS
+remain unchanged. Receive authorization still uses
+`public.can_receive_car_status_topic(text)`; its privileges are not modified.
+Missing function/roles fail the transaction; repeating the revoke is harmless.
+Fresh authenticated private-channel reception for connect/disconnect and
+cross-family denial remain the recommended Realtime regression smoke checks;
+this execution report confirms privileges, not those smoke-test results.
