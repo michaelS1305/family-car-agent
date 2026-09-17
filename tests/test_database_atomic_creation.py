@@ -59,6 +59,10 @@ def load_database_module_without_real_connection():
     ), patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
         spec.loader.exec_module(module)
 
+    # These existing unit/operation fixtures isolate identity fencing. Real
+    # identity + deletion races are exercised in test_account_deletion.py.
+    module.require_auth = Mock()
+    module.require_user = Mock()
     return module
 
 
@@ -457,7 +461,8 @@ class FamilyProfileDatabaseTests(unittest.TestCase):
         self.assertEqual(parameters, (42, 17, "child", "public-ref"))
         self.assertTrue(transaction.committed)
         database.pool.connection.assert_called_once_with()
-        self.connection.execute.assert_called_once()
+        self.assertEqual(self.connection.execute.call_count, 2)
+        self.assertIn('pg_advisory_xact_lock', self.connection.execute.call_args_list[0].args[0])
 
     def test_address_update_is_atomic_and_creator_scoped(self):
         transaction = RecordingContext()

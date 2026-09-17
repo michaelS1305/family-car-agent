@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import JSONResponse
+from account_deletion_api import router as deletion_router, deletion_lifespan
+from deletion_gate import IdentityUnavailable
 
 load_dotenv()
 
@@ -114,7 +116,16 @@ def _cors_allowed_origins() -> list[str]:
     return origins
 
 
-app = FastAPI()
+app = FastAPI(lifespan=deletion_lifespan)
+app.include_router(deletion_router)
+
+
+@app.exception_handler(IdentityUnavailable)
+async def identity_unavailable(request, exc):
+    return JSONResponse(status_code=403, content={'detail': {
+        'code': 'ACCOUNT_UNAVAILABLE',
+        'message': 'החשבון אינו זמין או נמצא בתהליך מחיקה.',
+    }})
 
 
 @app.exception_handler(RequestValidationError)

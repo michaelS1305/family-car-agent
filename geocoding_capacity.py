@@ -4,6 +4,7 @@ import math
 from uuid import uuid4
 
 from database import pool
+from deletion_gate import require_auth
 from geocoding_limits import (
     PERMIT_SECONDS,
     PROVIDER_CALL_DEADLINE_SECONDS,
@@ -64,6 +65,7 @@ def _acquire(auth_user_id):
 
     attempt_id = str(uuid4())
     with pool.connection() as conn:
+        require_auth(conn, auth_user_id)
         with conn.transaction():
             policy = conn.execute(
                 "SELECT max_concurrency FROM geocoding_capacity_policies "

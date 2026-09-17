@@ -2,6 +2,7 @@
 import logging
 import time
 from uuid import uuid4
+from deletion_gate import require_request
 
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ class AttemptExpired(Exception):
 def acquire(pool, request_id, token):
     permit_id = str(uuid4())
     with pool.connection() as conn:
+        require_request(conn, request_id)
         with conn.transaction():
             # All acquisitions use the same lock order: policy, then request.
             policy = conn.execute(

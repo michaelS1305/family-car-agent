@@ -11,6 +11,7 @@ import { useAppPreferences } from '../preferences/useAppPreferences'
 import type { TextSizePreference, ThemePreference } from '../preferences/appPreferences'
 import { DashboardCategoryIcon } from './DashboardCategoryIcon'
 import { LegalDocumentScreen } from './LegalDocumentScreen'
+import { AccountDeletionPanel } from './AccountDeletionPanel'
 
 const THEME_OPTIONS: ReadonlyArray<{ value: ThemePreference; label: string }> = [
   { value: 'system', label: 'מערכת' }, { value: 'light', label: 'בהיר' }, { value: 'dark', label: 'כהה' },
@@ -19,7 +20,7 @@ const TEXT_SIZE_OPTIONS: ReadonlyArray<{ value: TextSizePreference; label: strin
   { value: 'small', label: 'קטן' }, { value: 'normal', label: 'רגיל' }, { value: 'large', label: 'גדול' },
 ]
 type PushUiState = CurrentDevicePushState | 'loading' | 'enabling' | 'disabling' | 'error'
-type SettingsPage = 'main' | 'location' | 'carplay' | 'privacy' | 'terms' | 'about' | 'contact' | 'privacy-policy' | 'terms-document'
+type SettingsPage = 'main' | 'location' | 'carplay' | 'privacy' | 'terms' | 'about' | 'contact' | 'privacy-policy' | 'terms-document' | 'deletion'
 
 function permissionLabel() { return notificationPermissionLabel(currentNotificationPermission()) }
 function notificationStateLabel(state: PushUiState) {
@@ -140,7 +141,9 @@ export function SettingsScreen({ open, userName, userEmail, accessToken, version
   const detailBack = () => setPage('main')
 
   let content: ReactNode
-  if (page === 'privacy-policy' || page === 'terms-document') {
+  if (page === 'deletion') {
+    content = <AccountDeletionPanel accessToken={accessToken} onBack={detailBack} onLogout={onLogout} />
+  } else if (page === 'privacy-policy' || page === 'terms-document') {
     const kind: LegalDocumentKind = page === 'privacy-policy' ? 'privacy' : 'terms'
     content = <LegalDocumentScreen kind={kind} onBack={() => setPage(kind)} />
   } else if (page === 'location') {
@@ -173,7 +176,7 @@ export function SettingsScreen({ open, userName, userEmail, accessToken, version
         {pushError ? <div className="settings-inline-error" role="status"><p>{pushError}</p>{pushState === 'error' || !pushConfig ? <button type="button" onClick={() => { setPushState('loading'); setPushLoadAttempt((value) => value + 1) }}>נסו שוב</button> : null}</div> : null}
       </div></section>
       <section className="settings-group" aria-label="מידע משפטי ואודות"><div className="settings-card"><button type="button" className="settings-row" onClick={() => setPage('privacy')}><span>פרטיות</span><span className="settings-row-value">פתיחה ‹</span></button><button type="button" className="settings-row" onClick={() => setPage('terms')}><span>תנאי שימוש</span><span className="settings-row-value">פתיחה ‹</span></button><button type="button" className="settings-row" onClick={() => setPage('about')}><span>אודות</span><span className="settings-row-value">פתיחה ‹</span></button></div></section>
-      <section className="settings-group" aria-label="פעולות חשבון"><div className="settings-card"><button type="button" className="settings-row settings-row-danger" disabled={loggingOut} onClick={() => void logout()}><span>{loggingOut ? 'מתנתקים…' : 'התנתקות'}</span><span /></button></div></section>
+      <section className="settings-group" aria-label="פעולות חשבון"><div className="settings-card"><button type="button" className="settings-row settings-row-danger" disabled={loggingOut} onClick={() => void logout()}><span>{loggingOut ? 'מתנתקים…' : 'התנתקות'}</span><span /></button><button type="button" className="settings-row settings-row-danger" onClick={() => setPage('deletion')}><span>מחיקת חשבון</span><span>‹</span></button></div></section>
     </div></div>
   }
   return <section className={`category-placeholder-screen settings-screen${open ? ' is-open' : ''}`} dir="rtl" role="dialog" aria-modal="true" aria-label="הגדרות" aria-hidden={!open} inert={!open}>{page === 'main' ? <header className="dashboard-header category-placeholder-header"><button ref={backButtonRef} type="button" onClick={() => { setPage('main'); onBack() }} aria-label="חזרה ללוח הבקרה"><span aria-hidden="true">×</span></button><h1>Family Car Agent</h1><span aria-hidden="true" /></header> : null}{content}</section>

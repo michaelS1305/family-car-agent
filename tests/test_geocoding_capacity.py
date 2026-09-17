@@ -23,6 +23,11 @@ with patch.dict(sys.modules, {"database": database_stub}):
 
 
 class GeocodingCapacityUnitTests(unittest.TestCase):
+    def setUp(self):
+        guard = patch.object(capacity, 'require_auth')
+        guard.start()
+        self.addCleanup(guard.stop)
+
     def test_logging_failure_does_not_change_capacity_rejection(self):
         rejection = capacity.GeocodingAdmissionError(
             "GEOCODING_RATE_LIMITED", 429, 8
@@ -228,6 +233,9 @@ class GeocodingPostgresConcurrencyTests(unittest.TestCase):
             raise RuntimeError("Only explicitly named local test_gemini databases are permitted")
 
     def setUp(self):
+        guard = patch.object(capacity, 'require_auth')
+        guard.start()
+        self.addCleanup(guard.stop)
         self.schema = "geocoding_test_" + uuid4().hex
         with self.psycopg.connect(self.dsn) as conn:
             conn.execute(self.sql.SQL("CREATE SCHEMA {}").format(self.sql.Identifier(self.schema)))

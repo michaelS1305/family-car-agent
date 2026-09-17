@@ -20,6 +20,11 @@ from identity import CurrentUser
 
 
 class CapacityUnitTests(unittest.TestCase):
+    def setUp(self):
+        guard = patch.object(capacity, 'require_request')
+        guard.start()
+        self.addCleanup(guard.stop)
+
     def test_provider_timeout_retry_latency_and_connection_boundary(self):
         pool = Mock()
         wrapper = capacity.ProviderCalls(pool, 1, 'attempt', 'request', time.monotonic())
@@ -197,6 +202,9 @@ class PostgresConcurrencyTests(unittest.TestCase):
             raise RuntimeError('Only explicitly named local test_gemini databases are permitted')
 
     def setUp(self):
+        guard = patch.object(capacity, 'require_request')
+        guard.start()
+        self.addCleanup(guard.stop)
         self.schema = 'gemini_test_' + uuid4().hex
         with self.psycopg.connect(self.dsn) as conn:
             conn.execute(self.sql.SQL('CREATE SCHEMA {}').format(self.sql.Identifier(self.schema)))

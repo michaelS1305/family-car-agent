@@ -3,6 +3,84 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import { notificationPermissionLabel } from '../src/push/pushNotifications.ts'
+import { confirmAccountDeletion, getDeletionPreview, getDeletionStatus, getCurrentUser, ApiRequestError } from '../src/api/apiClient.ts'
+import { clearDeletionLocalState } from '../src/auth/deletionCleanup.ts'
+import { createDeletionSubmissionGuard } from '../src/auth/deletionSubmission.ts'
+
+const deletionSource = readFileSync(new URL('../src/components/AccountDeletionPanel.tsx', import.meta.url), 'utf8')
+
+test('deletion requests derive target only from bearer identity and require explicit confirmation', async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = []
+  const fetcher = (async (url: string, init: RequestInit) => {
+    calls.push({ url, init })
+    return new Response(JSON.stringify(init.method === 'POST' ? { status: 'draining' } : { status: 'auth_pending' }), { status: 202 })
+  }) as typeof fetch
+  assert.deepEqual(await confirmAccountDeletion('test-bearer', { fetcher }), { status: 'draining' })
+  assert.equal(calls[0].url, '/api/account/deletion')
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { confirmation: 'DELETE_MY_ACCOUNT' })
+  assert.equal((calls[0].init.headers as Record<string, string>).Authorization, 'Bearer test-bearer')
+  assert.deepEqual(await getDeletionStatus('test-bearer', { fetcher }), { status: 'auth_pending' })
+  assert.equal(calls[1].init.body, undefined)
+})
+
+test('deletion preview and status reject malformed responses and preserve errors', async () => {
+  for (const consequence of ['personal', 'management_transferred', 'family_deleted']) {
+    const fetcher = (async () => new Response(JSON.stringify({ consequence }))) as typeof fetch
+    assert.deepEqual(await getDeletionPreview('token', { fetcher }), { consequence })
+  }
+  const malformed = (async () => new Response(JSON.stringify({ status: ['completed'] }))) as typeof fetch
+  await assert.rejects(getDeletionStatus('token', { fetcher: malformed }), ApiRequestError)
+  const failed = (async () => { throw new Error('network') }) as typeof fetch
+  await assert.rejects(confirmAccountDeletion('token', { fetcher: failed }), ApiRequestError)
+})
+
+test('pending deletion is never misclassified as unmapped onboarding', async () => {
+  const fetcher = (async () => new Response(JSON.stringify({ detail: { code: 'ACCOUNT_UNAVAILABLE' } }), { status: 403 })) as typeof fetch
+  await assert.rejects(getCurrentUser('token', { fetcher, baseUrl: 'http://backend.test' }), (error: unknown) => error instanceof ApiRequestError && error.code === 'ACCOUNT_UNAVAILABLE')
+})
+
+test('deletion submission prevents parallel and already-accepted double submission', async () => {
+  const submit = createDeletionSubmissionGuard()
+  let finish!: (accepted: boolean) => void
+  let calls = 0
+  const operation = () => { calls++; return new Promise<boolean>((resolve) => { finish = resolve }) }
+  const first = submit(operation)
+  await submit(operation)
+  assert.equal(calls, 1)
+  finish(true); await first
+  await submit(operation)
+  assert.equal(calls, 1)
+})
+
+test('uncertain deletion submission remains retryable without claiming success', async () => {
+  const submit = createDeletionSubmissionGuard()
+  let calls = 0
+  await submit(async () => { calls++; return false })
+  await submit(async () => { calls++; return true })
+  assert.equal(calls, 2)
+})
+
+test('local deletion cleanup removes only FCA drafts/preferences/pending chat, not unrelated storage', () => {
+  const values = new Map([['family-car-agent:onboarding-draft', 'private'], ['family-car-agent:chat-pending:v1:id', 'private'], ['family-car-agent:carplay-setup', 'private'], ['family-car-agent:preferences', '{}'], ['other-app', 'keep']])
+  const storage = { get length() { return values.size }, key: (index: number) => [...values.keys()][index] ?? null, removeItem: (key: string) => { values.delete(key) } } as Storage
+  clearDeletionLocalState([storage])
+  assert.deepEqual([...values], [['other-app', 'keep']])
+  assert.doesNotThrow(() => clearDeletionLocalState([{ get length() { throw new Error('restricted') } } as Storage, null]))
+})
+
+test('deletion UI warns for all authoritative consequences and reports pending truthfully', () => {
+  assert.match(deletionSource, /לא ניתן לבטל את המחיקה/)
+  assert.match(deletionSource, /management_transferred/)
+  assert.match(deletionSource, /family_deleted/)
+  assert.match(deletionSource, /ניהול המשפחה יועבר/)
+  assert.match(deletionSource, /גם המשפחה והמידע שלה/)
+  assert.match(deletionSource, /אני מאשר\/ת מחיקה לצמיתות/)
+  assert.match(deletionSource, /submitOnce\.current/)
+  assert.match(deletionSource, /ההשלמה תימשך גם לאחר סגירת האפליקציה/)
+  assert.match(deletionSource, /phase === 'completed' \? <p role="status">החשבון נמחק/)
+  assert.match(deletionSource, /await onLogout\(\)/)
+  assert.match(deletionSource, /clearLocal\(\)/)
+})
 
 const settingsSource = readFileSync(
   new URL('../src/components/SettingsScreen.tsx', import.meta.url),
