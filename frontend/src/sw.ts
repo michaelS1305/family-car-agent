@@ -8,6 +8,7 @@ import {
 } from 'workbox-precaching'
 import { NavigationRoute, registerRoute } from 'workbox-routing'
 import { parsePushNotificationPayload } from './push/pushPayload'
+import { generationStore, mayDisplayPush, withPushDisplayLock } from './push/pushGeneration'
 
 declare let self: ServiceWorkerGlobalScope & typeof globalThis
 
@@ -27,12 +28,15 @@ self.addEventListener('push', (event) => {
   const payload = parsePushNotificationPayload(rawPayload)
   if (!payload) return
 
-  event.waitUntil(self.registration.showNotification(payload.title, {
+  event.waitUntil(withPushDisplayLock(async () => {
+    if (!mayDisplayPush(await generationStore.read(), payload.generation)) return
+    await self.registration.showNotification(payload.title, {
     body: payload.body,
     icon: '/icons/family-car-agent-192.png',
     tag: payload.tag,
     data: { url: '/' },
-  }))
+    })
+  }).catch(() => { /* Missing/unreadable state fails closed. */ }))
 })
 
 self.addEventListener('notificationclick', (event) => {

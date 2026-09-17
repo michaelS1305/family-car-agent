@@ -18,26 +18,26 @@ class PushSubscriptionDatabaseTests(unittest.TestCase):
     def test_upsert_is_idempotent_only_for_the_same_owner(self):
         cursor = Mock()
         cursor.fetchone.return_value = (91,)
-        self.connection.execute.return_value = cursor
+        self.connection.execute.side_effect = [Mock(), Mock(fetchone=Mock(return_value=(7,))), cursor]
 
         result = database.upsert_push_subscription(
-            7, "https://push.example/device", "p256dh", "auth", None
+            7, "https://fcm.googleapis.com/wp/device", "p256dh", "auth", None
         )
 
         self.assertEqual(result, 91)
         sql, parameters = self.connection.execute.call_args.args
         self.assertIn("ON CONFLICT (endpoint) DO UPDATE", sql)
         self.assertIn("WHERE push_subscriptions.user_id = EXCLUDED.user_id", sql)
-        self.assertEqual(parameters[:4], (7, "https://push.example/device", "p256dh", "auth"))
+        self.assertEqual(parameters[:4], (7, "https://fcm.googleapis.com/wp/device", "p256dh", "auth"))
 
     def test_endpoint_owned_by_another_user_is_not_transferred(self):
         cursor = Mock()
-        cursor.fetchone.return_value = None
+        cursor.fetchone.return_value = (99,)
         self.connection.execute.return_value = cursor
 
         with self.assertRaises(database.PushSubscriptionOwnershipError):
             database.upsert_push_subscription(
-                7, "https://push.example/foreign", "p256dh", "auth", None
+                7, "https://fcm.googleapis.com/wp/foreign", "p256dh", "auth", None
             )
 
     def test_one_user_can_register_multiple_endpoint_rows(self):
@@ -45,22 +45,23 @@ class PushSubscriptionDatabaseTests(unittest.TestCase):
         first.fetchone.return_value = (1,)
         second = Mock()
         second.fetchone.return_value = (2,)
-        self.connection.execute.side_effect = [first, second]
+        self.connection.execute.side_effect = [Mock(), Mock(fetchone=Mock(return_value=None)), Mock(fetchone=Mock(return_value=(0,))), first,
+                                               Mock(), Mock(fetchone=Mock(return_value=None)), Mock(fetchone=Mock(return_value=(1,))), second]
 
         ids = [
             database.upsert_push_subscription(7, endpoint, "p", "a", None)
-            for endpoint in ("https://push.example/phone", "https://push.example/desktop")
+            for endpoint in ("https://fcm.googleapis.com/wp/phone", "https://fcm.googleapis.com/wp/desktop")
         ]
 
         self.assertEqual(ids, [1, 2])
-        self.assertEqual(self.connection.execute.call_count, 2)
+        self.assertEqual(self.connection.execute.call_count, 8)
 
     def test_remove_scopes_foreign_and_missing_endpoints_to_current_user(self):
-        database.remove_push_subscription(7, "https://push.example/device")
+        database.remove_push_subscription(7, "https://fcm.googleapis.com/wp/device")
 
         sql, parameters = self.connection.execute.call_args.args
         self.assertIn("WHERE user_id = %s AND endpoint = %s", sql)
-        self.assertEqual(parameters, (7, "https://push.example/device"))
+        self.assertEqual(parameters, (7, "https://fcm.googleapis.com/wp/device"))
 
     def test_fanout_query_is_family_scoped_and_excludes_actor_user(self):
         cursor = Mock()
@@ -75,12 +76,12 @@ class PushSubscriptionDatabaseTests(unittest.TestCase):
         self.assertIn("u.auth_user_id IS NOT NULL", sql)
         self.assertIn("u.id <> %s", sql)
         self.assertIn("ps.expiration_time IS NULL OR ps.expiration_time > NOW()", sql)
-        self.assertEqual(parameters, (42, 7))
+        self.assertEqual(parameters, (42, 7, 5, 0, 50))
 
     def test_dead_cleanup_uses_the_complete_subscription_snapshot(self):
         subscription = {
             "id": 91,
-            "endpoint": "https://push.example/device",
+            "endpoint": "https://fcm.googleapis.com/wp/device",
             "p256dh": "p",
             "auth": "a",
             "updated_at": "2026-09-06T12:00:00+00:00",

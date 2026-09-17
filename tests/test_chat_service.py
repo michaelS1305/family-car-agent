@@ -243,15 +243,16 @@ class ChatOrchestrationTests(unittest.TestCase):
         self.assertIn("safe_message=[redacted]", log_line)
         self.assertNotIn("private-access-token", log_line)
 
-    def test_safe_provider_message_keeps_non_sensitive_status(self):
+    def test_provider_text_is_never_logged(self):
         provider_error_type = type(
             "ClientError",
             (RuntimeError,),
             {"__module__": "google.genai.errors"},
         )
         error = provider_error_type(
-            "429 RESOURCE_EXHAUSTED: prepayment credits depleted"
+            "רחוב הרצל 12 מיכאל prompt fragment unlabeled123456 RESOURCE_EXHAUSTED"
         )
+        error.code = 429
 
         with self.assertLogs(chat.logger, level="WARNING") as captured:
             chat._log_chat_processing_failure(
@@ -261,7 +262,9 @@ class ChatOrchestrationTests(unittest.TestCase):
                 11,
             )
 
-        self.assertIn("RESOURCE_EXHAUSTED", captured.output[0])
+        self.assertIn("provider_status=429", captured.output[0])
+        for private in ('הרצל', 'מיכאל', 'prompt fragment', 'unlabeled123456', 'RESOURCE_EXHAUSTED'):
+            self.assertNotIn(private, captured.output[0])
 
 
 class RecordingTransaction:

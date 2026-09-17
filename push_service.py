@@ -1,6 +1,10 @@
 import json
 import logging
 import os
+import time
+import hashlib
+import requests
+from push_security import validate_push_endpoint, PushSubscriptionLimitError, PUSH_DISPATCH_LIMIT
 from urllib.parse import urlparse
 
 from database import (
@@ -68,6 +72,10 @@ def get_public_push_config(current_user: CurrentUser):
 
 def register_push_subscription(current_user: CurrentUser, subscription):
     _require_family(current_user)
+    try:
+        validate_push_endpoint(subscription.endpoint)
+    except ValueError as error:
+        raise PushServiceError('PUSH_ENDPOINT_INVALID', 'Unsupported Push endpoint', 422) from error
     if not _enabled():
         raise PushServiceError("PUSH_DISABLED", "Web Push is disabled", 503)
     _config()
@@ -79,6 +87,8 @@ def register_push_subscription(current_user: CurrentUser, subscription):
             subscription.keys.auth,
             subscription.expiration_time,
         )
+    except PushSubscriptionLimitError as error:
+        raise PushServiceError('PUSH_DEVICE_LIMIT', 'הגעתם למגבלת חמשת המכשירים. הסירו מכשיר קודם לפני הוספת מכשיר חדש.', 409) from error
     except PushSubscriptionOwnershipError as error:
         raise PushServiceError(
             "PUSH_SUBSCRIPTION_OWNED_BY_ANOTHER_USER",
@@ -88,9 +98,12 @@ def register_push_subscription(current_user: CurrentUser, subscription):
     return {"registered": True}
 
 
-def unregister_push_subscription(current_user: CurrentUser, endpoint):
+def unregister_push_subscription(current_user: CurrentUser, endpoint, generation=None):
     _require_family(current_user)
-    remove_push_subscription(current_user.user_id, endpoint)
+    if generation is None:
+        remove_push_subscription(current_user.user_id, endpoint)
+    else:
+        remove_push_subscription(current_user.user_id, endpoint, generation)
     return {"removed": True}
 
 
@@ -103,17 +116,31 @@ def _require_family(current_user):
         )
 
 
+class PushTransport(requests.Session):
+    def __init__(self):
+        super().__init__()
+        self.trust_env = False
+
+    def request(self, method, url, **kwargs):
+        validate_push_endpoint(url)
+        kwargs['allow_redirects'] = False
+        return super().request(method, url, **kwargs)
+
+
 def _webpush(subscription_info, payload, config):
     from pywebpush import webpush
 
-    return webpush(
+    validate_push_endpoint(subscription_info['endpoint'])
+    with PushTransport() as transport:
+        return webpush(
         subscription_info=subscription_info,
         data=json.dumps(payload, ensure_ascii=False),
         vapid_private_key=config["private_key"],
         vapid_claims={"sub": config["subject"]},
         ttl=300,
         timeout=5,
-    )
+        requests_session=transport,
+        )
 
 
 def _response_status(error):
@@ -153,7 +180,7 @@ def dispatch_car_transition_notification(
         "tag": f"car-event-{event_id}",
     }
     try:
-        subscriptions = get_family_push_subscriptions(family_id, actor_user_id)
+        subscriptions = get_family_push_subscriptions(family_id, actor_user_id, event_id)
     except Exception:
         logger.error(
             "operation=push_dispatch event_type=%s car_event_id=%s status=subscription_lookup_failed",
@@ -164,8 +191,13 @@ def dispatch_car_transition_notification(
     delivered = 0
     failed = 0
     removed = 0
-    for subscription in subscriptions:
+    deadline = time.monotonic() + 10
+    for subscription in subscriptions[:PUSH_DISPATCH_LIMIT]:
+        if time.monotonic() >= deadline:
+            break
         try:
+            validate_push_endpoint(subscription['endpoint'])
+            generation = hashlib.sha256(('\n'.join((subscription['endpoint'], subscription['p256dh'], subscription['auth']))).encode()).hexdigest()
             _webpush(
                 {
                     "endpoint": subscription["endpoint"],
@@ -174,7 +206,7 @@ def dispatch_car_transition_notification(
                         "auth": subscription["auth"],
                     },
                 },
-                payload,
+                {**payload, 'generation': generation},
                 config,
             )
             delivered += 1

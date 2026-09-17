@@ -12,6 +12,7 @@ from reservation_rules import (
 )
 from dotenv import load_dotenv
 from deletion_gate import require_auth, require_user
+from push_security import PUSH_DEVICE_LIMIT, PUSH_DISPATCH_LIMIT, PushSubscriptionLimitError, validate_push_endpoint
 from onboarding_rules import (
     NAME_SQL_TRANSLATE_SOURCE,
     NAME_SQL_TRANSLATE_TARGET,
@@ -587,6 +588,7 @@ def upsert_push_subscription(
     auth,
     expiration_time_milliseconds=None,
 ):
+    validate_push_endpoint(endpoint)
     expiration_time = None
     if expiration_time_milliseconds is not None:
         expiration_time = datetime.fromtimestamp(
@@ -596,6 +598,16 @@ def upsert_push_subscription(
 
     with pool.connection() as conn:
         require_user(conn, user_id)
+        # Existing user row serializes check+insert across processes; deletion
+        # takes the exclusive identity gate before it can reach this row.
+        conn.execute('SELECT id FROM users WHERE id=%s FOR UPDATE', (user_id,)).fetchone()
+        owned = conn.execute('SELECT user_id FROM push_subscriptions WHERE endpoint=%s', (endpoint,)).fetchone()
+        if owned and owned[0] != user_id:
+            raise PushSubscriptionOwnershipError()
+        if not owned:
+            count = conn.execute('SELECT count(*) FROM push_subscriptions WHERE user_id=%s', (user_id,)).fetchone()[0]
+            if count >= PUSH_DEVICE_LIMIT:
+                raise PushSubscriptionLimitError()
         row = conn.execute(
             """
             INSERT INTO push_subscriptions (
@@ -617,29 +629,41 @@ def upsert_push_subscription(
         return row[0]
 
 
-def remove_push_subscription(user_id, endpoint):
+def remove_push_subscription(user_id, endpoint, generation=None):
     with pool.connection() as conn:
         require_user(conn, user_id)
+        if generation is not None:
+            row = conn.execute(
+                'SELECT p256dh, auth FROM push_subscriptions WHERE user_id=%s AND endpoint=%s FOR UPDATE',
+                (user_id, endpoint),
+            ).fetchone()
+            if row is None or hashlib.sha256(('\n'.join((endpoint, row[0], row[1]))).encode()).hexdigest() != generation:
+                return
         conn.execute(
             "DELETE FROM push_subscriptions WHERE user_id = %s AND endpoint = %s",
             (user_id, endpoint),
         )
 
 
-def get_family_push_subscriptions(family_id, excluded_user_id):
+def get_family_push_subscriptions(family_id, excluded_user_id, event_id=0):
     with pool.connection() as conn:
         rows = conn.execute(
             """
-            SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth, ps.updated_at
+            WITH ranked AS (
+            SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth, ps.updated_at, ps.user_id,
+                   row_number() OVER (PARTITION BY ps.user_id ORDER BY ps.updated_at DESC, ps.id) AS device_rank
             FROM push_subscriptions ps
             JOIN users u ON u.id = ps.user_id
             WHERE u.family_id = %s
               AND u.auth_user_id IS NOT NULL
               AND u.id <> %s
               AND (ps.expiration_time IS NULL OR ps.expiration_time > NOW())
-            ORDER BY ps.id
+            ) SELECT id, endpoint, p256dh, auth, updated_at FROM ranked
+            WHERE device_rank <= %s
+            ORDER BY device_rank, md5(user_id::text || ':' || %s::text), id
+            LIMIT %s
             """,
-            (family_id, excluded_user_id),
+            (family_id, excluded_user_id, PUSH_DEVICE_LIMIT, event_id, PUSH_DISPATCH_LIMIT),
         ).fetchall()
         return [
             {

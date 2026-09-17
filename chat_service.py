@@ -1,6 +1,5 @@
 import json
 import logging
-import re
 import time
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -25,10 +24,6 @@ CHAT_LEASE_SECONDS = 120
 CHAT_HISTORY_LIMIT = 30
 MODEL_HISTORY_LIMIT = 10
 RESERVATION_LOCK_NAMESPACE = 1178686274
-SENSITIVE_LOG_PATTERN = re.compile(
-    r"(?i)(authorization|bearer|api[_-]?key|secret|shortcut[_-]?token|"
-    r"postgres(?:ql)?://|[?&]key=)"
-)
 
 
 class ChatError(Exception):
@@ -56,35 +51,38 @@ class ChatLeaseLostError(ChatError):
         )
 
 
-def _safe_exception_message(error):
-    if not type(error).__module__.startswith("google.genai.errors"):
-        return "[redacted]"
-    message = " ".join(str(error).split())
-    if not message or SENSITIVE_LOG_PATTERN.search(message):
-        return "[redacted]"
-    return message[:500]
-
-
 def _log_chat_processing_failure(
     error,
     stage,
     request_id,
     chat_request_id=None,
 ):
-    logger.warning(
+    # Provider metadata is untrusted too. Never stringify an exception/body.
+    try:
+        proposed_stage = getattr(error, "chat_stage", stage)
+        safe_stage = proposed_stage if type(proposed_stage) is str and proposed_stage in {
+            "gemini_initial_call", "gemini_followup_call", "finalization", "generation",
+        } else "unknown"
+        code = getattr(error, "code", None)
+        safe_code = code if type(code) is int and 100 <= code <= 599 else None
+        name = type(error).__name__
+        safe_class = name if name in {"RuntimeError", "TimeoutError", "ClientError", "ServerError", "APIError"} else "OtherError"
+        logger.warning(
         "Chat processing failed operation=process_chat_message stage=%s "
         "exception_class=%s "
         "provider_status=%s request_id=%s chat_request_id=%s "
         "gemini_model=%s gemini_api_key_configured=%s safe_message=%s",
-        getattr(error, "chat_stage", stage),
-        type(error).__name__,
-        getattr(error, "status_code", None),
+        safe_stage,
+        safe_class,
+        safe_code,
         request_id,
         chat_request_id,
-        getattr(error, "gemini_model", None),
-        getattr(error, "gemini_api_key_configured", None),
-        _safe_exception_message(error),
-    )
+        GEMINI_MODEL,
+        None,
+        "[redacted]",
+        )
+    except Exception:
+        pass  # Observability must not mask the original processing failure.
 
 
 def _json(value):

@@ -3,6 +3,7 @@ export type PushNotificationPayload = {
   body: string
   url: '/'
   tag: string
+  generation?: string
 }
 
 export function parsePushNotificationPayload(value: unknown): PushNotificationPayload | null {
@@ -16,6 +17,7 @@ export function parsePushNotificationPayload(value: unknown): PushNotificationPa
     || payload.url !== '/'
     || typeof payload.tag !== 'string'
     || !/^car-event-\d+$/.test(payload.tag)
+    || (payload.generation !== undefined && (typeof payload.generation !== 'string' || !/^[a-f0-9]{64}$/.test(payload.generation)))
   ) return null
   return payload as PushNotificationPayload
 }

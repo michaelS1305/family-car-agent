@@ -1,4 +1,5 @@
 import os
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Callable
@@ -7,7 +8,7 @@ from uuid import UUID
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jwt import ExpiredSignatureError, InvalidTokenError, PyJWKClient
+from jwt import ExpiredSignatureError, InvalidTokenError
 
 from identity import AuthenticatedSupabaseUser, CurrentUser
 
@@ -48,16 +49,12 @@ class SupabaseJWTVerifier:
         signing_key_resolver: Callable[[str], Any] | None = None,
     ):
         self.settings = settings
-        self._jwks_client = None
 
         if signing_key_resolver is None:
-            self._jwks_client = PyJWKClient(settings.jwks_url)
-            signing_key_resolver = self._resolve_jwks_signing_key
+            from jwks_resolver import BoundedJWKSResolver
+            signing_key_resolver = BoundedJWKSResolver(settings.jwks_url)
 
         self._signing_key_resolver = signing_key_resolver
-
-    def _resolve_jwks_signing_key(self, token):
-        return self._jwks_client.get_signing_key_from_jwt(token).key
 
     def verify(self, token):
         signing_key = self._signing_key_resolver(token)
@@ -88,8 +85,17 @@ class SupabaseJWTVerifier:
 
 
 @lru_cache
-def get_jwt_verifier():
+def _cached_jwt_verifier():
     return SupabaseJWTVerifier(SupabaseJWTSettings.from_environment())
+
+
+_verifier_lock = threading.Lock()
+
+
+def get_jwt_verifier():
+    # lru_cache alone allows duplicate initialization on concurrent cold misses.
+    with _verifier_lock:
+        return _cached_jwt_verifier()
 
 
 def lookup_internal_user(auth_user_id):

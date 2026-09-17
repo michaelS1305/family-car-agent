@@ -2,10 +2,12 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
 } from 'react'
+import { createPendingChatStorage } from '../chat/pendingChatStorage'
 import {
   ChatApiError,
   getCarStatus,
@@ -73,15 +75,6 @@ function loadPendingRequest(authUserId: string): PendingRequest | null {
   }
 }
 
-function savePendingRequest(authUserId: string, request: PendingRequest | null) {
-  const key = pendingStorageKey(authUserId)
-  if (!request) {
-    sessionStorage.removeItem(key)
-    return
-  }
-  sessionStorage.setItem(key, JSON.stringify(request))
-}
-
 function readableChatError(error: unknown) {
   if (error instanceof ChatApiError) return error.message
   return 'לא הצלחנו לטעון את השיחה כרגע.'
@@ -107,6 +100,11 @@ export function MainAppScreen({ user, userEmail, accessToken, authUserId, onLogo
   onLogout: () => Promise<void>
 }) {
   const [draftMessage, setDraftMessage] = useState('')
+  const pendingStorage = useMemo(() => createPendingChatStorage(authUserId, sessionStorage), [authUserId])
+  const logout = async () => {
+    pendingStorage.retire()
+    await onLogout()
+  }
   const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyReloadAttempt, setHistoryReloadAttempt] = useState(0)
@@ -162,7 +160,7 @@ export function MainAppScreen({ user, userEmail, accessToken, authUserId, onLogo
             retryRequest: pending,
           })
         } else if (pending) {
-          savePendingRequest(authUserId, null)
+          pendingStorage.save(null)
         }
         setMessages(displayHistory)
       })
@@ -177,7 +175,7 @@ export function MainAppScreen({ user, userEmail, accessToken, authUserId, onLogo
       active = false
       controller.abort()
     }
-  }, [accessToken, authUserId, historyReloadAttempt])
+  }, [accessToken, authUserId, historyReloadAttempt, pendingStorage])
 
   useEffect(() => {
     let active = true
@@ -278,7 +276,7 @@ export function MainAppScreen({ user, userEmail, accessToken, authUserId, onLogo
   }, [draftMessage])
 
   const submit = async (requestToRetry?: PendingRequest) => {
-    if (sending || requestRunnerRef.current.isActive()) return
+    if (pendingStorage.retired || sending || requestRunnerRef.current.isActive()) return
     const message = (requestToRetry?.message ?? draftMessage).trim()
     if (!message) return
     const request = requestToRetry ?? { requestId: crypto.randomUUID(), message }
@@ -287,7 +285,7 @@ export function MainAppScreen({ user, userEmail, accessToken, authUserId, onLogo
       onStart: () => {
         setSending(true)
         setDraftMessage((current) => draftAfterSendStarts(current, request.message))
-        savePendingRequest(authUserId, request)
+        pendingStorage.save(request)
         scrollIntentRef.current = 'smooth'
         setMessages((current) => {
           if (current.some((item) => item.localId === request.requestId)) {
@@ -315,13 +313,13 @@ export function MainAppScreen({ user, userEmail, accessToken, authUserId, onLogo
           { ...result.assistant_message, localId: `${request.requestId}-assistant` },
         ])
         setLiveAssistantText(result.assistant_message.content)
-        savePendingRequest(authUserId, null)
+        pendingStorage.save(null)
       },
       onError: (sendError) => {
         setDraftMessage((current) => draftAfterFailedSend(current))
         const canRetrySameRequest = isRetryableWithSameRequest(sendError)
         if (!canRetrySameRequest) {
-          savePendingRequest(authUserId, null)
+          pendingStorage.save(null)
         }
         setMessages((current) => current.map((item) => item.localId === request.requestId
           ? {
@@ -486,7 +484,7 @@ export function MainAppScreen({ user, userEmail, accessToken, authUserId, onLogo
         version={APP_VERSION}
         carDataRefreshVersion={carDataRefreshVersion}
         onClose={closeDashboard}
-        onLogout={onLogout}
+        onLogout={logout}
       />
     </main>
   )

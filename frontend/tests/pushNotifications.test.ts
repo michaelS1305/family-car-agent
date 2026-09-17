@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { createHash } from 'node:crypto'
+import { generationStore, mayDisplayPush, beginPushActivation, enablePushGeneration, retirePushGeneration, type PushGenerationState } from '../src/push/pushGeneration.ts'
 import {
   activatePushNotifications,
   cleanupPushBeforeLogout,
@@ -15,6 +17,8 @@ import {
 type GlobalName = 'window' | 'navigator' | 'Notification' | 'fetch'
 
 const enabledPushConfig = { enabled: true, public_vapid_key: 'AQID' }
+const token = 'e30.eyJzdWIiOiJ0ZXN0LXVzZXIifQ.eA'
+const digest = (value: string) => createHash('sha256').update(value).digest('hex')
 
 function installGlobal(name: GlobalName, value: unknown) {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, name)
@@ -39,7 +43,7 @@ function pushEnvironment(options: {
   order?: string[]
 } = {}) {
   const calls = { permission: 0, ready: 0, subscribe: 0, unsubscribe: 0, fetches: [] as string[] }
-  const subscription = options.subscription === undefined ? {
+  const defaultSubscription = {
     endpoint: 'https://push.example/device',
     expirationTime: null,
     toJSON: () => ({ keys: { p256dh: 'browser-public-key', auth: 'browser-auth' } }),
@@ -48,16 +52,24 @@ function pushEnvironment(options: {
       options.order?.push('unsubscribe')
       return true
     },
-  } : options.subscription
+  }
+  let subscription = options.subscription === undefined ? defaultSubscription : options.subscription
+  let state: PushGenerationState | null = { revision: 'initial', enabled: true, owner: digest('test-user\n\n'), generation: digest('https://push.example/device\nbrowser-public-key\nbrowser-auth') }
+  const originalRead = generationStore.read
+  const originalChange = generationStore.change
+  generationStore.read = async () => state
+  generationStore.change = async (update) => { state = update(state); return state }
+  let lock = Promise.resolve<unknown>(undefined)
   const pushManager = {
     getSubscription: async () => subscription,
     subscribe: async () => {
       calls.subscribe += 1
+      subscription = { ...defaultSubscription, endpoint: 'https://push.example/new-device' }
       return subscription
     },
   }
   const registration = { pushManager }
-  const serviceWorker = {}
+  const serviceWorker = { getRegistration: async () => ({ getNotifications: async () => [] }) }
   Object.defineProperty(serviceWorker, 'ready', {
     get() {
       calls.ready += 1
@@ -66,7 +78,9 @@ function pushEnvironment(options: {
   })
   const restores = [
     installGlobal('window', { isSecureContext: true, PushManager: class {}, Notification: class {} }),
-    installGlobal('navigator', { serviceWorker }),
+    installGlobal('navigator', { serviceWorker, locks: { request: (_name: string, operation: () => Promise<unknown>) => {
+      const result = lock.then(operation); lock = result.catch(() => undefined); return result
+    } } }),
     installGlobal('Notification', {
       permission: options.permission ?? 'default',
       requestPermission: async () => {
@@ -84,7 +98,11 @@ function pushEnvironment(options: {
       return jsonResponse(200, { registered: true })
     }),
   ]
-  return { calls, restore: () => restores.reverse().forEach((restore) => restore()) }
+  return { calls, state: () => state, restore: () => {
+    generationStore.read = originalRead
+    generationStore.change = originalChange
+    restores.reverse().forEach((restore) => restore())
+  } }
 }
 
 test('unsupported browsers are detected without requesting permission', () => {
@@ -130,7 +148,7 @@ test('already denied permission is not requested again', async () => {
   const environment = pushEnvironment({ permission: 'denied' })
   try {
     assert.deepEqual(
-      await activatePushNotifications('access-token', enabledPushConfig),
+      await activatePushNotifications(token, enabledPushConfig),
       { status: 'denied' },
     )
     assert.equal(environment.calls.permission, 0)
@@ -153,7 +171,7 @@ test('activation waits for service worker, reuses subscription and registers wit
   })
   try {
     assert.deepEqual(
-      await activatePushNotifications('access-token', enabledPushConfig),
+      await activatePushNotifications(token, enabledPushConfig),
       { status: 'enabled' },
     )
     assert.equal(environment.calls.permission, 0)
@@ -161,7 +179,7 @@ test('activation waits for service worker, reuses subscription and registers wit
     assert.equal(environment.calls.subscribe, 0)
     const registration = fetchCalls.find(({ url }) => url.endsWith('/api/push/subscriptions'))
     if (!registration?.init) throw new Error('registration request was not sent')
-    assert.equal((registration.init.headers as Record<string, string>).Authorization, 'Bearer access-token')
+    assert.equal((registration.init.headers as Record<string, string>).Authorization, `Bearer ${token}`)
     assert.deepEqual(JSON.parse(String(registration.init.body)), {
       endpoint: 'https://push.example/device',
       expiration_time: null,
@@ -187,7 +205,7 @@ test('permission request begins before any awaited registration work', async () 
     },
   })
   try {
-    const activation = activatePushNotifications('access-token', enabledPushConfig)
+    const activation = activatePushNotifications(token, enabledPushConfig)
     assert.deepEqual(order, ['permission'])
     await activation
     assert.equal(order[0], 'permission')
@@ -265,6 +283,89 @@ test('logout cleanup has a bounded timeout before the auth flow continues', asyn
   assert.match(source, /Promise\.race\(\[/)
   assert.match(source, /setTimeout\([\s\S]*?3000\)/)
   assert.match(source, /finally \{[\s\S]*?clearTimeout/)
+})
+
+test('retirement suppresses queued messages and fresh activation enables only the new generation', async () => {
+  const environment = pushEnvironment({ permission: 'granted' })
+  try {
+    const old = environment.state()!.generation
+    assert.equal(mayDisplayPush(environment.state(), old), true)
+    await cleanupPushBeforeLogout(token)
+    assert.equal(mayDisplayPush(environment.state(), old), false)
+    await activatePushNotifications(token, enabledPushConfig)
+    assert.equal(mayDisplayPush(environment.state(), old), false)
+    assert.equal(mayDisplayPush(environment.state(), environment.state()!.generation), true)
+    assert.equal(mayDisplayPush(environment.state(), undefined), false)
+  } finally { environment.restore() }
+})
+
+test('offline cleanup and failed unsubscribe still retire notifications', async () => {
+  const environment = pushEnvironment({ permission: 'granted', subscription: {
+    endpoint: 'https://push.example/device', expirationTime: null,
+    toJSON: () => ({ keys: { p256dh: 'browser-public-key', auth: 'browser-auth' } }),
+    unsubscribe: async () => { throw new Error('offline') },
+  } })
+  const restore = installGlobal('fetch', async () => { throw new Error('offline') })
+  try {
+    const old = environment.state()!.generation
+    assert.deepEqual(await cleanupPushBeforeLogout(token), { serverRemoved: false, browserUnsubscribed: false })
+    assert.equal(mayDisplayPush(environment.state(), old), false)
+  } finally { restore(); environment.restore() }
+})
+
+test('timed-out cleanup cannot unsubscribe the next account generation', async () => {
+  const environment = pushEnvironment({ permission: 'granted' })
+  let release!: (value: Response) => void
+  const restore = installGlobal('fetch', () => new Promise<Response>((resolve) => { release = resolve }))
+  try {
+    const old = environment.state()!.generation
+    assert.deepEqual(await cleanupPushBeforeLogout(token), { serverRemoved: false, browserUnsubscribed: false })
+    assert.equal(mayDisplayPush(environment.state(), old), false)
+    restore()
+    await activatePushNotifications('e30.eyJzdWIiOiJvdGhlci11c2VyIn0.eA', enabledPushConfig)
+    const current = environment.state()!.generation
+    release(jsonResponse(200, {}))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(mayDisplayPush(environment.state(), current), true)
+    assert.deepEqual(await disableCurrentDevicePush(token, old), { serverRemoved: false, browserUnsubscribed: false })
+    assert.equal(mayDisplayPush(environment.state(), old), false)
+  } finally { restore(); environment.restore() }
+})
+
+test('logout fences an in-flight activation and newer activation fences the old one', async () => {
+  const environment = pushEnvironment()
+  try {
+    const first = await beginPushActivation()
+    await retirePushGeneration()
+    assert.equal(await enablePushGeneration(first.ticket.revision, 'a'.repeat(64), 'owner'), false)
+    const second = await beginPushActivation()
+    const third = await beginPushActivation()
+    assert.equal(await enablePushGeneration(second.ticket.revision, 'b'.repeat(64), 'old'), false)
+    assert.equal(await enablePushGeneration(third.ticket.revision, 'c'.repeat(64), 'new'), true)
+    assert.equal(mayDisplayPush(environment.state(), 'c'.repeat(64)), true)
+  } finally { environment.restore() }
+})
+
+test('a registration response arriving after logout cannot re-enable Push', async () => {
+  const environment = pushEnvironment({ permission: 'granted' })
+  let resolveRegistration!: (value: Response) => void
+  let entered!: () => void
+  const registrationStarted = new Promise<void>((resolve) => { entered = resolve })
+  const restore = installGlobal('fetch', (input: RequestInfo | URL) => {
+    if (String(input).endsWith('/api/push/subscriptions')) {
+      entered()
+      return new Promise<Response>((resolve) => { resolveRegistration = resolve })
+    }
+    return Promise.resolve(jsonResponse(200, {}))
+  })
+  try {
+    const activation = activatePushNotifications(token, enabledPushConfig)
+    await registrationStarted
+    await cleanupPushBeforeLogout(token)
+    resolveRegistration(jsonResponse(200, { registered: true }))
+    await assert.rejects(activation, /superseded/)
+    assert.equal(environment.state()!.enabled, false)
+  } finally { restore(); environment.restore() }
 })
 
 test('application startup contains no automatic push activation or notification UI', async () => {
