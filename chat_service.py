@@ -15,6 +15,7 @@ from database import (
 from gemini_capacity import ProviderCalls, CapacityUnavailable, AttemptExpired
 from gemini_usage import GeminiUsageTotals, log_gemini_usage
 from identity import CurrentUser
+from deletion_gate import require_user, require_request, IdentityUnavailable
 from reservation_rules import ReservationValidationError, canonical_time
 
 
@@ -116,6 +117,7 @@ def _valid_completed_action(row):
 
 def _claim_request(current_user, request_id, message, lease_token):
     with pool.connection() as conn:
+        require_user(conn, current_user.user_id)
         with conn.transaction():
             conn.execute("SELECT pg_advisory_xact_lock(%s, %s)",
                          (1178686275, current_user.user_id))
@@ -215,6 +217,7 @@ def _claim_request(current_user, request_id, message, lease_token):
 def _renew_lease(chat_request_id, lease_token):
     """Compatibility name: checks ownership/deadline; never extends the lease."""
     with pool.connection() as conn:
+        require_request(conn, chat_request_id)
         renewed = conn.execute(
             """
             SELECT id FROM chat_requests
@@ -250,6 +253,7 @@ def _check_finalization_deadline(conn, chat_request_id):
 
 def _get_completed_action(chat_request_id):
     with pool.connection() as conn:
+        require_request(conn, chat_request_id)
         row = conn.execute(
             """
             SELECT action_type, result
@@ -272,6 +276,7 @@ def _execute_mutation(
     arguments,
 ):
     with pool.connection() as conn:
+        require_user(conn, current_user.user_id)
         with conn.transaction():
             request = conn.execute(
                 """
@@ -476,6 +481,7 @@ def get_chat_history(current_user, limit=CHAT_HISTORY_LIMIT):
 def _finalize_request(chat_request_id, lease_token, current_user, response):
     assistant = response["assistant_message"]
     with pool.connection() as conn:
+        require_user(conn, current_user.user_id)
         with conn.transaction():
             owned = conn.execute(
                 """
@@ -536,6 +542,7 @@ def _finalize_request(chat_request_id, lease_token, current_user, response):
 def _mark_failed(chat_request_id, lease_token, error):
     error_payload = {"detail": error.detail()}
     with pool.connection() as conn:
+        require_request(conn, chat_request_id)
         failed = conn.execute(
             """
             UPDATE chat_requests AS cr
@@ -741,6 +748,8 @@ def process_chat_message(request_id, message, current_user: CurrentUser):
             current_user,
             _response(request_id, reply),
         )
+    except IdentityUnavailable:
+        raise
     except (CapacityUnavailable, AttemptExpired) as error:
         completed_action = _get_completed_action(chat_request_id)
         if completed_action:
@@ -751,6 +760,7 @@ def process_chat_message(request_id, message, current_user: CurrentUser):
                 pass
         # Relinquish processing ownership without deleting any uncertain permit.
         with pool.connection() as conn:
+            require_user(conn, current_user.user_id)
             conn.execute(
                 """UPDATE chat_requests SET lease_expires_at = clock_timestamp()
                    WHERE id = %s AND lease_token = %s AND status = 'processing'""",

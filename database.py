@@ -11,6 +11,7 @@ from reservation_rules import (
     validate_create, validate_update, validate_target, ReservationValidationError,
 )
 from dotenv import load_dotenv
+from deletion_gate import require_auth, require_user
 from onboarding_rules import (
     NAME_SQL_TRANSLATE_SOURCE,
     NAME_SQL_TRANSLATE_TARGET,
@@ -251,6 +252,7 @@ def get_or_create_shortcut_token(user_id):
     for _ in range(3):
         try:
             with pool.connection() as conn:
+                require_user(conn, user_id)
                 with conn.transaction():
                     user = conn.execute(
                         """
@@ -288,6 +290,7 @@ def get_or_create_shortcut_token(user_id):
 
 def set_carplay_setup_status(user_id, setup_status):
     with pool.connection() as conn:
+        require_user(conn, user_id)
         updated = conn.execute(
             """
             UPDATE users
@@ -308,6 +311,8 @@ def _get_active_driver_on_connection(conn, family_id):
         FROM car_events c
         WHERE c.family_id = %s
           AND c.status = 'connected'
+          AND NOT EXISTS (SELECT 1 FROM car_events reset
+                          WHERE reset.family_id=c.family_id AND reset.status='state_reset' AND reset.id>c.id)
           AND NOT EXISTS (
               SELECT 1
               FROM car_events d
@@ -365,6 +370,7 @@ def _cleanup_car_transition_admissions():
 def admit_car_transition_request(user_id, family_id):
     """Atomically apply the shared user/family rolling admission policy."""
     with pool.connection() as conn:
+        require_user(conn, user_id)
         with conn.transaction():
             conn.execute(
                 "SELECT pg_advisory_xact_lock(%s, %s)",
@@ -433,6 +439,7 @@ def admit_car_transition_request(user_id, family_id):
 def connect_car_atomically(user_id, driver_name, family_id):
     """Apply one family-scoped connect/handover transition and commit it atomically."""
     with pool.connection() as conn:
+        require_user(conn, user_id)
         with conn.transaction():
             acquired = conn.execute(
                 "SELECT pg_try_advisory_xact_lock(%s, %s)",
@@ -474,6 +481,7 @@ def connect_car_atomically(user_id, driver_name, family_id):
 def disconnect_car_atomically(user_id, family_id):
     """Disconnect only the canonical active driver under the family lock."""
     with pool.connection() as conn:
+        require_user(conn, user_id)
         with conn.transaction():
             acquired = conn.execute(
                 "SELECT pg_try_advisory_xact_lock(%s, %s)",
@@ -514,6 +522,8 @@ def get_latest_event(family_id):
             FROM car_events c
             WHERE c.family_id = %s
               AND c.status = 'connected'
+              AND NOT EXISTS (SELECT 1 FROM car_events reset
+                              WHERE reset.family_id=c.family_id AND reset.status='state_reset' AND reset.id>c.id)
               AND NOT EXISTS (
                   SELECT 1
                   FROM car_events d
@@ -543,6 +553,8 @@ def get_active_driver(family_id):
             FROM car_events c
             WHERE c.family_id = %s
               AND c.status = 'connected'
+              AND NOT EXISTS (SELECT 1 FROM car_events reset
+                              WHERE reset.family_id=c.family_id AND reset.status='state_reset' AND reset.id>c.id)
               AND NOT EXISTS (
                   SELECT 1
                   FROM car_events d
@@ -583,6 +595,7 @@ def upsert_push_subscription(
         )
 
     with pool.connection() as conn:
+        require_user(conn, user_id)
         row = conn.execute(
             """
             INSERT INTO push_subscriptions (
@@ -606,6 +619,7 @@ def upsert_push_subscription(
 
 def remove_push_subscription(user_id, endpoint):
     with pool.connection() as conn:
+        require_user(conn, user_id)
         conn.execute(
             "DELETE FROM push_subscriptions WHERE user_id = %s AND endpoint = %s",
             (user_id, endpoint),
@@ -670,7 +684,10 @@ def get_user_by_token(shortcut_token):
             (shortcut_token,)
         )
 
-        return cursor.fetchone()
+        user = cursor.fetchone()
+        if user:
+            require_user(conn, user[0])
+        return user
 
 def get_user_by_auth_user_id(auth_user_id):
     with pool.connection() as conn:
@@ -683,7 +700,10 @@ def get_user_by_auth_user_id(auth_user_id):
             (auth_user_id,)
         )
 
-        return cursor.fetchone()
+        user = cursor.fetchone()
+        if user:
+            require_user(conn, user[0])
+        return user
 
 def get_last_driver(family_id):
     with pool.connection() as conn:
@@ -692,6 +712,7 @@ def get_last_driver(family_id):
             SELECT driver_name, status, event_time
             FROM car_events
             WHERE family_id = %s
+              AND status IN ('connected', 'disconnected')
             ORDER BY id DESC
             LIMIT 1
             """,
@@ -707,6 +728,7 @@ def get_recent_events(family_id, limit=10):
             SELECT driver_name, status, event_time
             FROM car_events
             WHERE family_id = %s
+              AND status IN ('connected', 'disconnected')
             ORDER BY id DESC
             LIMIT %s
             """,
@@ -840,6 +862,7 @@ def _create_reservation_on_connection(
 
 def create_reservation(user_id, start_time, end_time):
     with pool.connection() as conn:
+        require_user(conn, user_id)
         return _create_reservation_on_connection(
             conn,
             user_id,
@@ -919,6 +942,8 @@ def get_car_usage_history(family_id, completed_limit=50):
                 SELECT c.id, c.driver_name, c.user_id, c.event_time
                 FROM family_events AS c
                 WHERE c.status = 'connected'
+                  AND NOT EXISTS (SELECT 1 FROM family_events reset
+                                  WHERE reset.status='state_reset' AND reset.id>c.id)
                   AND NOT EXISTS (
                       SELECT 1
                       FROM family_events AS d
@@ -956,6 +981,8 @@ def get_car_usage_history(family_id, completed_limit=50):
                     LIMIT 1
                 ) AS d ON TRUE
                 WHERE c.status = 'connected'
+                  AND NOT EXISTS (SELECT 1 FROM family_events reset
+                                  WHERE reset.status='state_reset' AND reset.id>c.id AND reset.id<d.id)
             ),
             completed AS (
                 SELECT candidate.*
@@ -1031,6 +1058,7 @@ def list_family_reservations(
 
 def create_current_user_reservation(user_id, family_id, start_time, end_time):
     with pool.connection() as conn:
+        require_user(conn, user_id)
         with conn.transaction():
             conn.execute(
                 "SELECT pg_advisory_xact_lock(%s, %s)",
@@ -1055,6 +1083,7 @@ def update_current_user_reservation(
     end_time,
 ):
     with pool.connection() as conn:
+        require_user(conn, user_id)
         with conn.transaction():
             conn.execute(
                 "SELECT pg_advisory_xact_lock(%s, %s)",
@@ -1105,6 +1134,7 @@ def cancel_current_user_reservation(
     boundary_time,
 ):
     with pool.connection() as conn:
+        require_user(conn, user_id)
         with conn.transaction():
             conn.execute(
                 "SELECT pg_advisory_xact_lock(%s, %s)",
@@ -1185,6 +1215,7 @@ def _cancel_reservation_on_connection(conn, reservation_id, user_id, family_id):
 
 def cancel_reservation(reservation_id, user_id, family_id):
     with pool.connection() as conn:
+        require_user(conn, user_id)
         return _cancel_reservation_on_connection(
             conn,
             reservation_id,
@@ -1201,6 +1232,7 @@ def update_reservation(
     end_time,
 ):
     with pool.connection() as conn:
+        require_user(conn, user_id)
         with conn.transaction():
             return _update_reservation_on_connection(
                 conn,
@@ -1295,6 +1327,7 @@ def _update_reservation_on_connection(
 
 def save_conversation_message(user_id, role, content):
     with pool.connection() as conn:
+        require_user(conn, user_id)
         conn.execute(
             """
             INSERT INTO conversation_messages (
@@ -1383,6 +1416,7 @@ def _allocate_family_code(conn, assign, excluded_code=None):
 
 def regenerate_family_code(user_id, family_id):
     with pool.connection() as conn:
+        require_user(conn, user_id)
         with conn.transaction():
             # Same order as Create, Join verification and completion: advisory
             # lock first, then family/session rows. No network I/O under locks.
@@ -1437,6 +1471,7 @@ def issue_family_address_confirmation(
     raw_token = secrets.token_urlsafe(32)
     digest = _confirmation_digest(raw_token)
     with pool.connection() as conn:
+        require_auth(conn, auth_user_id)
         with conn.transaction():
             conn.execute("SELECT pg_advisory_xact_lock(%s)", (PWA_FAMILY_CREATION_LOCK_ID,))
             # Lock the previous confirmation before any family rows, just as
@@ -1505,6 +1540,7 @@ def create_family_with_first_user(
 ):
     try:
         with pool.connection() as conn:
+            require_auth(conn, auth_user_id)
             with conn.transaction():
                 conn.execute(
                     "SELECT pg_advisory_xact_lock(%s)", (PWA_FAMILY_CREATION_LOCK_ID,),
@@ -1818,7 +1854,9 @@ def update_family_member_role(
     family_role,
 ):
     with pool.connection() as conn:
+        require_user(conn, caller_user_id)
         with conn.transaction():
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (PWA_FAMILY_CREATION_LOCK_ID,))
             return conn.execute(
                 """
                 WITH authorized_family AS (
@@ -1856,6 +1894,7 @@ def update_family_address(
 ):
     """Consume server-resolved payload with the authorized, serialized mutation."""
     with pool.connection() as conn:
+        require_auth(conn, auth_user_id)
         with conn.transaction():
             conn.execute("SELECT pg_advisory_xact_lock(%s)", (PWA_FAMILY_CREATION_LOCK_ID,))
             digest, payload = _lock_address_confirmation(
@@ -1909,6 +1948,7 @@ def _join_session_from_row(row, was_reset=False):
 
 
 def _lock_pwa_join_session(conn, auth_user_id):
+    require_auth(conn, auth_user_id)
     # All Join DB transitions share this order, including binding family_id:
     # otherwise its FK check could wait on a family held by regeneration while
     # regeneration waits on this session. Geocoding runs outside these scopes.

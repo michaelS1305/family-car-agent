@@ -23,6 +23,8 @@ def load_chat_service():
     module = importlib.util.module_from_spec(spec)
     with patch.dict(sys.modules, {"database": database_stub, "ai_service": ai_stub}):
         spec.loader.exec_module(module)
+    module.require_user = Mock()
+    module.require_request = Mock()
     return module
 
 

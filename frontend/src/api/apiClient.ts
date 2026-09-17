@@ -84,6 +84,33 @@ export type CurrentUserResult =
   | { status: 'unmapped' }
   | { status: 'unauthenticated' }
 
+export type DeletionStatus = { status: 'not_requested' | 'draining' | 'auth_pending' | 'completed' }
+export type DeletionPreview = { consequence: 'personal' | 'management_transferred' | 'family_deleted' }
+
+export function getDeletionPreview(accessToken: string, options: RequestOptions = {}): Promise<DeletionPreview> {
+  return familyRequest('/api/account/deletion/preview', accessToken, { method: 'GET' },
+    (value): value is DeletionPreview => !!value && typeof value === 'object'
+      && typeof (value as DeletionPreview).consequence === 'string'
+      && ['personal', 'management_transferred', 'family_deleted'].includes((value as DeletionPreview).consequence), options)
+}
+
+function isDeletionStatus(value: unknown): value is DeletionStatus {
+  return !!value && typeof value === 'object'
+    && typeof (value as DeletionStatus).status === 'string'
+    && ['not_requested', 'draining', 'auth_pending', 'completed'].includes((value as DeletionStatus).status)
+}
+
+export function getDeletionStatus(accessToken: string, options: RequestOptions = {}): Promise<DeletionStatus> {
+  return familyRequest('/api/account/deletion', accessToken, { method: 'GET' }, isDeletionStatus, options)
+}
+
+export function confirmAccountDeletion(accessToken: string, options: RequestOptions = {}): Promise<DeletionStatus> {
+  return familyRequest('/api/account/deletion', accessToken, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: 'DELETE_MY_ACCOUNT' }),
+  }, isDeletionStatus, options)
+}
+
 export type ChatMessage = {
   role: 'user' | 'assistant'
   content: string
@@ -917,7 +944,13 @@ export async function getCurrentUser(
   }
 
   if (response.status === 401) return { status: 'unauthenticated' }
-  if (response.status === 403) return { status: 'unmapped' }
+  if (response.status === 403) {
+    const body = await response.clone().json().catch(() => null) as { detail?: { code?: string } } | null
+    if (body?.detail?.code === 'ACCOUNT_UNAVAILABLE') {
+      throw new ApiRequestError('server', 'החשבון אינו זמין או נמצא בתהליך מחיקה.', 403, 'ACCOUNT_UNAVAILABLE')
+    }
+    return { status: 'unmapped' }
+  }
 
   if (!response.ok) {
     throw new ApiRequestError(

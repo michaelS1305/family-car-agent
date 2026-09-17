@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { ApiRequestError, getCurrentUser, type InternalUser } from '../api/apiClient'
+import { ApiRequestError, getCurrentUser, getDeletionStatus, type InternalUser } from '../api/apiClient'
+import { clearDeletionLocalState } from './deletionCleanup'
 import {
   consumeOAuthCallbackFailure,
   getCurrentSession,
@@ -185,6 +186,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await clearInvalidSession()
       } catch (error) {
         if (!active || (error instanceof DOMException && error.name === 'AbortError')) return
+        if (error instanceof ApiRequestError && error.code === 'ACCOUNT_UNAVAILABLE') {
+          const deletion = await getDeletionStatus(accessToken).catch(() => null)
+          if (!active) return
+          try { clearDeletionLocalState([window.localStorage, window.sessionStorage]) } catch { /* restricted storage */ }
+          await clearInvalidSession()
+          if (active) setAuthError(deletion?.status === 'completed'
+            ? 'החשבון נמחק. התחברות חדשה תיצור חשבון חדש.'
+            : 'החשבון אינו זמין או נמצא בתהליך מחיקה. המחיקה ממשיכה בשרת.')
+          return
+        }
         setCurrentUser(null)
         setBackendIdentityError(readableBackendIdentityError(error))
         setBackendIdentityStatus('error')

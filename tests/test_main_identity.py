@@ -22,8 +22,11 @@ class FakeHTTPException(Exception):
 
 
 class FakeFastAPI:
-    def __init__(self):
+    def __init__(self, **options):
         self.routes = {}
+
+    def include_router(self, router):
+        pass
 
     def get(self, path, **options):
         return self._route_decorator("GET", path, options)
@@ -284,6 +287,7 @@ def load_main_module(environment=None):
         with patch.dict(
             sys.modules,
             {
+                "account_deletion_api": stub_module("account_deletion_api", router=Mock(), deletion_lifespan=Mock()),
                 "dotenv": dotenv_stub,
                 "fastapi": fastapi_stub,
                 "fastapi.middleware.cors": cors_stub,

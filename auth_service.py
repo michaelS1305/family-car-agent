@@ -98,6 +98,20 @@ def lookup_internal_user(auth_user_id):
     return get_user_by_auth_user_id(auth_user_id)
 
 
+def check_live_identity(auth_user_id):
+    from database import pool
+    from deletion_gate import require_auth
+    with pool.connection() as conn:
+        require_auth(conn, auth_user_id)
+
+
+def get_deletion_identity(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+):
+    # Only deletion preview/confirm/status use this exception. Subject remains JWT-derived.
+    return AuthenticatedSupabaseUser(auth_user_id=_verify_authenticated_credentials(credentials))
+
+
 def _unauthorized(detail):
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -149,6 +163,7 @@ def get_authenticated_supabase_user(
             },
         ) from exc
 
+    check_live_identity(auth_user_id)
     return AuthenticatedSupabaseUser(auth_user_id=auth_user_id)
 
 
@@ -156,6 +171,7 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ):
     auth_user_id = _verify_authenticated_credentials(credentials)
+    check_live_identity(auth_user_id)
 
     internal_user = lookup_internal_user(auth_user_id)
     if internal_user is None:

@@ -107,6 +107,9 @@ AUDIENCE = "authenticated"
 
 class SupabaseAuthenticationTests(unittest.TestCase):
     def setUp(self):
+        gate = patch.object(auth_service, 'check_live_identity')
+        gate.start()
+        self.addCleanup(gate.stop)
         jwt_decode.reset_mock(return_value=True, side_effect=True)
         self.auth_user_id = str(uuid4())
         self.key_resolver = Mock(return_value="resolved-public-key")
