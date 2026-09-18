@@ -1,6 +1,7 @@
 # Local database
 family_car.db
 supabase_snapshots/
+supabase/schema_audit/
 
 # Python
 __pycache__/
