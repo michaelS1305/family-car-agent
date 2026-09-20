@@ -176,3 +176,37 @@ Missing function/roles fail the transaction; repeating the revoke is harmless.
 Fresh authenticated private-channel reception for connect/disconnect and
 cross-family denial remain the recommended Realtime regression smoke checks;
 this execution report confirms privileges, not those smoke-test results.
+
+`2026092001_vehicle_identity_foundation.sql`: PREPARED / UNEXECUTED.
+Additive Multi-Car schema only: vehicles, registered devices, immutable event
+evidence/admission outcomes, mutable session projections, family checkpoint
+metadata, and reservation UUID references/nullable vehicle targeting. It does
+not enable new writes or change legacy CarPlay, car_events, Realtime, or RLS.
+Requires PostgreSQL 15+ (column-specific SET NULL on composite FKs) and built-in
+UUID/range support; installs no extension. Range GiST exclusion constraints cover
+historical vehicle/user session overlaps, in addition to active partial indexes.
+
+Future manual execution requires a controlled maintenance window: existing
+reservations are updated only to populate UUIDs, and transactional index/DDL
+locks block concurrent writes. Existing reservation timestamps and meaning remain
+unchanged; vehicle_id stays NULL. Preflight/conflicts/reruns fail closed and any
+failure rolls back the transaction. No SQL has been executed for this preparation.
+After execution, rollback requires a separately reviewed migration; do not drop
+these objects once new data or public reservation references are in use.
+
+Do not enable Multi-Car writes until the matching backend implements deletion
+finalization and FK-safe cleanup, identity/family locking, bounded replay and
+sequence admission, retirement checks, reservation vehicle authorization, and
+explicit legacy routing. The schema enforces membership/vehicle/device bindings;
+runtime still checks causal TAKE type/acceptance/time, projection-anchor meaning,
+creator membership, and checkpoint seed generation/frozen-boundary semantics.
+Raw RETURN take_event_id is deliberately not an FK so a terminal causal-conflict
+receipt can represent an unknown TAKE. projection_take_event_id is a same-owner,
+same-vehicle/family event FK, joined to sessions.start_event_id: no event/session
+FK cycle. Preserve required seed aliases when pruning events; FK NO ACTION
+prevents silently orphaning projection anchors. Session end links survive actor
+event deletion without deleting another member's session. Device hard deletion
+requires owned event cleanup; revocation is the operational path. User deletion
+must remove attributable state and finalize/mark remaining sessions first, never
+rely on cascades alone. Last-member cleanup removes reservations before vehicles.
+Policy thresholds and retries remain future runtime decisions, not SQL constants.
