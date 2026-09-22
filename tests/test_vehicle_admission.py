@@ -16,7 +16,7 @@ import vehicle_admission as va
 from vehicle_reconciliation import ReconciliationError
 
 
-BASE = datetime(2030, 1, 1, tzinfo=timezone.utc)
+BASE = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
 
 class EnvelopeTests(unittest.TestCase):
@@ -351,6 +351,54 @@ class VehicleAdmissionPostgresTests(unittest.TestCase):
         self.assertEqual(sorted(result.kind for result in results), ["accepted", "retry"])
         self.assertEqual(self.sequence(), 1)
         self.assertEqual(len(self.sessions()), 1)
+
+    def test_future_clock_guard_is_non_consuming_and_correctable(self):
+        now = self.query('SELECT clock_timestamp()')[0][0]
+        event = replace(self.event(), occurred_at=now + timedelta(minutes=6))
+        before = self.snapshot()
+        self.assertEqual(self.admit(event).kind, 'future_clock_skew')
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.sequence(), 0)
+        corrected = replace(event, occurred_at=now)
+        self.assertEqual(self.admit(corrected).kind, 'accepted')
+        self.assertEqual(self.admit(corrected).kind, 'retry')
+
+    def test_five_minute_future_boundary_allowed(self):
+        now = self.query('SELECT clock_timestamp()')[0][0]
+        self.assertEqual(self.admit(replace(self.event(), occurred_at=now + timedelta(minutes=5))).kind, 'accepted')
+
+    def test_exact_database_clock_boundary_and_python_clock_independence(self):
+        # Freeze only the database clock expression to a PostgreSQL-produced
+        # value. Compare at microsecond precision, without timing tolerances.
+        now = self.query('SELECT clock_timestamp()')[0][0]
+        with self.connection() as conn:
+            class Clock:
+                transaction = conn.transaction
+
+                def execute(inner, sql, params=None):
+                    if sql.startswith('SELECT %s::timestamptz > clock_timestamp()'):
+                        return conn.execute(sql.replace('clock_timestamp()', '%s::timestamptz'), (*params, now))
+                    return conn.execute(sql, params)
+
+            event = replace(self.event(), occurred_at=now + timedelta(minutes=5, microseconds=1))
+            self.assertEqual(va.admit_native_event(Clock(), self.users[1], event).kind, 'future_clock_skew')
+            allowed = replace(event, occurred_at=now + timedelta(minutes=5))
+            self.assertEqual(va.admit_native_event(Clock(), self.users[1], allowed).kind, 'accepted')
+        # Production admission has no application datetime.now()/utcnow().
+        import inspect
+        self.assertNotIn('datetime.now', inspect.getsource(va.admit_native_event))
+        self.assertNotIn('utcnow', inspect.getsource(va.admit_native_event))
+
+    def test_pre_guard_future_receipt_retry_precedes_clock_guard(self):
+        now = self.query('SELECT clock_timestamp()')[0][0]
+        event = replace(self.event(), occurred_at=now + timedelta(days=365))
+        self.query("INSERT INTO vehicle_events(event_id,family_id,vehicle_id,user_id,device_id,source,event_type,occurred_at,device_sequence,admission_outcome) "
+                   "SELECT %s,10,v.id,1,d.id,'native','take',%s,1,'accepted' FROM vehicles v,registered_devices d WHERE v.vehicle_ref=%s AND d.device_ref=%s",
+                   (event.event_id, event.occurred_at, event.vehicle_ref, event.device_ref))
+        self.query('UPDATE registered_devices SET last_processed_sequence=1 WHERE device_ref=%s', (event.device_ref,))
+        self.assertEqual(self.admit(event).kind, 'retry')
+        self.assertEqual(self.admit(replace(event, occurred_at=now)).kind, 'conflict')
+        self.assertEqual(self.admit(replace(event, event_id=uuid4(), device_sequence=3)).kind, 'gap')
 
     def test_concurrent_conflicting_sequence(self):
         results = self.race([(self.event(), 1), (self.event(vehicle=1), 1)])

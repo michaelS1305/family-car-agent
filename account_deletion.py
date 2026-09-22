@@ -131,6 +131,7 @@ def cleanup(pool, auth_user_id):
             conn.execute('DELETE FROM conversation_messages WHERE chat_request_id=ANY(%s) OR user_id=%s', (ids, user_id))
             conn.execute('DELETE FROM chat_requests WHERE id=ANY(%s)', (ids,))
             conn.execute('DELETE FROM reservations WHERE user_id=%s', (user_id,))
+            _checkpoint_vehicle_identity(conn, user_id, family_id)
             active = _get_active_driver_on_connection(conn, family_id) if family_id is not None else None
             # Non-personal logical barrier. NOT a disconnected/physical-return event.
             # It closes all prior reconstructed active state without deleting or
@@ -157,6 +158,35 @@ def cleanup(pool, auth_user_id):
         conn.execute("UPDATE account_deletion_jobs SET phase='auth_pending' WHERE auth_user_id=%s AND phase='draining'",
                      (auth_user_id,))
     return True
+
+
+def _checkpoint_vehicle_identity(conn, user_id, family_id):
+    """Caller holds identity -> job -> global family -> sorted car/chat ->
+    family row -> provider/request -> reservation locks, in that order.
+    No other identity lock or network call is acquired here. All changes share
+    cleanup's transaction and its one-way auth_pending phase transition.
+    """
+    if family_id is not None:
+        generation = conn.execute(
+            "UPDATE families SET vehicle_reconciliation_generation=vehicle_reconciliation_generation+1, "
+            "vehicle_finalized_through=GREATEST(vehicle_finalized_through,clock_timestamp(),"
+            "(SELECT MAX(occurred_at) FROM vehicle_events WHERE family_id=%s "
+            "AND admission_outcome='accepted')) WHERE id=%s "
+            "RETURNING vehicle_reconciliation_generation",
+            (family_id, family_id),
+        ).fetchone()[0]
+        # Enclose even pre-guard future evidence. Only currently open surviving
+        # sessions carry state into the new suffix; ended rows remain history.
+        conn.execute(
+            "UPDATE vehicle_driver_sessions SET checkpoint_generation=%s "
+            "WHERE family_id=%s AND user_id<>%s AND ended_at IS NULL",
+            (generation, family_id, user_id),
+        )
+    # End-event references on survivors become NULL through the existing FK;
+    # their ended_at/reason survive. Projection anchors are same-user FKs.
+    conn.execute('DELETE FROM vehicle_driver_sessions WHERE user_id=%s', (user_id,))
+    conn.execute('DELETE FROM vehicle_events WHERE user_id=%s', (user_id,))
+    conn.execute('DELETE FROM registered_devices WHERE user_id=%s', (user_id,))
 
 
 def delete_auth_identity(auth_user_id):

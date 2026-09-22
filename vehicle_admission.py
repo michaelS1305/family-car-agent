@@ -3,8 +3,8 @@
 Lock order: shared deletion identity fence -> existing family car advisory lock
 -> family row -> owned device row -> target vehicle row. Never fence another
 member while holding family locks. Retirement/checkpoint writers must share the
-family serialization contract. Deletion integration is still a prerequisite to
-activation. Call on a caller-owned connection; an outer transaction, if present,
+family serialization contract, also used by account deletion checkpoints.
+Call on a caller-owned connection; an outer transaction, if present,
 owns the final commit. Exceptions roll back this operation's transaction/savepoint.
 """
 from dataclasses import dataclass, replace
@@ -36,7 +36,7 @@ class NativeEvent:
 
 @dataclass(frozen=True)
 class AdmissionResult:
-    kind: Literal["accepted", "retry", "terminal", "gap", "conflict", "unavailable", "malformed"]
+    kind: Literal["accepted", "retry", "terminal", "gap", "conflict", "unavailable", "malformed", "future_clock_skew"]
     admission_outcome: str | None = None
 
 
@@ -223,6 +223,14 @@ def admit_native_event(conn, current_user: CurrentUser, request: NativeEvent):
             return AdmissionResult("conflict")
         if event.device_sequence > last_sequence + 1:
             return AdmissionResult("gap")
+
+        # Evaluate after serialization and retry/sequence checks. PostgreSQL,
+        # not the application/device clock, bounds brand-new evidence.
+        if conn.execute(
+            "SELECT %s::timestamptz > clock_timestamp() + INTERVAL '5 minutes'",
+            (event.occurred_at,),
+        ).fetchone()[0]:
+            return AdmissionResult("future_clock_skew")
 
         generation, boundary = family
         outcome = "accepted"
