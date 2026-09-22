@@ -1,4 +1,4 @@
--- MANUAL ONLY. PREPARED / UNEXECUTED. Schema foundation, NOT a runtime cutover.
+-- MANUALLY EXECUTED / OPERATOR-VERIFIED. Schema foundation, NOT a runtime cutover.
 -- No legacy state, Shortcut, Realtime, or reservation timestamp conversion.
 BEGIN;
 SET LOCAL search_path = pg_catalog, public;

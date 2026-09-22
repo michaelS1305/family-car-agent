@@ -177,7 +177,10 @@ Fresh authenticated private-channel reception for connect/disconnect and
 cross-family denial remain the recommended Realtime regression smoke checks;
 this execution report confirms privileges, not those smoke-test results.
 
-`2026092001_vehicle_identity_foundation.sql`: PREPARED / UNEXECUTED.
+`2026092001_vehicle_identity_foundation.sql`: EXECUTED / OPERATOR-CONFIRMED.
+Operator verified all four tables, family/reservation columns, indexes,
+validated FK/CHECK/UNIQUE/EXCLUDE constraints, both guard triggers, and absent
+anon/authenticated table privileges. Runtime integration remains disabled.
 Additive Multi-Car schema only: vehicles, registered devices, immutable event
 evidence/admission outcomes, mutable session projections, family checkpoint
 metadata, and reservation UUID references/nullable vehicle targeting. It does
@@ -186,11 +189,11 @@ Requires PostgreSQL 15+ (column-specific SET NULL on composite FKs) and built-in
 UUID/range support; installs no extension. Range GiST exclusion constraints cover
 historical vehicle/user session overlaps, in addition to active partial indexes.
 
-Future manual execution requires a controlled maintenance window: existing
+Historical execution guidance called for a controlled maintenance window: existing
 reservations are updated only to populate UUIDs, and transactional index/DDL
 locks block concurrent writes. Existing reservation timestamps and meaning remain
 unchanged; vehicle_id stays NULL. Preflight/conflicts/reruns fail closed and any
-failure rolls back the transaction. No SQL has been executed for this preparation.
+failure rolls back the transaction. Execution was manually confirmed by the operator.
 After execution, rollback requires a separately reviewed migration; do not drop
 these objects once new data or public reservation references are in use.
 
