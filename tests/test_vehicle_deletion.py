@@ -40,9 +40,18 @@ class VehicleDeletionPostgresTests(unittest.TestCase):
         return admission.NativeEvent(uuid4(), self.devices[person[1]], self.vehicle,
             'return' if cause else 'take', self.now + timedelta(seconds=seconds), seq, cause)
 
-    def admit(self, person, event):
+    def admit(self, person, event, now=None):
         with self.connection() as conn:
-            return admission.admit_native_event(conn,
+            class Clock:
+                transaction = conn.transaction
+
+                def execute(inner, sql, params=None):
+                    if now is not None and sql == 'SELECT clock_timestamp()':
+                        return conn.execute('SELECT %s::timestamptz', (now,))
+                    if now is not None and sql.startswith('SELECT %s::timestamptz > clock_timestamp()'):
+                        return conn.execute(sql.replace('clock_timestamp()', '%s::timestamptz'), (*params, now))
+                    return conn.execute(sql, params)
+            return admission.admit_native_event(Clock(),
                 CurrentUser(person[1], 'User', self.family, auth_user_id=person[0]), event)
 
     def checkpoint(self):
@@ -51,16 +60,30 @@ class VehicleDeletionPostgresTests(unittest.TestCase):
     def active(self):
         return self.query('SELECT user_id FROM vehicle_driver_sessions WHERE ended_at IS NULL')
 
+    def test_deletion_then_later_rolling_boundary_preserves_survivor_cause(self):
+        self.setup_vehicle()
+        first = self.native(self.member)
+        self.assertEqual(self.admit(self.member, first).kind, 'accepted')
+        self.assertTrue(self.delete(self.creator))
+        generation, boundary = self.checkpoint()
+        now = boundary + timedelta(days=4)
+        returned = replace(self.native(self.member, seq=2, cause=first.event_id), occurred_at=now)
+        self.assertEqual(self.admit(self.member, returned, now).kind, 'accepted')
+        self.assertEqual(self.checkpoint(), (generation + 1, now - timedelta(hours=72)))
+        self.assertEqual(self.active(), [])
+        self.assertEqual(self.query('SELECT count(*) FROM vehicle_events WHERE user_id=%s', (self.creator[1],)), [(0,)])
+
     def test_survivor_seed_return_and_second_checkpoint(self):
         self.setup_vehicle()
         take = self.native(self.member)
         self.assertEqual(self.admit(self.member, take).kind, 'accepted')
         ref = self.query('SELECT session_ref FROM vehicle_driver_sessions')[0][0]
+        before_generation = self.checkpoint()[0]
         self.assertTrue(self.delete(self.creator))
         generation, boundary = self.checkpoint()
-        self.assertEqual(generation, 1)
+        self.assertEqual(generation, before_generation + 1)
         self.assertEqual(self.active(), [(self.member[1],)])
-        self.assertEqual(self.query('SELECT checkpoint_generation,session_ref FROM vehicle_driver_sessions'), [(1, ref)])
+        self.assertEqual(self.query('SELECT checkpoint_generation,session_ref FROM vehicle_driver_sessions'), [(generation, ref)])
         self.assertEqual(self.query('SELECT created_by_user_id FROM vehicles'), [(None,)])
         self.assertEqual(self.query('SELECT user_id FROM registered_devices'), [(self.member[1],)])
         self.assertTrue(deletion.cleanup(self.pool, self.creator[0]))
@@ -68,12 +91,12 @@ class VehicleDeletionPostgresTests(unittest.TestCase):
         returned = self.native(self.member, seconds=1, seq=2, cause=take.event_id)
         self.assertEqual(self.admit(self.member, returned).kind, 'accepted')
         self.assertEqual(self.active(), [])
-        self.assertEqual(self.query('SELECT checkpoint_generation FROM vehicle_driver_sessions'), [(1,)])
+        self.assertEqual(self.query('SELECT checkpoint_generation FROM vehicle_driver_sessions'), [(generation,)])
         # Replay includes a carried-in seed even after its session ended.
         self.assertEqual(self.admit(self.member, self.native(self.member, seconds=2, seq=3)).kind, 'accepted')
         another = self.person(self.family)
         self.assertTrue(self.delete(another))
-        self.assertEqual(self.checkpoint()[0], 2)
+        self.assertEqual(self.checkpoint()[0], generation + 1)
         self.assertEqual(self.active(), [(self.member[1],)])
 
     def test_future_handover_never_resurrects_survivor(self):
@@ -137,8 +160,9 @@ class VehicleDeletionPostgresTests(unittest.TestCase):
         self.assertEqual([self.query(f'SELECT * FROM {table} ORDER BY id') for table in tables], before)
         self.assertEqual(self.query('SELECT phase FROM account_deletion_jobs'), [('draining',)])
         self.query('DELETE FROM injected_blocker')
+        generation = self.checkpoint()[0]
         self.assertTrue(deletion.cleanup(self.pool, self.creator[0]))
-        self.assertEqual(self.checkpoint()[0], 1)
+        self.assertEqual(self.checkpoint()[0], generation + 1)
         self.assertEqual(self.active(), [])
 
     def test_failures_at_each_vehicle_cleanup_stage_are_atomic(self):
@@ -166,8 +190,9 @@ class VehicleDeletionPostgresTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'Injected'):
                     deletion.cleanup(self.pool, self.creator[0])
             self.assertEqual([self.query(f'SELECT * FROM {table} ORDER BY id') for table in tables], before)
+        generation = self.checkpoint()[0]
         self.assertTrue(deletion.cleanup(self.pool, self.creator[0]))
-        self.assertEqual(self.checkpoint()[0], 1)
+        self.assertEqual(self.checkpoint()[0], generation + 1)
 
     def test_deletion_wins_then_take_and_return_cannot_mutate(self):
         self.setup_vehicle()
@@ -215,6 +240,7 @@ class VehicleDeletionPostgresTests(unittest.TestCase):
         self.assertEqual(self.active(), [(self.member[1],)])
         self.assertEqual(self.query('SELECT count(*) FROM vehicles'), [(2,)])
         returned = self.native(self.member, seconds=1, seq=3, cause=alias.event_id)
+        returned = replace(returned, occurred_at=self.query('SELECT clock_timestamp()')[0][0] + timedelta(seconds=1))
         self.assertEqual(self.admit(self.member, returned).kind, 'accepted')
         self.assertEqual(self.active(), [])
         self.assertEqual(self.query('SELECT count(*) FROM vehicle_events WHERE user_id=%s', (self.creator[1],)), [(0,)])

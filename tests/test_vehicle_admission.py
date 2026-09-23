@@ -16,7 +16,7 @@ import vehicle_admission as va
 from vehicle_reconciliation import ReconciliationError
 
 
-BASE = datetime(2020, 1, 1, tzinfo=timezone.utc)
+BASE = datetime.now(timezone.utc) - timedelta(hours=2)
 
 
 class EnvelopeTests(unittest.TestCase):
@@ -184,7 +184,7 @@ class VehicleAdmissionPostgresTests(unittest.TestCase):
         self.assertEqual(self.admit(self.event(3, 10)).kind, "accepted")
 
     def test_boundary_inclusive_consumes(self):
-        self.query("UPDATE families SET vehicle_reconciliation_generation=1,vehicle_finalized_through=%s WHERE id=10", (BASE,))
+        self.query("UPDATE families SET vehicle_reconciliation_generation=vehicle_reconciliation_generation+1,vehicle_finalized_through=%s WHERE id=10", (BASE,))
         self.terminal(self.event(minute=-1), "before_finalized_boundary")
         self.terminal(self.event(2), "before_finalized_boundary")
         self.assertEqual(self.admit(self.event(3, 1)).kind, "accepted")
@@ -263,21 +263,22 @@ class VehicleAdmissionPostgresTests(unittest.TestCase):
         self.admit(current)
         frozen = self.query("SELECT * FROM vehicle_driver_sessions WHERE ended_at IS NOT NULL")
         seed_ref = self.sessions()[1][0]
-        self.query("UPDATE families SET vehicle_reconciliation_generation=1,vehicle_finalized_through=%s WHERE id=10", (BASE,))
-        self.query("UPDATE vehicle_driver_sessions SET checkpoint_generation=1 WHERE ended_at IS NULL")
+        self.query("UPDATE families SET vehicle_reconciliation_generation=vehicle_reconciliation_generation+1,vehicle_finalized_through=%s WHERE id=10", (BASE,))
+        generation = self.query('SELECT vehicle_reconciliation_generation FROM families WHERE id=10')[0][0]
+        self.query("UPDATE vehicle_driver_sessions SET checkpoint_generation=%s WHERE ended_at IS NULL", (generation,))
         self.admit(self.event(user=2, minute=2), 2)
         self.admit(self.event(4, 1, cause=current.event_id))
         self.assertEqual(self.sessions()[1][0], seed_ref)
         self.assertEqual(self.sessions()[1][5], "return")
-        self.assertEqual(self.sessions()[1][8], 1)
+        self.assertEqual(self.sessions()[1][8], generation)
         self.assertEqual(self.query("SELECT * FROM vehicle_driver_sessions WHERE session_ref=%s", (frozen[0][1],)), frozen)
 
     def test_checkpoint_alias_return(self):
         first, alias = self.event(minute=-2), self.event(2, -1)
         self.admit(first)
         self.admit(alias)
-        self.query("UPDATE families SET vehicle_reconciliation_generation=1,vehicle_finalized_through=%s WHERE id=10", (BASE,))
-        self.query("UPDATE vehicle_driver_sessions SET checkpoint_generation=1")
+        self.query("UPDATE families SET vehicle_reconciliation_generation=vehicle_reconciliation_generation+1,vehicle_finalized_through=%s WHERE id=10", (BASE,))
+        self.query("UPDATE vehicle_driver_sessions SET checkpoint_generation=(SELECT vehicle_reconciliation_generation FROM families WHERE id=10)")
         self.admit(self.event(3, 1, cause=alias.event_id))
         self.assertEqual(self.sessions()[0][5], "return")
 
@@ -286,7 +287,7 @@ class VehicleAdmissionPostgresTests(unittest.TestCase):
         self.admit(first)
         self.admit(self.event(2, -3, cause=first.event_id))
         frozen = self.query("SELECT * FROM vehicle_driver_sessions")
-        self.query("UPDATE families SET vehicle_reconciliation_generation=1,vehicle_finalized_through=%s WHERE id=10", (BASE,))
+        self.query("UPDATE families SET vehicle_reconciliation_generation=vehicle_reconciliation_generation+1,vehicle_finalized_through=%s WHERE id=10", (BASE,))
         ret = self.event(3, 1, cause=first.event_id)
         self.assertEqual(self.admit(ret).kind, "accepted")
         self.assertEqual(self.query("SELECT * FROM vehicle_driver_sessions"), frozen)
@@ -299,7 +300,7 @@ class VehicleAdmissionPostgresTests(unittest.TestCase):
         self.admit(first)
         self.admit(self.event(2, -3, cause=first.event_id))
         self.admit(self.event(3, 1, cause=first.event_id))
-        self.query("UPDATE families SET vehicle_reconciliation_generation=1,vehicle_finalized_through=%s WHERE id=10", (BASE,))
+        self.query("UPDATE families SET vehicle_reconciliation_generation=vehicle_reconciliation_generation+1,vehicle_finalized_through=%s WHERE id=10", (BASE,))
         self.assertEqual(self.admit(self.event(4, 2)).kind, "accepted")
 
     def test_unavailable_cross_family_device_and_revocation(self):

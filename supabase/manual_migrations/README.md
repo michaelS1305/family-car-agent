@@ -213,3 +213,12 @@ requires owned event cleanup; revocation is the operational path. User deletion
 must remove attributable state and finalize/mark remaining sessions first, never
 rely on cascades alone. Last-member cleanup removes reservations before vehicles.
 Policy thresholds and retries remain future runtime decisions, not SQL constants.
+
+`2026092301_vehicle_events_accepted_device_index.sql`: PREPARED / UNEXECUTED IN PRODUCTION.
+Adds only the partial `(device_id, device_sequence)` index for accepted Vehicle
+Identity events. Apply before the bounded-reconciliation backend rollout; old
+workers remain compatible. Preflight and reruns fail closed, and any failure
+rolls back. The transactional index build can briefly block event writes; use a
+quiet/controlled window, especially if internal writers are running. No native
+HTTP ingestion is activated. No table/constraint/privilege changes are made.
+Local disposable validation is not evidence of production execution.
