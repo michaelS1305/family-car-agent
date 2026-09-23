@@ -245,7 +245,8 @@ def update_current_family_address(
 def _raise_reservation_center_error(error):
     raise HTTPException(
         status_code=error.status_code,
-        detail={"code": error.code, "message": error.message},
+        detail={"code": error.code, "message": error.message,
+                **({'vehicles': error.vehicles} if error.vehicles is not None else {})},
     ) from error
 
 
@@ -316,6 +317,7 @@ def create_reservation_route(
             current_user,
             request.start_time,
             request.end_time,
+            **({'vehicle_ref': request.vehicle_ref} if 'vehicle_ref' in request.model_fields_set else {}),
         )
     except ReservationCenterError as error:
         _raise_reservation_center_error(error)
@@ -333,6 +335,8 @@ def update_reservation_route(
             request.original_end_time,
             request.start_time,
             request.end_time,
+            **({'reservation_ref': request.reservation_ref} if request.reservation_ref is not None else {}),
+            **({'vehicle_ref': request.vehicle_ref} if 'vehicle_ref' in request.model_fields_set else {}),
         )
     except ReservationCenterError as error:
         _raise_reservation_center_error(error)
@@ -348,6 +352,7 @@ def cancel_reservation_route(
             current_user,
             request.original_start_time,
             request.original_end_time,
+            **({'reservation_ref': request.reservation_ref} if request.reservation_ref is not None else {}),
         )
     except ReservationCenterError as error:
         _raise_reservation_center_error(error)

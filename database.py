@@ -5,7 +5,7 @@ from psycopg.errors import ForeignKeyViolation, UniqueViolation
 import secrets
 import hashlib
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 from reservation_rules import (
     local_now as reservation_now,
     validate_create, validate_update, validate_target, ReservationValidationError,
@@ -761,14 +761,58 @@ def get_recent_events(family_id, limit=10):
 
         return cursor.fetchall()
 
+VEHICLE_UNSET = object()
+
+
+def _lock_reservation_family(conn, family_id, *, reservation_lock=True):
+    # Identity fence is held by the caller. Chat acquires these BEFORE its
+    # request row, then the reservation lock after replay lookup. Matches deletion.
+    conn.execute('SELECT pg_advisory_xact_lock(%s,%s)', (CAR_TRANSITION_LOCK_NAMESPACE, family_id))
+    conn.execute('SELECT id FROM families WHERE id=%s FOR UPDATE', (family_id,)).fetchone()
+    if reservation_lock:
+        conn.execute('SELECT pg_advisory_xact_lock(%s,%s)', (RESERVATION_LOCK_NAMESPACE, family_id))
+
+
+def _reservation_vehicle(conn, family_id, vehicle_ref=VEHICLE_UNSET, *, creating=False, current=None):
+    if vehicle_ref is VEHICLE_UNSET or (creating and vehicle_ref is None):
+        if not creating:
+            return current, None
+        rows = conn.execute('SELECT id,vehicle_ref,display_name FROM vehicles WHERE family_id=%s AND retired_at IS NULL ORDER BY id', (family_id,)).fetchall()
+        if len(rows) > 1:
+            return None, {'success': False, 'code': 'VEHICLE_REQUIRED',
+                          'message': 'יש לבחור רכב להזמנה.',
+                          'vehicles': [{'vehicle_ref': str(row[1]), 'display_name': row[2]} for row in rows]}
+        return (rows[0][0] if rows else None), None
+    if vehicle_ref is None:
+        return None, None  # Explicit update to general, not omitted association.
+    try:
+        ref = UUID(str(vehicle_ref))
+    except (ValueError, TypeError, AttributeError):
+        ref = None
+    row = None if ref is None else conn.execute(
+        'SELECT id,retired_at FROM vehicles WHERE family_id=%s AND vehicle_ref=%s', (family_id, ref),
+    ).fetchone()
+    if not row or (row[1] is not None and (creating or row[0] != current)):
+        return None, {'success': False, 'code': 'VEHICLE_NOT_FOUND_OR_UNAVAILABLE', 'message': 'הרכב אינו זמין.'}
+    return row[0], None
+
+
+def _reservation_public_vehicle(conn, vehicle_id):
+    row = None if vehicle_id is None else conn.execute(
+        'SELECT vehicle_ref,display_name FROM vehicles WHERE id=%s', (vehicle_id,),
+    ).fetchone()
+    return {'vehicle_ref': str(row[0]) if row else None, 'vehicle_display_name': row[1] if row else None}
+
+
 def _get_conflicting_reservation(
     conn,
     family_id,
     start_time,
     end_time,
-    exclude_reservation_id=None
+    exclude_reservation_id=None,
+    vehicle_id=None,
 ):
-    params = [family_id, end_time, start_time]
+    params = [family_id, end_time, start_time, vehicle_id, vehicle_id]
     exclude_sql = ""
 
     if exclude_reservation_id is not None:
@@ -784,6 +828,7 @@ def _get_conflicting_reservation(
           AND r.status = 'active'
           AND r.start_time < %s
           AND r.end_time > %s
+          AND (%s::integer IS NULL OR r.vehicle_id IS NULL OR r.vehicle_id = %s)
           {exclude_sql}
         ORDER BY r.start_time
         LIMIT 1
@@ -815,6 +860,7 @@ def _create_reservation_on_connection(
     start_time,
     end_time,
     expected_family_id=None,
+    vehicle_ref=VEHICLE_UNSET,
 ):
     try:
         start_time, end_time = validate_create(start_time, end_time, reservation_now())
@@ -844,11 +890,16 @@ def _create_reservation_on_connection(
         }
 
     family_id = user[0]
+    _lock_reservation_family(conn, family_id)
+    vehicle_id, error = _reservation_vehicle(conn, family_id, vehicle_ref, creating=True)
+    if error:
+        return error
     conflict = _get_conflicting_reservation(
         conn,
         family_id,
         start_time,
-        end_time
+        end_time,
+        vehicle_id=vehicle_id,
     )
 
     if conflict:
@@ -866,19 +917,20 @@ def _create_reservation_on_connection(
             start_time,
             end_time,
             status,
-            created_at
+            created_at, vehicle_id
         )
-        VALUES (%s, %s, %s, 'active', %s)
-        RETURNING id
+        VALUES (%s, %s, %s, 'active', %s, %s)
+        RETURNING reservation_ref
         """,
-        (user_id, start_time, end_time, created_at)
+        (user_id, start_time, end_time, created_at, vehicle_id)
     ).fetchone()
 
     return {
         "success": True,
         "code": "RESERVATION_CREATED",
         "message": "Reservation created",
-        "reservation_id": created[0],
+        "reservation_ref": str(created[0]),
+        **_reservation_public_vehicle(conn, vehicle_id),
         "start_time": start_time,
         "end_time": end_time,
     }
@@ -900,19 +952,30 @@ def get_ai_reservations(family_id, user_id=None):
         raise ValueError("Family required")
     with pool.connection() as conn:
         rows = conn.execute(
-            """SELECT r.id, u.name, r.start_time, r.end_time, r.status
+            """SELECT r.reservation_ref, u.name, r.start_time, r.end_time, r.status,
+                      v.vehicle_ref,v.display_name
                FROM reservations r JOIN users u ON u.id = r.user_id
+               LEFT JOIN vehicles v ON v.id=r.vehicle_id
                WHERE u.family_id = %s AND (%s::integer IS NULL OR r.user_id = %s)
                ORDER BY r.start_time, r.id LIMIT 21""",
             (family_id, user_id, user_id),
         ).fetchall()
     return {
-        "items": [{"reservation_id": row[0], "user_name": row[1],
-                   "start_time": row[2], "end_time": row[3], "status": row[4]}
+        "items": [{"reservation_ref": str(row[0]), "user_name": row[1],
+                   "start_time": row[2], "end_time": row[3], "status": row[4],
+                   "vehicle_ref": str(row[5]) if row[5] else None, "vehicle_display_name": row[6]}
                   for row in rows[:20]],
         "limit": 20, "truncated": len(rows) > 20,
-        "ordering": "start_time ascending, reservation_id ascending",
+        "ordering": "start_time ascending, stable database order",
     }
+
+
+def get_ai_vehicles(family_id):
+    if family_id is None:
+        raise ValueError('Family required')
+    with pool.connection() as conn:
+        rows = conn.execute('SELECT vehicle_ref,display_name FROM vehicles WHERE family_id=%s AND retired_at IS NULL ORDER BY id', (family_id,)).fetchall()
+    return [{'vehicle_ref': str(row[0]), 'display_name': row[1]} for row in rows]
 
 
 def get_family_reservations(family_id):
@@ -1067,9 +1130,11 @@ def list_family_reservations(
                 u.name,
                 r.start_time,
                 r.end_time,
-                r.user_id = %s AS is_mine
+                r.user_id = %s AS is_mine,
+                r.reservation_ref, v.vehicle_ref, v.display_name
             FROM reservations AS r
             JOIN users AS u ON u.id = r.user_id
+            LEFT JOIN vehicles v ON v.id=r.vehicle_id
             WHERE u.family_id = %s
               AND r.status = 'active'
               AND r.end_time::timestamp {time_operator} %s::timestamp
@@ -1080,20 +1145,18 @@ def list_family_reservations(
         ).fetchall()
 
 
-def create_current_user_reservation(user_id, family_id, start_time, end_time):
+def create_current_user_reservation(user_id, family_id, start_time, end_time, *, vehicle_ref=VEHICLE_UNSET):
     with pool.connection() as conn:
         require_user(conn, user_id)
         with conn.transaction():
-            conn.execute(
-                "SELECT pg_advisory_xact_lock(%s, %s)",
-                (RESERVATION_LOCK_NAMESPACE, family_id),
-            )
+            _lock_reservation_family(conn, family_id)
             return _create_reservation_on_connection(
                 conn,
                 user_id,
                 start_time,
                 end_time,
                 expected_family_id=family_id,
+                vehicle_ref=vehicle_ref,
             )
 
 
@@ -1105,48 +1168,24 @@ def update_current_user_reservation(
     boundary_time,
     start_time,
     end_time,
+    *, reservation_ref=None, vehicle_ref=VEHICLE_UNSET,
 ):
     with pool.connection() as conn:
         require_user(conn, user_id)
         with conn.transaction():
-            conn.execute(
-                "SELECT pg_advisory_xact_lock(%s, %s)",
-                (RESERVATION_LOCK_NAMESPACE, family_id),
-            )
-            reservation = conn.execute(
-                """
-                SELECT r.id
-                FROM reservations AS r
-                JOIN users AS u ON u.id = r.user_id
-                WHERE r.user_id = %s
-                  AND u.family_id = %s
-                  AND r.status = 'active'
-                  AND r.start_time = %s
-                  AND r.end_time = %s
-                  AND r.end_time::timestamp > %s::timestamp
-                FOR UPDATE OF r
-                """,
-                (
-                    user_id,
-                    family_id,
-                    original_start_time,
-                    original_end_time,
-                    boundary_time,
-                ),
-            ).fetchone()
-            if reservation is None:
-                return {
-                    "success": False,
-                    "code": "RESERVATION_NOT_FOUND_OR_UNAVAILABLE",
-                    "message": "Reservation not found or unavailable",
-                }
+            _lock_reservation_family(conn, family_id)
+            reservation_id, error = _reservation_locator(conn, user_id, family_id, reservation_ref,
+                                                       original_start_time, original_end_time)
+            if error:
+                return error
             return _update_reservation_on_connection(
                 conn,
-                reservation[0],
+                reservation_id,
                 user_id,
                 family_id,
                 start_time,
                 end_time,
+                vehicle_ref=vehicle_ref,
             )
 
 
@@ -1156,49 +1195,51 @@ def cancel_current_user_reservation(
     original_start_time,
     original_end_time,
     boundary_time,
+    *, reservation_ref=None,
 ):
     with pool.connection() as conn:
         require_user(conn, user_id)
         with conn.transaction():
-            conn.execute(
-                "SELECT pg_advisory_xact_lock(%s, %s)",
-                (RESERVATION_LOCK_NAMESPACE, family_id),
-            )
-            reservation = conn.execute(
-                """
-                SELECT r.id
-                FROM reservations AS r
-                JOIN users AS u ON u.id = r.user_id
-                WHERE r.user_id = %s
-                  AND u.family_id = %s
-                  AND r.status = 'active'
-                  AND r.start_time = %s
-                  AND r.end_time = %s
-                  AND r.end_time::timestamp > %s::timestamp
-                FOR UPDATE OF r
-                """,
-                (
-                    user_id,
-                    family_id,
-                    original_start_time,
-                    original_end_time,
-                    boundary_time,
-                ),
-            ).fetchone()
-            if reservation is None:
-                return {
-                    "success": False,
-                    "code": "RESERVATION_NOT_FOUND_OR_UNAVAILABLE",
-                    "message": "Reservation not found or unavailable",
-                }
+            _lock_reservation_family(conn, family_id)
+            reservation_id, error = _reservation_locator(conn, user_id, family_id, reservation_ref,
+                                                       original_start_time, original_end_time)
+            if error:
+                return error
             return _cancel_reservation_on_connection(
                 conn,
-                reservation[0],
+                reservation_id,
                 user_id,
                 family_id,
             )
 
-def _cancel_reservation_on_connection(conn, reservation_id, user_id, family_id):
+def _reservation_locator(conn, user_id, family_id, reservation_ref=None, start=None, end=None):
+    params = [user_id, family_id]
+    if reservation_ref is not None:
+        try:
+            params.append(UUID(str(reservation_ref)))
+        except (ValueError, TypeError, AttributeError):
+            return None, {'success': False, 'code': 'RESERVATION_NOT_FOUND_OR_UNAVAILABLE', 'message': 'ההזמנה אינה זמינה.'}
+        predicate = 'r.reservation_ref=%s'
+    else:
+        predicate = 'r.start_time=%s AND r.end_time=%s'
+        params.extend((start, end))
+    rows = conn.execute(
+        'SELECT r.id FROM reservations r JOIN users u ON u.id=r.user_id '
+        "WHERE r.user_id=%s AND u.family_id=%s AND r.status='active' AND " + predicate +
+        ' ORDER BY r.id LIMIT 2 FOR UPDATE OF r', tuple(params),
+    ).fetchall()
+    if len(rows) != 1:
+        return None, {'success': False, 'code': 'RESERVATION_AMBIGUOUS' if rows else 'RESERVATION_NOT_FOUND_OR_UNAVAILABLE',
+                      'message': 'יש לבחור הזמנה מסוימת.' if rows else 'ההזמנה אינה זמינה.'}
+    return rows[0][0], None
+
+
+def _cancel_reservation_on_connection(conn, reservation_id, user_id, family_id, *, reservation_ref=None):
+    _lock_reservation_family(conn, family_id)
+    if reservation_ref is not None:
+        reservation_id, error = _reservation_locator(conn, user_id, family_id, reservation_ref)
+        if error:
+            return error
     reservation = _get_owned_reservation_on_connection(conn, reservation_id, user_id, family_id)
     if not reservation:
         return {"success": False, "code": "RESERVATION_NOT_FOUND_OR_UNAVAILABLE",
@@ -1217,7 +1258,7 @@ def _cancel_reservation_on_connection(conn, reservation_id, user_id, family_id):
           AND u.id = r.user_id
           AND u.family_id = %s
           AND r.status = 'active'
-        RETURNING r.id
+        RETURNING r.reservation_ref
         """,
         (reservation_id, user_id, family_id),
     ).fetchone()
@@ -1233,7 +1274,7 @@ def _cancel_reservation_on_connection(conn, reservation_id, user_id, family_id):
         "success": True,
         "code": "RESERVATION_CANCELLED",
         "message": "Reservation cancelled",
-        "reservation_id": updated[0],
+        "reservation_ref": str(updated[0]),
     }
 
 
@@ -1271,7 +1312,7 @@ def update_reservation(
 def _get_owned_reservation_on_connection(conn, reservation_id, user_id, family_id):
     return conn.execute(
         """
-        SELECT r.id, r.start_time, r.end_time
+        SELECT r.id, r.start_time, r.end_time, r.vehicle_id
         FROM reservations AS r
         JOIN users AS u ON u.id = r.user_id
         WHERE r.id = %s
@@ -1286,7 +1327,13 @@ def _get_owned_reservation_on_connection(conn, reservation_id, user_id, family_i
 
 def _update_reservation_on_connection(
     conn, reservation_id, user_id, family_id, start_time, end_time,
+    *, reservation_ref=None, vehicle_ref=VEHICLE_UNSET,
 ):
+    _lock_reservation_family(conn, family_id)
+    if reservation_ref is not None:
+        reservation_id, error = _reservation_locator(conn, user_id, family_id, reservation_ref)
+        if error:
+            return error
     reservation = _get_owned_reservation_on_connection(conn, reservation_id, user_id, family_id)
     if not reservation:
         return {
@@ -1302,12 +1349,16 @@ def _update_reservation_on_connection(
     except ReservationValidationError as error:
         return error.result()
 
+    vehicle_id, error = _reservation_vehicle(conn, family_id, vehicle_ref, current=reservation[3])
+    if error:
+        return error
     conflict = _get_conflicting_reservation(
         conn,
         family_id,
         start_time,
         end_time,
-        exclude_reservation_id=reservation_id
+        exclude_reservation_id=reservation_id,
+        vehicle_id=vehicle_id,
     )
 
     if conflict:
@@ -1321,16 +1372,17 @@ def _update_reservation_on_connection(
         """
         UPDATE reservations AS r
         SET start_time = %s,
-            end_time = %s
+            end_time = %s,
+            vehicle_id = %s
         FROM users AS u
         WHERE r.id = %s
           AND r.user_id = %s
           AND u.id = r.user_id
           AND u.family_id = %s
           AND r.status = 'active'
-        RETURNING r.id
+        RETURNING r.reservation_ref
         """,
-        (start_time, end_time, reservation_id, user_id, family_id),
+        (start_time, end_time, vehicle_id, reservation_id, user_id, family_id),
     ).fetchone()
 
     if not updated:
@@ -1344,7 +1396,8 @@ def _update_reservation_on_connection(
         "success": True,
         "code": "RESERVATION_UPDATED",
         "message": "Reservation updated",
-        "reservation_id": updated[0],
+        "reservation_ref": str(updated[0]),
+        **_reservation_public_vehicle(conn, vehicle_id),
         "start_time": start_time,
         "end_time": end_time,
     }

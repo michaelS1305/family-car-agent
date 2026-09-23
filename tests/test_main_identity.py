@@ -246,10 +246,11 @@ join_family_stub = stub_module(
 
 
 class FakeReservationCenterError(Exception):
-    def __init__(self, code="RESERVATION_ERROR", message="Reservation error", status_code=400):
+    def __init__(self, code="RESERVATION_ERROR", message="Reservation error", status_code=400, vehicles=None):
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.vehicles = vehicles
 
 
 reservation_stub = stub_module(
@@ -572,6 +573,7 @@ class ReservationCenterRouteTests(unittest.TestCase):
     def test_create_cannot_receive_browser_identity(self):
         current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
         request = types.SimpleNamespace(
+            model_fields_set=set(),
             start_time="start",
             end_time="end",
             user_id=999,
@@ -588,12 +590,14 @@ class ReservationCenterRouteTests(unittest.TestCase):
     def test_update_and_cancel_use_current_user_and_time_locator(self):
         current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
         update_request = types.SimpleNamespace(
+            model_fields_set=set(), reservation_ref=None,
             original_start_time="old-start",
             original_end_time="old-end",
             start_time="new-start",
             end_time="new-end",
         )
         cancel_request = types.SimpleNamespace(
+            reservation_ref=None,
             original_start_time="old-start",
             original_end_time="old-end",
         )
@@ -613,6 +617,26 @@ class ReservationCenterRouteTests(unittest.TestCase):
             "old-start",
             "old-end",
         )
+
+    def test_multicar_refs_and_explicit_general_are_forwarded(self):
+        current_user = CurrentUser(user_id=17, name='User', family_id=42)
+        ref = '00000000-0000-0000-0000-000000000001'
+        request = types.SimpleNamespace(original_start_time=None, original_end_time=None,
+            start_time='start', end_time='end', reservation_ref=ref, vehicle_ref=None,
+            model_fields_set={'reservation_ref', 'vehicle_ref', 'start_time', 'end_time'})
+        main.update_reservation_route(request, current_user)
+        self.assertEqual(reservation_stub.update_reservation_for_current_user.call_args.kwargs,
+                         {'reservation_ref': ref, 'vehicle_ref': None})
+        main.cancel_reservation_route(request, current_user)
+        self.assertEqual(reservation_stub.cancel_reservation_for_current_user.call_args.kwargs, {'reservation_ref': ref})
+
+    def test_vehicle_required_http_error_preserves_safe_choices(self):
+        choices = [{'vehicle_ref': '00000000-0000-0000-0000-000000000001', 'display_name': 'Car'}]
+        error = FakeReservationCenterError('VEHICLE_REQUIRED', 'Choose vehicle', 409, choices)
+        with self.assertRaises(FakeHTTPException) as caught:
+            main._raise_reservation_center_error(error)
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertEqual(caught.exception.detail, {'code': 'VEHICLE_REQUIRED', 'message': 'Choose vehicle', 'vehicles': choices})
 
 
 class ChatRouteTests(unittest.TestCase):

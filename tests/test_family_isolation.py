@@ -70,6 +70,8 @@ class IsolationConnection:
 
     def execute(self, sql, parameters=()):
         compact = " ".join(sql.split())
+        if 'pg_advisory_xact_lock' in compact or 'SELECT id FROM families' in compact:
+            return Cursor()
 
         if "SET status = 'cancelled'" in compact:
             reservation_id, user_id, family_id = parameters
@@ -84,7 +86,7 @@ class IsolationConnection:
                 return Cursor([(reservation_id,)])
             return Cursor()
 
-        if "SELECT r.id, r.start_time, r.end_time FROM reservations AS r" in compact:
+        if "SELECT r.id, r.start_time, r.end_time, r.vehicle_id FROM reservations AS r" in compact:
             reservation_id, user_id, family_id = parameters
             reservation = self.state.reservations.get(reservation_id)
             allowed = (
@@ -93,10 +95,10 @@ class IsolationConnection:
                 and self.state.users[user_id]["family_id"] == family_id
                 and reservation["status"] == "active"
             )
-            return Cursor([(reservation_id, reservation["start"], reservation["end"])] if allowed else [])
+            return Cursor([(reservation_id, reservation["start"], reservation["end"], None)] if allowed else [])
 
         if "SET start_time = %s" in compact:
-            start, end, reservation_id, user_id, family_id = parameters
+            start, end, vehicle_id, reservation_id, user_id, family_id = parameters
             reservation = self.state.reservations.get(reservation_id)
             if (
                 reservation
@@ -110,7 +112,7 @@ class IsolationConnection:
             return Cursor()
 
         if "SELECT r.id, r.user_id, r.start_time, r.end_time" in compact:
-            family_id, end, start, *excluded = parameters
+            family_id, end, start, vehicle_id, _, *excluded = parameters
             rows = []
             for reservation_id, reservation in self.state.reservations.items():
                 owner = self.state.users[reservation["user_id"]]
@@ -543,6 +545,9 @@ class MutationInvokingModel:
                 name="update_reservation_tool",
                 args={
                     "reservation_id": 101,
+                    "reservation_ref": '00000000-0000-0000-0000-000000000101',
+                    "vehicle_ref": '00000000-0000-0000-0000-000000000201',
+                    "vehicle_id": 999,
                     "start_time": "2026-09-04T10:00:00",
                     "end_time": "2026-09-04T11:00:00",
                     "family_id": 999,
@@ -586,6 +591,7 @@ class AIToolBoundaryTests(unittest.TestCase):
             "get_last_driver",
             "get_recent_events",
             "get_ai_reservations",
+            "get_ai_vehicles",
             "get_user_reservations",
             "get_family_reservations",
         ):
@@ -686,7 +692,8 @@ class AIToolBoundaryTests(unittest.TestCase):
         dispatcher.assert_called_once_with(
             "update_reservation",
             {
-                "reservation_id": 101,
+                "reservation_ref": '00000000-0000-0000-0000-000000000101',
+                "vehicle_ref": '00000000-0000-0000-0000-000000000201',
                 "start_time": "2026-09-04T10:00:00",
                 "end_time": "2026-09-04T11:00:00",
             },

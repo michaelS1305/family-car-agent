@@ -2,7 +2,7 @@ from typing import Literal
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from onboarding_rules import HUMAN_NAME_MAX_LENGTH
 from push_security import validate_push_endpoint
 
@@ -160,6 +160,9 @@ class ReservationResponse(BaseModel):
     start_time: str
     end_time: str
     is_mine: bool
+    reservation_ref: UUID | None = None
+    vehicle_ref: UUID | None = None
+    vehicle_display_name: str | None = None
 
 
 class ReservationIntervalRequest(BaseModel):
@@ -167,29 +170,46 @@ class ReservationIntervalRequest(BaseModel):
 
     start_time: datetime
     end_time: datetime
+    vehicle_ref: UUID | None = None
 
 
 class ReservationUpdateRequest(ReservationIntervalRequest):
-    original_start_time: str
-    original_end_time: str
+    original_start_time: str | None = None
+    original_end_time: str | None = None
+    reservation_ref: UUID | None = None
+
+    @model_validator(mode='after')
+    def require_locator(self):
+        if self.reservation_ref is None and (self.original_start_time is None or self.original_end_time is None):
+            raise ValueError('Reservation reference or complete original interval required')
+        return self
 
     @field_validator("original_start_time", "original_end_time")
     @classmethod
     def validate_original_time(cls, value):
-        datetime.fromisoformat(value)
+        if value is not None:
+            datetime.fromisoformat(value)
         return value
 
 
 class ReservationCancelRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    original_start_time: str
-    original_end_time: str
+    original_start_time: str | None = None
+    original_end_time: str | None = None
+    reservation_ref: UUID | None = None
+
+    @model_validator(mode='after')
+    def require_locator(self):
+        if self.reservation_ref is None and (self.original_start_time is None or self.original_end_time is None):
+            raise ValueError('Reservation reference or complete original interval required')
+        return self
 
     @field_validator("original_start_time", "original_end_time")
     @classmethod
     def validate_original_time(cls, value):
-        datetime.fromisoformat(value)
+        if value is not None:
+            datetime.fromisoformat(value)
         return value
 
 

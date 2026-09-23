@@ -12,6 +12,7 @@ from tests.test_reservation_service import load_service
 
 
 NOW = datetime(2030, 1, 10, 12)
+REF = '00000000-0000-0000-0000-000000000001'
 
 
 class Cursor:
@@ -20,6 +21,9 @@ class Cursor:
 
     def fetchone(self):
         return self.row
+
+    def fetchall(self):
+        return [self.row] if self.row else []
 
 
 class Connection:
@@ -52,6 +56,18 @@ class Connection:
             return Cursor()
         if 'SELECT family_id' in sql:
             return Cursor((42,))
+        if 'FROM families' in sql:
+            return Cursor((42,))
+        if 'FROM vehicles' in sql:
+            return Cursor()
+        if 'SELECT r.id FROM reservations r' in sql:
+            user, family, *locator = params
+            ok = self.row and (user, family) == (7, 42)
+            if 'r.reservation_ref=' in sql:
+                ok = ok and str(locator[0]) == REF
+            else:
+                ok = ok and self.row[1:] == tuple(locator)
+            return Cursor((1,) if ok else None)
         if 'SELECT r.id, r.user_id, r.start_time, r.end_time' in sql:
             self.conflict_args = params
             _, end, start, *_ = params
@@ -64,7 +80,7 @@ class Connection:
                 ok = ok and self.row[2] > boundary
             else:
                 ok = self.row and params == (1, 7, 42)
-            return Cursor(self.row if ok else None)
+            return Cursor((*self.row, None) if ok else None)
         if 'INSERT INTO reservations' in sql:
             self.mutations.append(('create', params))
             return Cursor((2,))
@@ -106,7 +122,7 @@ class ReservationParityTests(unittest.TestCase):
         self.conn = Connection()
         self.user = CurrentUser(user_id=7, name='Test', family_id=42)
         self.chat = load_chat_service()
-        self.service = load_service()
+        self.service = load_service(vehicle_unset=database.VEHICLE_UNSET)
         self.chat.pool.connection.return_value = RecordingContext(self.conn)
         for name in ('_create_reservation_on_connection', '_update_reservation_on_connection',
                      '_cancel_reservation_on_connection'):
@@ -124,6 +140,11 @@ class ReservationParityTests(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def action(self, name, args):
+        # Existing time-domain cases use fixture 1's opaque identity now.
+        # Invalid numeric locators remain invalid.
+        if isinstance(args, dict) and type(args.get('reservation_id')) is int and args['reservation_id'] == 1:
+            args = {**args, 'reservation_ref': REF}
+            del args['reservation_id']
         return self.chat._execute_mutation(11, 'lease', self.user, name, args)['result']
 
     def test_chat_invalid_shapes_are_persisted_and_do_not_mutate(self):
@@ -246,7 +267,7 @@ class ReservationParityTests(unittest.TestCase):
         result = self.action('update_reservation', {'reservation_id': 1,
             'start_time': '2030-01-12T00:00:00Z', 'end_time': '2030-01-12T01:00:00Z'})
         self.assertEqual(result['code'], 'RESERVATION_CONFLICT')
-        self.assertEqual(self.conn.conflict_args, (42, '2030-01-12T03:00:00', '2030-01-12T02:00:00', 1))
+        self.assertEqual(self.conn.conflict_args, (42, '2030-01-12T03:00:00', '2030-01-12T02:00:00', None, None, 1))
         self.assertEqual(self.conn.mutations, [])
 
     def test_gemini_failure_after_validation_result_uses_persisted_fallback(self):

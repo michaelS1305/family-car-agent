@@ -167,7 +167,7 @@ class CapacityUnitTests(unittest.TestCase):
     def test_bounded_reservations_metadata_and_scope(self):
         database = load_database_module_without_real_connection()
         conn = Mock()
-        conn.execute.return_value.fetchall.return_value = [(i, 'A', 'start', 'end', 'active') for i in range(21)]
+        conn.execute.return_value.fetchall.return_value = [(uuid4(), 'A', 'start', 'end', 'active', None, None) for i in range(21)]
         database.pool.connection.return_value = ConnectionContext(conn)
         result = database.get_ai_reservations(4, 7)
         self.assertEqual(len(result['items']), 20)
