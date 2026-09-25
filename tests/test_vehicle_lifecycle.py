@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import os
+from pathlib import Path
 import threading
 import unittest
 from unittest.mock import patch
@@ -44,6 +45,8 @@ class LifecyclePostgresTests(unittest.TestCase):
 
     def setUp(self):
         fixtures.AccountDeletionPostgresTests.setUp(self)
+        source = (Path(__file__).resolve().parents[1] / 'supabase/manual_migrations/2026092501_vehicle_creation_bounds.sql').read_text()
+        self.query(source.replace('public.', self.schema + '.').replace("current_user <> 'postgres'", "current_user <> 'gemini_test'").replace('BEGIN;', '').replace('COMMIT;', ''))
         self.member = self.person(self.family)
         self.foreign = self.person()
         other_family = self.query("INSERT INTO families(name,family_code,created_by_user_id) VALUES('Other','xyz123',%s) RETURNING id", (self.foreign[1],))[0][0]
@@ -54,6 +57,8 @@ class LifecyclePostgresTests(unittest.TestCase):
 
     def call(self, operation, *args, user=None):
         with self.connection() as conn:
+            if operation in (lifecycle.create_vehicle, lifecycle.register_device):
+                return operation(conn, user or self.current, *args, request_id=uuid4())
             return operation(conn, user or self.current, *args)
 
     def vehicle(self, user=None):
@@ -301,8 +306,8 @@ class LifecyclePostgresTests(unittest.TestCase):
     def test_caller_rollback_undoes_lifecycle(self):
         with self.assertRaisesRegex(RuntimeError, 'rollback'), self.connection() as conn:
             with conn.transaction():
-                lifecycle.create_vehicle(conn, self.current, {'display_name': 'X'})
-                lifecycle.register_device(conn, self.current, {'platform': 'ios'})
+                lifecycle.create_vehicle(conn, self.current, {'display_name': 'X'}, request_id=uuid4())
+                lifecycle.register_device(conn, self.current, {'platform': 'ios'}, request_id=uuid4())
                 raise RuntimeError('rollback')
         self.assertEqual(self.query('SELECT count(*) FROM vehicles'), [(0,)])
         self.assertEqual(self.query('SELECT count(*) FROM registered_devices'), [(0,)])

@@ -6,8 +6,8 @@ identity fence -> existing family car advisory lock -> family row -> target row.
 Never acquire another member's identity lock. This serializes with admission
 and account deletion, including membership revalidation after the family lock.
 
-Registration creates a new identity each time: the schema has no installation
-identity/idempotency key. Do not automatically retry a lost registration response.
+Creation requires a caller-generated UUID4, reused for retries. Durable metadata
+is stored on the resource, not in a separate unbounded request ledger.
 Device platform is registration-time metadata, not an editable identity field;
 last_seen_at, sequence and revocation are server-managed, not generic updates.
 """
@@ -17,8 +17,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, StrictStr
 
 from deletion_gate import require_auth
-from vehicle_admission import CAR_TRANSITION_LOCK_NAMESPACE
+from vehicle_admission import CAR_TRANSITION_LOCK_NAMESPACE, _bounded_connection
 from vehicle_identity import DeviceView, VehicleView, VehicleIdentityError, _ref
+import vehicle_creation_policy as policy
 
 
 class VehicleMetadata(BaseModel):
@@ -50,6 +51,13 @@ def _scope(conn, current_user):
 
 def _vehicle_view(row):
     return VehicleView(vehicle_ref=row[1], display_name=row[2], retired_at=row[3])
+
+
+@contextmanager
+def _creation_scope(conn, current_user):
+    # Same finite DB/deadline guard as admission, without exposing an HTTP API.
+    with _bounded_connection(conn) as bounded, _scope(bounded, current_user):
+        yield bounded
 
 
 def _device_view(row):
@@ -102,13 +110,28 @@ def get_vehicle(conn, current_user, vehicle_ref):
         return _vehicle_view(_vehicle(conn, current_user, vehicle_ref))
 
 
-def create_vehicle(conn, current_user, request: VehicleMetadata):
-    with _scope(conn, current_user):
+def create_vehicle(conn, current_user, request: VehicleMetadata, *, request_id=None):
+    key = policy.request_key(request_id)
+    with _creation_scope(conn, current_user) as conn:
         name = _name(conn, request)
+        digest = policy.fingerprint(name)
+        previous = conn.execute(
+            'SELECT id,vehicle_ref,display_name,retired_at,creation_fingerprint,created_by_user_id '
+            'FROM vehicles WHERE family_id=%s AND creation_request_id=%s',
+            (current_user.family_id, key)).fetchone()
+        if previous:
+            if bytes(previous[4]) != digest or previous[5] != current_user.user_id:
+                policy.conflict()
+            return _vehicle_view(previous)
+        rows = conn.execute('SELECT retired_at FROM vehicles WHERE family_id=%s LIMIT %s',
+                            (current_user.family_id, policy.VEHICLES_LIFETIME)).fetchall()
+        policy.limit(len(rows) >= policy.VEHICLES_LIFETIME, 'VEHICLE_LIFETIME_LIMIT')
+        policy.limit(sum(row[0] is None for row in rows) >= policy.VEHICLES_ACTIVE, 'VEHICLE_ACTIVE_LIMIT')
         row = conn.execute(
-            'INSERT INTO vehicles(family_id,created_by_user_id,display_name) VALUES(%s,%s,%s) '
+            'INSERT INTO vehicles(family_id,created_by_user_id,display_name,creation_request_id,creation_fingerprint) '
+            'VALUES(%s,%s,%s,%s,%s) '
             'RETURNING id,vehicle_ref,display_name,retired_at',
-            (current_user.family_id, current_user.user_id, name),
+            (current_user.family_id, current_user.user_id, name, key, digest),
         ).fetchone()
         return _vehicle_view(row)
 
@@ -158,14 +181,36 @@ def get_device(conn, current_user, device_ref):
         return _device_view(_device(conn, current_user, device_ref))
 
 
-def register_device(conn, current_user, request: DeviceRegistration):
+def register_device(conn, current_user, request: DeviceRegistration, *, request_id=None):
+    key = policy.request_key(request_id)
     request = DeviceRegistration.model_validate(request)
-    with _scope(conn, current_user):
+    with _creation_scope(conn, current_user) as conn:
+        digest = policy.fingerprint(request.platform)
+        previous = conn.execute(
+            'SELECT id,device_ref,platform,revoked_at,creation_fingerprint FROM registered_devices '
+            'WHERE user_id=%s AND creation_request_id=%s', (current_user.user_id, key)).fetchone()
+        if previous:
+            if bytes(previous[4]) != digest:
+                policy.conflict()
+            return _device_view(previous)
+        rows = conn.execute('SELECT revoked_at FROM registered_devices WHERE user_id=%s ORDER BY id LIMIT %s',
+                            (current_user.user_id, policy.DEVICES_USER_LIFETIME)).fetchall()
+        policy.limit(len(rows) >= policy.DEVICES_USER_LIFETIME, 'DEVICE_USER_LIFETIME_LIMIT')
+        policy.limit(sum(row[0] is None for row in rows) >= policy.DEVICES_USER_ACTIVE, 'DEVICE_USER_ACTIVE_LIMIT')
+        lifetime = conn.execute('SELECT device_identities_created FROM families WHERE id=%s',
+                                (current_user.family_id,)).fetchone()[0]
+        policy.limit(lifetime >= policy.DEVICES_FAMILY_LIFETIME, 'DEVICE_FAMILY_LIFETIME_LIMIT')
+        active = conn.execute('SELECT d.id FROM registered_devices d JOIN users u ON u.id=d.user_id '
+                              'WHERE u.family_id=%s AND d.revoked_at IS NULL LIMIT %s',
+                              (current_user.family_id, policy.DEVICES_FAMILY_ACTIVE)).fetchall()
+        policy.limit(len(active) >= policy.DEVICES_FAMILY_ACTIVE, 'DEVICE_FAMILY_ACTIVE_LIMIT')
         row = conn.execute(
-            'INSERT INTO registered_devices(user_id,platform) VALUES(%s,%s) '
+            'INSERT INTO registered_devices(user_id,platform,creation_request_id,creation_fingerprint) VALUES(%s,%s,%s,%s) '
             'RETURNING id,device_ref,platform,revoked_at',
-            (current_user.user_id, request.platform),
+            (current_user.user_id, request.platform, key, digest),
         ).fetchone()
+        conn.execute('UPDATE families SET device_identities_created=device_identities_created+1 WHERE id=%s',
+                     (current_user.family_id,))
         return _device_view(row)
 
 

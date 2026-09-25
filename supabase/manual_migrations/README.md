@@ -222,3 +222,11 @@ rolls back. The transactional index build can briefly block event writes; use a
 quiet/controlled window, especially if internal writers are running. No native
 HTTP ingestion is activated. No table/constraint/privilege changes are made.
 Local disposable validation is not evidence of production execution.
+
+`2026092501_vehicle_creation_bounds.sql`: PREPARED / UNEXECUTED IN PRODUCTION.
+MC-SEC-002 resource-local creation keys/fingerprints and scoped unique constraints;
+family device lifetime counter survives member deletion. Existing identities/refs
+are preserved. Backfill includes currently persisted devices, not unknowable
+previously deleted history. Pause lifecycle writers through migration/backend
+cutover; old creation workers must not resume. See `VEHICLE_CREATION.md` for
+preflight, verification, quota semantics and recovery guidance. No ACL/RLS change.
