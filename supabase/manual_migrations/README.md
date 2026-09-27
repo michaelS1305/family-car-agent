@@ -230,3 +230,12 @@ are preserved. Backfill includes currently persisted devices, not unknowable
 previously deleted history. Pause lifecycle writers through migration/backend
 cutover; old creation workers must not resume. See `VEHICLE_CREATION.md` for
 preflight, verification, quota semantics and recovery guidance. No ACL/RLS change.
+
+`2026092502_carplay_vehicle_authority.sql`: PREPARED / UNEXECUTED IN PRODUCTION.
+MC-SEC-003 adds backend-only per-user CarPlay vehicle bindings and an active-session
+lookup index; moves Realtime invalidation from legacy car_events to accepted
+VehicleEvents and adds surviving-family invalidation on member deletion.
+No legacy test-history backfill or topic-authorization changes. Pause/drain old
+writers across migration/backend/external Shortcut cutover; do not run dual
+authorities. See `CARPLAY_VEHICLE_AUTHORITY.md` for exact request/binding contracts,
+operator verification and coordinated activation. This migration was not executed.

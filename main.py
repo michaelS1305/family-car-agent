@@ -14,6 +14,7 @@ load_dotenv()
 
 from models import (
     CarConnection,
+    CarPlayVehicleBindingRequest,
     CarDisconnectRequest,
     CarPlaySetupResponse,
     CarPlaySetupStatusRequest,
@@ -130,10 +131,10 @@ async def identity_unavailable(request, exc):
 
 @app.exception_handler(RequestValidationError)
 async def safe_disconnect_validation_error(request, exc):
-    if request.url.path == "/car/disconnect":
+    if request.url.path in ("/car/connect", "/car/disconnect"):
         # Never serialize non-finite inputs or echo the credential/body.
         return JSONResponse(status_code=422, content={
-            "detail": "Invalid disconnect request"
+            "detail": "Invalid disconnect request" if request.url.path == "/car/disconnect" else "Invalid connect request"
         })
     return await request_validation_exception_handler(request, exc)
 
@@ -408,6 +409,16 @@ def car_status(
     return {"status": status}
 
 
+@app.patch('/api/carplay/vehicle')
+def bind_carplay_vehicle(request: CarPlayVehicleBindingRequest, current_user: CurrentUser = Depends(get_current_user)):
+    from database import set_carplay_vehicle_binding
+    from vehicle_identity import VehicleIdentityError
+    try:
+        return set_carplay_vehicle_binding(current_user, request.vehicle_ref)
+    except VehicleIdentityError as error:
+        raise HTTPException(error.status_code, detail={'code': error.code, 'message': error.message}) from error
+
+
 @app.get("/api/car/history", response_model=CarHistoryResponse, status_code=200)
 def car_history(
     response: Response,
@@ -658,7 +669,7 @@ def complete_join(
 @app.post("/car/connect")
 def connect_car(connection: CarConnection):
     try:
-        return connect_user(connection.shortcut_token)
+        return connect_user(connection.shortcut_token, connection.acquisition_id)
     except CarTransitionError as error:
         _raise_car_transition_error(error)
 
@@ -670,6 +681,7 @@ def disconnect_car(connection: CarDisconnectRequest):
             connection.shortcut_token,
             connection.latitude,
             connection.longitude,
+            acquisition_id=connection.acquisition_id,
         )
     except CarTransitionError as error:
         _raise_car_transition_error(error)

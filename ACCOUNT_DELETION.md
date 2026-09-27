@@ -35,12 +35,12 @@ uses the lowest other member ID. Last-member cleanup deletes dependent family
 data/Join state before detaching/deleting the family and user in one transaction.
 Global capacity policies and `family_code_history` are never deleted.
 
-If the departing user is the current active driver, a null-user, empty-name
-`state_reset` car event prevents older unmatched Connects resurfacing. It is a
-logical FCA state barrier, not a physical return/disconnect, and is omitted from
-the usage-event tools. History does not pair sessions across the barrier. Legacy
-null-user events are not matched/deleted by name. Last-family deletion removes
-all family events as part of deleting that family.
+After MC-SEC-003 cutover, the Vehicle Identity checkpoint/session cleanup is the
+sole state authority. No legacy `state_reset` event is written. Attributable
+legacy rows are removed for privacy only; null-user legacy events are not
+matched/deleted by name and cannot resurrect state. Last-family deletion removes
+all family events. The prepared CarPlay authority migration invalidates Realtime
+for surviving families on user deletion without claiming a physical return.
 
 Auth hard deletion uses HTTPS Admin HTTP with `should_soft_delete=false`, explicit
 timeouts, redirects disabled and environment proxies disabled. Only a subsequent
@@ -63,7 +63,8 @@ never reconnected by name or email.
 4. Start only the matching new backend workers; then release the new frontend.
    Reopen traffic after smoke checks of ordinary/creator/last-member deletion,
    stale JWT rejection, and recovery after an interrupted Auth request.
-5. Do not roll back to ungated workers while jobs or `state_reset` events exist.
+5. Do not roll back to ungated workers while jobs exist, or to legacy-authority
+   workers after the MC-SEC-003 cutover.
    Auth/config failures require operational repair; do not remove pending jobs to
    restore access. This is irreversible hard deletion, not a recoverable soft delete.
 

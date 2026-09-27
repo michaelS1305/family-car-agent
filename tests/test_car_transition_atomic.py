@@ -1,203 +1,28 @@
-import threading
+"""Legacy SQL entry points are disabled; engine races live in test_carplay_adapter."""
 import unittest
-from datetime import datetime, timedelta
-
+from unittest.mock import Mock, patch
 from tests.test_database_atomic_creation import database
 
 
-class Cursor:
-    def __init__(self, row=None):
-        self.row = row
+class LegacyWriterDisabledTests(unittest.TestCase):
+    def test_all_old_mutation_entry_points_fail_without_database_access(self):
+        with patch.object(database, 'pool') as pool:
+            for method, args in (
+                (database.connect_car_atomically, (1, 'name', 10)),
+                (database.disconnect_car_atomically, (1, 10)),
+                (database._insert_car_event_on_connection, (Mock(), 1, 'name', 'connected', 10)),
+            ):
+                with self.subTest(method=method.__name__), self.assertRaises(RuntimeError):
+                    method(*args)
+            pool.connection.assert_not_called()
 
-    def fetchone(self):
-        return self.row
-
-
-class CarState:
-    def __init__(self):
-        self.locks = {}
-        self.locks_guard = threading.Lock()
-        self.events = []
-        self.event_times = []
-        self.next_id = 1
-
-    def active_driver(self, family_id):
-        active = {}
-        names = {}
-        for event in self.events:
-            if event[4] != family_id:
-                continue
-            _, user_id, driver_name, status, _ = event
-            key = ("user", user_id) if user_id is not None else ("name", driver_name)
-            if status == "connected":
-                active[key] = True
-                names[key] = (driver_name, user_id)
-            else:
-                active.pop(key, None)
-                names.pop(key, None)
-        remaining = [names[key] for key in active]
-        return remaining[-1] if remaining else None
-
-
-class Transaction:
-    def __init__(self, connection):
-        self.connection = connection
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        if self.connection.acquired_lock:
-            self.connection.acquired_lock.release()
-            self.connection.acquired_lock = None
-        return False
-
-
-class Connection:
-    def __init__(self, state):
-        self.state = state
-        self.acquired_lock = None
-
-    def transaction(self):
-        return Transaction(self)
-
-    def execute(self, sql, parameters):
-        if "pg_try_advisory_xact_lock" in sql:
-            with self.state.locks_guard:
-                lock = self.state.locks.setdefault(parameters[1], threading.Lock())
-            acquired = lock.acquire(blocking=False)
-            if acquired:
-                self.acquired_lock = lock
-            return Cursor((acquired,))
-        if "FROM car_events c" in sql:
-            return Cursor(self.state.active_driver(parameters[0]))
-        if "INSERT INTO car_events" in sql:
-            user_id, driver_name, status, _event_time, family_id = parameters
-            self.state.event_times.append(_event_time)
-            event_id = self.state.next_id
-            self.state.next_id += 1
-            self.state.events.append((event_id, user_id, driver_name, status, family_id))
-            return Cursor((event_id,))
-        raise AssertionError(sql)
-
-
-class ConnectionContext:
-    def __init__(self, state):
-        self.connection = Connection(state)
-
-    def __enter__(self):
-        return self.connection
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        return False
-
-
-class Pool:
-    def __init__(self, state):
-        self.state = state
-
-    def connection(self):
-        return ConnectionContext(self.state)
-
-
-class AtomicCarTransitionTests(unittest.TestCase):
-    def setUp(self):
-        self.state = CarState()
-        self.original_pool = database.pool
-        database.pool = Pool(self.state)
-
-    def tearDown(self):
-        database.pool = self.original_pool
-
-    def test_duplicate_sequential_connect_is_noop(self):
-        first = database.connect_car_atomically(1, "A1", 10)
-        second = database.connect_car_atomically(1, "A1", 10)
-        self.assertEqual(first["transition"], "connected")
-        self.assertEqual(second, {
-            "transition": "none", "reason": "already_active", "current_driver": "A1",
-        })
-        self.assertEqual([event[3] for event in self.state.events], ["connected"])
-
-    def test_concurrent_duplicate_connect_creates_one_logical_transition(self):
-        results = []
-        threads = [
-            threading.Thread(
-                target=lambda: results.append(database.connect_car_atomically(1, "A1", 10))
-            )
-            for _ in range(2)
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        self.assertEqual(sum(result["transition"] == "connected" for result in results), 1)
-        self.assertEqual(sum(result["transition"] == "none" for result in results), 1)
-        self.assertEqual(len(self.state.events), 1)
-
-    def test_handover_records_history_but_returns_only_final_connect_transition(self):
-        database.connect_car_atomically(1, "A1", 10)
-        result = database.connect_car_atomically(2, "A2", 10)
-        self.assertEqual(result["transition"], "connected")
-        self.assertEqual(result["event_id"], 3)
-        self.assertEqual(
-            [(event[1], event[3]) for event in self.state.events],
-            [(1, "connected"), (1, "disconnected"), (2, "connected")],
-        )
-
-    def test_all_new_connect_handover_and_disconnect_events_use_utc_offsets(self):
-        database.connect_car_atomically(1, "A1", 10)
-        database.connect_car_atomically(2, "A2", 10)
-        database.disconnect_car_atomically(2, 10)
-
-        self.assertEqual(len(self.state.event_times), 4)
-        for value in self.state.event_times:
-            timestamp = datetime.fromisoformat(value)
-            self.assertIsNotNone(timestamp.tzinfo)
-            self.assertEqual(timestamp.utcoffset(), timedelta(0))
-
-    def test_valid_disconnect_then_duplicate_disconnect(self):
-        database.connect_car_atomically(1, "A1", 10)
-        first = database.disconnect_car_atomically(1, 10)
-        second = database.disconnect_car_atomically(1, 10)
-        self.assertEqual(first["transition"], "disconnected")
-        self.assertEqual(second, {"transition": "none", "reason": "already_available"})
-        self.assertEqual([event[3] for event in self.state.events], ["connected", "disconnected"])
-
-    def test_other_user_cannot_disconnect_active_driver(self):
-        database.connect_car_atomically(1, "A1", 10)
-        result = database.disconnect_car_atomically(2, 10)
-        self.assertEqual(result, {
-            "transition": "none", "reason": "different_driver", "current_driver": "A1",
-        })
-        self.assertEqual(len(self.state.events), 1)
-
-    def test_same_family_busy_fails_fast_without_events(self):
-        holder = Connection(self.state)
-        self.assertTrue(holder.execute(
-            "SELECT pg_try_advisory_xact_lock(%s, %s)",
-            (database.CAR_TRANSITION_LOCK_NAMESPACE, 10),
-        ).fetchone()[0])
-        try:
-            with self.assertRaises(database.CarTransitionBusyError):
-                database.connect_car_atomically(1, "A1", 10)
-            self.assertEqual(self.state.events, [])
-        finally:
-            holder.acquired_lock.release()
-            holder.acquired_lock = None
-
-    def test_family_locks_are_scoped_independently(self):
-        holder = Connection(self.state)
-        self.assertTrue(holder.execute(
-            "SELECT pg_try_advisory_xact_lock(%s, %s)",
-            (database.CAR_TRANSITION_LOCK_NAMESPACE, 10),
-        ).fetchone()[0])
-        try:
-            database.connect_car_atomically(3, "B1", 20)
-        finally:
-            holder.acquired_lock.release()
-            holder.acquired_lock = None
-        self.assertEqual(self.state.active_driver(20), ("B1", 3))
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_current_state_query_uses_family_scoped_sessions_only(self):
+        conn = Mock()
+        conn.execute.return_value.fetchone.return_value = ('Driver', 1)
+        self.assertEqual(database._get_active_driver_on_connection(conn, 10), ('Driver', 1))
+        query, params = conn.execute.call_args.args
+        self.assertIn('vehicle_driver_sessions', query)
+        self.assertIn('s.family_id=%s', query)
+        self.assertIn('s.ended_at IS NULL', query)
+        self.assertNotIn('car_events', query)
+        self.assertEqual(params, (10,))

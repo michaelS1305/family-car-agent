@@ -42,12 +42,14 @@ class HistoryServiceTests(unittest.TestCase):
 
     def test_active_usage_is_separate_and_has_no_fabricated_end(self):
         database_stub.get_car_usage_history.return_value = [
-            ("מיכאל", "2026-09-06T08:00:00+00:00", None, True, 9),
-            ("נועה", "2026-09-05T10:00:00+00:00", "2026-09-05T11:00:00+00:00", False, 7),
+            ("מיכאל", "2026-09-06T08:00:00+00:00", None, True, 9, 'Car A', '11111111-1111-4111-8111-111111111111'),
+            ("נועה", "2026-09-05T10:00:00+00:00", "2026-09-05T11:00:00+00:00", False, 7, 'Car B', '22222222-2222-4222-8222-222222222222'),
         ]
         result = service.get_car_history(self.user())
         self.assertEqual(result["active_usage"], {
             "name": "מיכאל",
+            "vehicle_name": "Car A",
+            "vehicle_ref": "11111111-1111-4111-8111-111111111111",
             "started_at": "2026-09-06T08:00:00+00:00",
         })
         self.assertNotIn("ended_at", result["active_usage"])
@@ -60,8 +62,8 @@ class HistoryServiceTests(unittest.TestCase):
 
     def test_completed_usage_preserves_canonical_reverse_order_and_safe_fields(self):
         database_stub.get_car_usage_history.return_value = [
-            ("נועה", "2026-09-05T10:00:00+00:00", "2026-09-05T11:00:00+00:00", False, 7),
-            ("מיכאל", "2026-09-04T08:00:00+00:00", "2026-09-04T09:00:00+00:00", False, 3),
+            ("נועה", "2026-09-05T10:00:00+00:00", "2026-09-05T11:00:00+00:00", False, 7, 'Car B', '22222222-2222-4222-8222-222222222222'),
+            ("מיכאל", "2026-09-04T08:00:00+00:00", "2026-09-04T09:00:00+00:00", False, 3, 'Car A', '11111111-1111-4111-8111-111111111111'),
         ]
         result = service.get_car_history(self.user())
         self.assertEqual([usage["name"] for usage in result["recent_usage"]], ["נועה", "מיכאל"])
@@ -73,6 +75,20 @@ class HistoryServiceTests(unittest.TestCase):
             service.get_car_history(self.user(family_id=None))
         self.assertEqual(raised.exception.status_code, 403)
         database_stub.get_car_usage_history.assert_not_called()
+
+    def test_api_model_preserves_vehicle_identity_and_all_active_sessions(self):
+        from models import CarHistoryResponse
+        ref = '11111111-1111-4111-8111-111111111111'
+        ref2 = '22222222-2222-4222-8222-222222222222'
+        database_stub.get_car_usage_history.return_value = [
+            ('A', '2026-09-20T10:00:00+00:00', None, True, 1, 'Car A', ref),
+            ('B', '2026-09-20T11:00:00+00:00', None, True, 2, 'Car B', ref2),
+            ('A', '2026-09-19T10:00:00+00:00', '2026-09-19T11:00:00+00:00', False, 3, 'Car A', ref),
+        ]
+        body = CarHistoryResponse.model_validate(service.get_car_history(self.user())).model_dump(mode='json')
+        self.assertEqual([item['vehicle_ref'] for item in body['active_usages']], [ref, ref2])
+        self.assertEqual(body['recent_usage'][0]['vehicle_ref'], ref)
+        self.assertEqual(body['recent_usage'][0]['vehicle_name'], 'Car A')
 
 
 if __name__ == "__main__":

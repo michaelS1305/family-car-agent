@@ -2,19 +2,23 @@ from typing import Literal
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, UUID4, field_validator, model_validator
 from onboarding_rules import HUMAN_NAME_MAX_LENGTH
 from push_security import validate_push_endpoint
 
 
 class CarConnection(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     shortcut_token: str
+    acquisition_id: UUID4
     latitude: float | None = None
     longitude: float | None = None
 
 
 class CarDisconnectRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     shortcut_token: str
+    acquisition_id: UUID4
     latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
     longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
 
@@ -27,6 +31,11 @@ class CarPlaySetupResponse(BaseModel):
 
 class CarPlaySetupStatusRequest(BaseModel):
     status: Literal["completed", "skipped"]
+
+
+class CarPlayVehicleBindingRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    vehicle_ref: UUID
 
 
 class CarStatusResponse(BaseModel):
@@ -91,9 +100,11 @@ class PushSubscriptionRemoveRequest(BaseModel):
 class ActiveCarUsageResponse(BaseModel):
     name: str
     started_at: str
+    vehicle_name: str
+    vehicle_ref: UUID
 
 
-class CompletedCarUsageResponse(BaseModel):
+class CompletedCarUsageResponse(ActiveCarUsageResponse):
     name: str
     started_at: str
     ended_at: str
@@ -101,6 +112,7 @@ class CompletedCarUsageResponse(BaseModel):
 
 class CarHistoryResponse(BaseModel):
     active_usage: ActiveCarUsageResponse | None
+    active_usages: list[ActiveCarUsageResponse]
     recent_usage: list[CompletedCarUsageResponse]
 
 

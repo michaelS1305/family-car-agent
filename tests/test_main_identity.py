@@ -78,6 +78,7 @@ dotenv_stub = stub_module("dotenv", load_dotenv=Mock())
 models_stub = stub_module(
     "models",
     CarConnection=type("CarConnection", (), {}),
+    CarPlayVehicleBindingRequest=type("CarPlayVehicleBindingRequest", (), {}),
     CarDisconnectRequest=type("CarDisconnectRequest", (), {}),
     CarPlaySetupResponse=type("CarPlaySetupResponse", (), {}),
     CarPlaySetupStatusRequest=type("CarPlaySetupStatusRequest", (), {}),
@@ -320,7 +321,7 @@ class CarTransitionRouteTests(unittest.TestCase):
         car_stub.disconnect_user.reset_mock(side_effect=True)
 
     def test_rate_and_busy_errors_are_structured_with_retry_after(self):
-        connection = types.SimpleNamespace(shortcut_token="secret", latitude=31, longitude=35)
+        connection = types.SimpleNamespace(shortcut_token="secret", latitude=31, longitude=35, acquisition_id='a')
         for route, service, error in (
             (main.connect_car, car_stub.connect_user, FakeCarTransitionError()),
             (main.disconnect_car, car_stub.disconnect_user,

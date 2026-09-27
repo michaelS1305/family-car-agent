@@ -1,4 +1,5 @@
-"""INTERNAL ONLY: native evidence admission. No pool, route or runtime caller.
+"""Internal shared evidence admission. Native ingress remains internal-only;
+the authenticated Shortcut adapter is the sole runtime compatibility caller.
 
 Lock order: shared deletion identity fence -> existing family car advisory lock
 -> family row -> owned device row -> target vehicle row. Never fence another
@@ -41,6 +42,7 @@ class NativeEvent:
 class AdmissionResult:
     kind: Literal["accepted", "retry", "terminal", "gap", "conflict", "unavailable", "malformed", "future_clock_skew"]
     admission_outcome: str | None = None
+    transition: str | None = None
 
 
 def _envelope(event):
@@ -314,7 +316,7 @@ def maintain_native_checkpoint(conn, current_user: CurrentUser):
         return 'complete' if installed == target else 'progress'
 
 
-def _admit(conn, current_user, event):
+def _admit(conn, current_user, event, *, shortcut=False):
     with conn.transaction():
         try:
             require_auth(conn, current_user.auth_user_id)
@@ -333,7 +335,7 @@ def _admit(conn, current_user, event):
             (current_user.user_id, family_id, current_user.auth_user_id),
         ).fetchone():
             return AdmissionResult("unavailable")
-        device = conn.execute(
+        device = None if shortcut else conn.execute(
             "SELECT id,last_processed_sequence FROM registered_devices "
             "WHERE device_ref=%s AND user_id=%s AND revoked_at IS NULL FOR UPDATE",
             (event.device_ref, current_user.user_id),
@@ -342,12 +344,13 @@ def _admit(conn, current_user, event):
             "SELECT id,retired_at FROM vehicles WHERE vehicle_ref=%s AND family_id=%s FOR SHARE",
             (event.vehicle_ref, family_id),
         ).fetchone()
-        if not device or not vehicle:
+        if (not shortcut and not device) or not vehicle:
             return AdmissionResult("unavailable")
-        device_id, last_sequence = device
+        device_id, last_sequence = (None, None) if shortcut else device
+        source = 'legacy_shortcut' if shortcut else 'native'
         vehicle_id, retired = vehicle
         evidence = (event.event_id, family_id, vehicle_id, current_user.user_id,
-                    device_id, "native", event.event_type, event.occurred_at,
+                    device_id, source, event.event_type, event.occurred_at,
                     event.device_sequence, event.take_event_id)
         previous = conn.execute(
             "SELECT event_id,family_id,vehicle_id,user_id,device_id,source,event_type,"
@@ -356,12 +359,12 @@ def _admit(conn, current_user, event):
             (event.event_id, device_id, event.device_sequence),
         ).fetchall()
         if previous:
-            if len(previous) == 1 and tuple(previous[0][:10]) == evidence and event.device_sequence <= last_sequence:
+            if len(previous) == 1 and tuple(previous[0][:10]) == evidence and (shortcut or event.device_sequence <= last_sequence):
                 return AdmissionResult("retry", previous[0][10])
             return AdmissionResult("conflict")
-        if event.device_sequence <= last_sequence:
+        if not shortcut and event.device_sequence <= last_sequence:
             return AdmissionResult("conflict")
-        if event.device_sequence > last_sequence + 1:
+        if not shortcut and event.device_sequence > last_sequence + 1:
             return AdmissionResult("gap")
 
         # Evaluate after serialization and retry/sequence checks. PostgreSQL,
@@ -376,7 +379,7 @@ def _admit(conn, current_user, event):
         now = conn.execute('SELECT clock_timestamp()').fetchone()[0]
         target = max(boundary, now - timedelta(hours=CORRECTION_HOURS)) if boundary else now - timedelta(hours=CORRECTION_HOURS)
         outcome = "accepted"
-        last_time = conn.execute(
+        last_time = None if shortcut else conn.execute(
             "SELECT occurred_at FROM vehicle_events WHERE device_id=%s AND admission_outcome='accepted' "
             "ORDER BY device_sequence DESC LIMIT 1", (device_id,),
         ).fetchone()
@@ -396,7 +399,7 @@ def _admit(conn, current_user, event):
                 outcome = "causal_conflict"
 
         accepted = AcceptedEvent(event.event_id, family_id, vehicle_id, current_user.user_id,
-                                 event.event_type, event.occurred_at, 'native', device_id,
+                                 event.event_type, event.occurred_at, source, device_id,
                                  event.device_sequence, event.take_event_id)
         if outcome == "accepted":
             try:
@@ -436,9 +439,12 @@ def _admit(conn, current_user, event):
                         raise _ReceiptConflict()
                     if plan:
                         _materialize(conn, family_id, plan)
-                    conn.execute('UPDATE registered_devices SET last_processed_sequence=%s WHERE id=%s',
-                                 (event.device_sequence, device_id))
-                    return AdmissionResult('accepted', 'accepted')
+                    if not shortcut:
+                        conn.execute('UPDATE registered_devices SET last_processed_sequence=%s WHERE id=%s',
+                                     (event.device_sequence, device_id))
+                    transition = next((effect.outcome for effect in projection.effects
+                                       if effect.event_id == event.event_id), None) if projection else None
+                    return AdmissionResult('accepted', 'accepted', transition)
             except PolicyExceeded:
                 outcome = 'reconciliation_policy_exceeded'
             except _RejectedProjection as error:
@@ -448,8 +454,9 @@ def _admit(conn, current_user, event):
 
         if not _receipt(conn, evidence, outcome, None):
             return AdmissionResult('conflict')
-        conn.execute("UPDATE registered_devices SET last_processed_sequence=%s WHERE id=%s",
-                     (event.device_sequence, device_id))
+        if not shortcut:
+            conn.execute("UPDATE registered_devices SET last_processed_sequence=%s WHERE id=%s",
+                         (event.device_sequence, device_id))
         return AdmissionResult('terminal', outcome)
 
 

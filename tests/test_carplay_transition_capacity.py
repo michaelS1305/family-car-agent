@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 from uuid import uuid4
+from vehicle_admission import AdmissionResult
 
 from tests.test_database_atomic_creation import database
 
@@ -33,12 +34,7 @@ class CarPlayTransitionServiceTests(unittest.TestCase):
         self.db = types.ModuleType("database")
         self.db.CarTransitionBusyError = type("CarTransitionBusyError", (Exception,), {})
         self.db.admit_car_transition_request = Mock(return_value={"admitted": True})
-        self.db.connect_car_atomically = Mock(return_value={
-            "transition": "connected", "event_id": 1, "event_time": "now",
-        })
-        self.db.disconnect_car_atomically = Mock(return_value={
-            "transition": "disconnected", "event_id": 2, "event_time": "now",
-        })
+        self.db.apply_carplay_transition = Mock(return_value=(AdmissionResult('accepted', 'accepted', 'returned'), 1, 'now'))
         self.db.get_active_driver = Mock(return_value=("Driver", 7))
         self.db.get_user_by_token = Mock(return_value=(7, "Driver", 11))
         self.db.get_family_by_id = Mock(return_value=(11, "Family", "Address", 31.0, 35.0))
@@ -49,22 +45,18 @@ class CarPlayTransitionServiceTests(unittest.TestCase):
     def test_invalid_token_does_not_count(self):
         self.db.get_user_by_token.return_value = None
         self.assertEqual(
-            self.service.connect_user("invalid"), {"message": "Invalid shortcut token"}
+            self.service.connect_user("invalid", uuid4()), {"message": "Invalid shortcut token"}
         )
         self.db.admit_car_transition_request.assert_not_called()
 
     def test_connect_noop_is_admitted_but_has_no_transition_effect(self):
-        self.db.connect_car_atomically.return_value = {
-            "transition": "none", "reason": "already_active", "current_driver": "Driver",
-        }
-        self.service.connect_user("token")
+        self.db.apply_carplay_transition.return_value = (AdmissionResult('retry', 'accepted'), 1, 'now')
+        self.service.connect_user("token", uuid4())
         self.db.admit_car_transition_request.assert_called_once_with(7, 11)
         self.push.dispatch_car_transition_notification.assert_not_called()
 
     def test_disconnect_prechecks_reject_before_admission(self):
         cases = [
-            (None, (11, "Family", "Address", 31.0, 35.0), 31.0, 35.0),
-            (("Other", 8), (11, "Family", "Address", 31.0, 35.0), 31.0, 35.0),
             (("Driver", 7), (11, "Family", "Address", None, None), 31.0, 35.0),
             (("Driver", 7), (11, "Family", "Address", 31.0, 35.0), 32.0, 35.0),
         ]
@@ -72,18 +64,18 @@ class CarPlayTransitionServiceTests(unittest.TestCase):
             with self.subTest(active=active, family=family):
                 self.db.get_active_driver.return_value = active
                 self.db.get_family_by_id.return_value = family
-                self.service.disconnect_user("token", latitude, longitude)
+                self.service.disconnect_user("token", latitude, longitude, acquisition_id=uuid4())
                 self.db.admit_car_transition_request.assert_not_called()
-                self.db.disconnect_car_atomically.assert_not_called()
+                self.db.apply_carplay_transition.assert_not_called()
                 self.db.admit_car_transition_request.reset_mock()
-                self.db.disconnect_car_atomically.reset_mock()
+                self.db.apply_carplay_transition.reset_mock()
                 self.db.get_user_by_token.return_value = (7, "Driver", 11)
 
     def test_valid_disconnect_reaches_shared_admission_before_atomic_transition(self):
         calls = Mock()
         calls.attach_mock(self.db.admit_car_transition_request, "admit")
-        calls.attach_mock(self.db.disconnect_car_atomically, "transition")
-        self.service.disconnect_user("token", 31.0, 35.0)
+        calls.attach_mock(self.db.apply_carplay_transition, "transition")
+        self.service.disconnect_user("token", 31.0, 35.0, acquisition_id=uuid4())
         self.assertEqual([call[0] for call in calls.mock_calls], ["admit", "transition"])
         self.db.admit_car_transition_request.assert_called_once_with(7, 11)
 
@@ -94,28 +86,26 @@ class CarPlayTransitionServiceTests(unittest.TestCase):
             "retry_after_seconds": 2.1,
         }
         with self.assertRaises(self.service.CarTransitionError) as limited:
-            self.service.connect_user("token")
+            self.service.connect_user("token", uuid4())
         self.assertEqual(limited.exception.retry_after_seconds, 3)
-        self.db.connect_car_atomically.assert_not_called()
+        self.db.apply_carplay_transition.assert_not_called()
         self.push.dispatch_car_transition_notification.assert_not_called()
 
         self.db.admit_car_transition_request.return_value = {"admitted": True}
-        self.db.connect_car_atomically.side_effect = self.db.CarTransitionBusyError()
+        self.db.apply_carplay_transition.side_effect = self.db.CarTransitionBusyError()
         with self.assertRaises(self.service.CarTransitionError) as busy:
-            self.service.connect_user("token")
+            self.service.connect_user("token", uuid4())
         self.assertEqual(busy.exception.code, "CARPLAY_TRANSITION_BUSY")
         self.db.admit_car_transition_request.assert_called()
         self.push.dispatch_car_transition_notification.assert_not_called()
 
-    def test_lost_disconnect_response_retry_is_harmless_and_free(self):
-        self.service.disconnect_user("token", 31.0, 35.0)
-        self.db.get_active_driver.return_value = None
-        self.assertEqual(
-            self.service.disconnect_user("token", 31.0, 35.0),
-            {"message": "הרכב כבר פנוי"},
-        )
-        self.db.disconnect_car_atomically.assert_called_once()
-        self.db.admit_car_transition_request.assert_called_once()
+    def test_lost_disconnect_response_retry_has_no_duplicate_push(self):
+        acquisition = uuid4()
+        self.service.disconnect_user("token", 31.0, 35.0, acquisition_id=acquisition)
+        self.db.apply_carplay_transition.return_value = (AdmissionResult('retry', 'accepted'), 1, 'now')
+        self.service.disconnect_user("token", 31.0, 35.0, acquisition_id=acquisition)
+        self.assertEqual(self.db.apply_carplay_transition.call_count, 2)
+        self.assertEqual(self.db.admit_car_transition_request.call_count, 2)
         self.push.dispatch_car_transition_notification.assert_called_once()
 
     def test_migration_contract_is_backend_only_and_additive(self):
@@ -236,23 +226,12 @@ class CarPlayTransitionPostgresTests(unittest.TestCase):
         self.assertEqual(sum(result["admitted"] for result in results), 10)
         self.assertEqual(self.admissions(), 10)
 
-    def test_transition_lock_is_fail_fast_and_family_scoped(self):
-        with self.connection() as holder:
-            with holder.transaction():
-                holder.execute(
-                    "SELECT pg_advisory_xact_lock(%s, %s)",
-                    (database.CAR_TRANSITION_LOCK_NAMESPACE, 10),
-                )
-                with self.assertRaises(database.CarTransitionBusyError):
-                    database.connect_car_atomically(1, "A", 10)
-                other_family = database.connect_car_atomically(2, "B", 20)
-                self.assertEqual(other_family["transition"], "connected")
-
+    def test_retired_legacy_writer_cannot_bypass_capacity_or_new_authority(self):
+        with self.assertRaises(RuntimeError):
+            database.connect_car_atomically(1, "A", 10)
+        self.assertEqual(self.admissions(), 0)
         with self.connection() as conn:
-            events = conn.execute(
-                "SELECT user_id, family_id, status FROM car_events ORDER BY id"
-            ).fetchall()
-        self.assertEqual(events, [(2, 20, "connected")])
+            self.assertEqual(conn.execute('SELECT count(*) FROM car_events').fetchone(), (0,))
 
 
 if __name__ == "__main__":

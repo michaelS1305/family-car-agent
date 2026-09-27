@@ -1,3 +1,5 @@
+from uuid import uuid4
+from vehicle_admission import AdmissionResult
 import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
@@ -167,12 +169,12 @@ class IsolationConnection:
                     )
             return Cursor(rows)
 
-        if "FROM car_events" in compact:
+        if "FROM vehicle_events" in compact or "FROM vehicle_driver_sessions" in compact:
             family_id = parameters[0]
             family_events = [event for event in self.state.events if event[4] == family_id]
-            if "c.driver_name, c.user_id" in compact:
+            if "u.name,s.user_id" in compact:
                 return Cursor([(event[0], event[3]) for event in reversed(family_events)])
-            return Cursor([(event[0], event[1], event[2]) for event in reversed(family_events)])
+            return Cursor([(event[0], 'take' if event[1] == 'connected' else 'return', datetime.fromisoformat(event[2]), 'Car', 'ref') for event in reversed(family_events)])
 
         if "FROM conversation_messages" in compact:
             user_id = parameters[0]
@@ -326,8 +328,8 @@ class DatabaseFamilyIsolationTests(unittest.TestCase):
     def test_car_status_and_history_are_family_scoped(self):
         self.assertEqual(database.get_active_driver(10), ("A1", 1))
         self.assertEqual(database.get_active_driver(20), ("B1", 3))
-        self.assertEqual(database.get_recent_events(10), [("A1", "connected", "2026-09-03T08:00:00")])
-        self.assertEqual(database.get_recent_events(20), [("B1", "connected", "2026-09-03T09:00:00")])
+        self.assertEqual(database.get_recent_events(10), [("A1", "take", "2026-09-03T08:00:00", 'Car', 'ref')])
+        self.assertEqual(database.get_recent_events(20), [("B1", "take", "2026-09-03T09:00:00", 'Car', 'ref')])
 
     def test_conversation_history_is_user_specific(self):
         self.assertEqual(database.get_recent_conversation(1), [("user", "A private")])
@@ -356,14 +358,9 @@ class CarAndNotificationIsolationTests(unittest.TestCase):
         self.database_stub.CarTransitionBusyError = type(
             "CarTransitionBusyError", (Exception,), {}
         )
-        self.database_stub.connect_car_atomically = Mock(
-            return_value={
-                "transition": "connected",
-                "event_id": 101,
-                "event_time": "2026-09-06T10:00:00",
-            }
-        )
-        self.database_stub.disconnect_car_atomically = Mock()
+        self.database_stub.apply_carplay_transition = Mock(
+            return_value=(AdmissionResult('accepted', 'accepted', 'opened'), 101, '2026-09-06T10:00:00'))
+        self.acquisition = uuid4()
         self.database_stub.get_user_by_token = Mock()
         self.database_stub.get_family_by_id = Mock()
         self.push_service_stub = types.ModuleType("push_service")
@@ -377,11 +374,11 @@ class CarAndNotificationIsolationTests(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.database_stub.get_user_by_token.return_value = user
-                self.database_stub.connect_car_atomically.reset_mock()
+                self.database_stub.apply_carplay_transition.reset_mock()
                 self.push_service_stub.dispatch_car_transition_notification.reset_mock()
-                self.service.connect_user(token)
-                self.database_stub.connect_car_atomically.assert_called_once_with(
-                    user[0], user[1], user[2]
+                self.service.connect_user(token, self.acquisition)
+                self.database_stub.apply_carplay_transition.assert_called_once_with(
+                    token, self.acquisition, disconnect=False
                 )
                 self.database_stub.admit_car_transition_request.assert_called_with(
                     user[0], user[2]
@@ -397,7 +394,7 @@ class CarAndNotificationIsolationTests(unittest.TestCase):
     def test_notification_dispatch_uses_canonical_family_and_actor(self):
         self.database_stub.get_user_by_token.return_value = (1, "A1", 10)
 
-        self.service.connect_user("token-a")
+        self.service.connect_user("token-a", self.acquisition)
 
         self.push_service_stub.dispatch_car_transition_notification.assert_called_once_with(
             family_id=10,
@@ -409,15 +406,11 @@ class CarAndNotificationIsolationTests(unittest.TestCase):
 
     def test_duplicate_connect_produces_no_notification(self):
         self.database_stub.get_user_by_token.return_value = (1, "A1", 10)
-        self.database_stub.connect_car_atomically.return_value = {
-            "transition": "none",
-            "reason": "already_active",
-            "current_driver": "A1",
-        }
+        self.database_stub.apply_carplay_transition.return_value = (AdmissionResult('retry', 'accepted'), 101, 'time')
 
-        result = self.service.connect_user("token-a")
+        result = self.service.connect_user("token-a", self.acquisition)
 
-        self.assertEqual(result["message"], "User is already the current driver")
+        self.assertEqual(result["message"], "הפעולה כבר טופלה")
         self.database_stub.admit_car_transition_request.assert_called_once_with(1, 10)
         self.push_service_stub.dispatch_car_transition_notification.assert_not_called()
 
@@ -427,17 +420,12 @@ class CarAndNotificationIsolationTests(unittest.TestCase):
         self.database_stub.get_family_by_id.return_value = (
             10, "Family", "code", 31.0, 35.0
         )
-        self.database_stub.disconnect_car_atomically.return_value = {
-            "transition": "disconnected",
-            "reason": None,
-            "event_id": 102,
-            "event_time": "2026-09-06T11:00:00",
-        }
+        self.database_stub.apply_carplay_transition.return_value = (AdmissionResult('accepted', 'accepted', 'returned'), 102, 'time')
 
-        result = self.service.disconnect_user("token-a", 31.0, 35.0)
+        result = self.service.disconnect_user("token-a", 31.0, 35.0, acquisition_id=self.acquisition)
 
         self.assertEqual(result["message"], "הרכב שוחרר בהצלחה")
-        self.database_stub.disconnect_car_atomically.assert_called_once_with(1, 10)
+        self.database_stub.apply_carplay_transition.assert_called_once_with('token-a', self.acquisition, disconnect=True)
         self.database_stub.admit_car_transition_request.assert_called_once_with(1, 10)
         self.push_service_stub.dispatch_car_transition_notification.assert_called_once_with(
             family_id=10,
@@ -453,14 +441,11 @@ class CarAndNotificationIsolationTests(unittest.TestCase):
         self.database_stub.get_family_by_id.return_value = (
             10, "Family", "code", 31.0, 35.0
         )
-        self.database_stub.disconnect_car_atomically.return_value = {
-            "transition": "none",
-            "reason": "already_available",
-        }
+        self.database_stub.apply_carplay_transition.return_value = (AdmissionResult('accepted', 'accepted', 'already_ended'), 102, 'time')
 
-        result = self.service.disconnect_user("token-a", 31.0, 35.0)
+        result = self.service.disconnect_user("token-a", 31.0, 35.0, acquisition_id=self.acquisition)
 
-        self.assertEqual(result, {"message": "הרכב כבר פנוי"})
+        self.assertEqual(result, {"message": "הפעולה כבר טופלה"})
         self.push_service_stub.dispatch_car_transition_notification.assert_not_called()
 
 
@@ -587,7 +572,7 @@ class AIToolBoundaryTests(unittest.TestCase):
     def setUp(self):
         self.database_stub = types.ModuleType("database")
         for name in (
-            "get_active_driver",
+            "get_vehicle_statuses",
             "get_last_driver",
             "get_recent_events",
             "get_ai_reservations",
@@ -653,7 +638,7 @@ class AIToolBoundaryTests(unittest.TestCase):
             "אני כאן כדי לעזור בניהול הרכב המשפחתי 🙂",
         )
         for name in (
-            "get_active_driver",
+            "get_vehicle_statuses",
             "get_last_driver",
             "get_recent_events",
             "get_user_reservations",

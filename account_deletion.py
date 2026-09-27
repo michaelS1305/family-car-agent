@@ -91,7 +91,6 @@ def _drained(conn, auth_user_id, user_id, family_id, last_member):
 
 
 def cleanup(pool, auth_user_id):
-    from database import _get_active_driver_on_connection, _insert_car_event_on_connection
     with pool.connection() as conn:
         # Confirmation and all normal mutations acquire identity before operation locks.
         conn.execute("SET LOCAL lock_timeout='3s'")
@@ -132,12 +131,7 @@ def cleanup(pool, auth_user_id):
             conn.execute('DELETE FROM chat_requests WHERE id=ANY(%s)', (ids,))
             conn.execute('DELETE FROM reservations WHERE user_id=%s', (user_id,))
             _checkpoint_vehicle_identity(conn, user_id, family_id)
-            active = _get_active_driver_on_connection(conn, family_id) if family_id is not None else None
-            # Non-personal logical barrier. NOT a disconnected/physical-return event.
-            # It closes all prior reconstructed active state without deleting or
-            # claiming attribution of any legacy null-user event.
-            if not last_member and active and active[1] == user_id:
-                _insert_car_event_on_connection(conn, None, '', 'state_reset', family_id)
+            # Dormant legacy rows are privacy cleanup only, never state authority.
             conn.execute('DELETE FROM car_events WHERE user_id=%s OR (%s AND family_id=%s)',
                          (user_id, last_member, family_id))
             conn.execute('DELETE FROM push_subscriptions WHERE user_id=%s', (user_id,))

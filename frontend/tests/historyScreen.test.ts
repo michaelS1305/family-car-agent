@@ -28,13 +28,13 @@ test('history category is real and reuses the dashboard history icon and heading
 })
 
 test('active usage is rendered first without a fabricated end time', () => {
-  const activePosition = historySource.indexOf('history.active_usage ?')
+  const activePosition = historySource.indexOf('history.active_usages.length > 0')
   const completedPosition = historySource.indexOf('history.recent_usage.length > 0')
   assert.ok(activePosition > -1 && activePosition < completedPosition)
   assert.match(historySource, /הרכב כרגע בשימוש/)
-  assert.match(historySource, /history\.active_usage\.name/)
-  assert.match(historySource, /history\.active_usage\.started_at/)
-  assert.match(historySource, /formatHistoryTime\(history\.active_usage\.started_at\)/)
+  assert.match(historySource, /usage\.name/)
+  assert.match(historySource, /usage\.started_at/)
+  assert.match(historySource, /formatHistoryTime\(usage\.started_at\)/)
   assert.doesNotMatch(
     historySource.slice(activePosition, completedPosition),
     /ended_at|שעת סיום/,

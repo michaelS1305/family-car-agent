@@ -30,6 +30,8 @@ export type BrowserPushSubscription = {
 export type ActiveCarUsage = {
   name: string
   started_at: string
+  vehicle_name: string
+  vehicle_ref: string
 }
 
 export type CompletedCarUsage = ActiveCarUsage & {
@@ -38,6 +40,7 @@ export type CompletedCarUsage = ActiveCarUsage & {
 
 export type CarHistory = {
   active_usage: ActiveCarUsage | null
+  active_usages: ActiveCarUsage[]
   recent_usage: CompletedCarUsage[]
 }
 
@@ -1020,6 +1023,7 @@ function isActiveCarUsage(value: unknown): value is ActiveCarUsage {
   if (!value || typeof value !== 'object') return false
   const usage = value as Partial<ActiveCarUsage>
   return typeof usage.name === 'string' && typeof usage.started_at === 'string'
+    && typeof usage.vehicle_name === 'string' && typeof usage.vehicle_ref === 'string'
 }
 
 function isCompletedCarUsage(value: unknown): value is CompletedCarUsage {
@@ -1057,6 +1061,8 @@ export async function getCarHistory(
   }
   if (
     !(body.active_usage === null || isActiveCarUsage(body.active_usage))
+    || !Array.isArray(body.active_usages)
+    || !body.active_usages.every(isActiveCarUsage)
     || !Array.isArray(body.recent_usage)
     || !body.recent_usage.every(isCompletedCarUsage)
   ) {
@@ -1064,6 +1070,7 @@ export async function getCarHistory(
   }
   return {
     active_usage: body.active_usage,
+    active_usages: body.active_usages,
     recent_usage: body.recent_usage,
   }
 }

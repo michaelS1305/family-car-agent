@@ -307,43 +307,13 @@ def set_carplay_setup_status(user_id, setup_status):
 
 def _get_active_driver_on_connection(conn, family_id):
     return conn.execute(
-        """
-        SELECT c.driver_name, c.user_id
-        FROM car_events c
-        WHERE c.family_id = %s
-          AND c.status = 'connected'
-          AND NOT EXISTS (SELECT 1 FROM car_events reset
-                          WHERE reset.family_id=c.family_id AND reset.status='state_reset' AND reset.id>c.id)
-          AND NOT EXISTS (
-              SELECT 1
-              FROM car_events d
-              WHERE d.family_id = c.family_id
-                AND d.status = 'disconnected'
-                AND d.id > c.id
-                AND (
-                    (c.user_id IS NOT NULL AND d.user_id = c.user_id)
-                    OR
-                    (c.user_id IS NULL AND d.driver_name = c.driver_name)
-                )
-          )
-        ORDER BY c.id DESC
-        LIMIT 1
-        """,
-        (family_id,),
-    ).fetchone()
+        'SELECT u.name,s.user_id FROM vehicle_driver_sessions s JOIN users u ON u.id=s.user_id '
+        'WHERE s.family_id=%s AND s.ended_at IS NULL ORDER BY s.started_at DESC,s.id DESC LIMIT 1',
+        (family_id,)).fetchone()
 
 
 def _insert_car_event_on_connection(conn, user_id, driver_name, status, family_id):
-    event_time = datetime.now(timezone.utc).isoformat()
-    row = conn.execute(
-        """
-        INSERT INTO car_events (user_id, driver_name, status, event_time, family_id)
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id
-        """,
-        (user_id, driver_name, status, event_time, family_id),
-    ).fetchone()
-    return {"event_id": row[0], "event_time": event_time}
+    raise RuntimeError('Legacy car_events writes are disabled; use Vehicle Identity')
 
 
 def _cleanup_car_transition_admissions():
@@ -438,143 +408,20 @@ def admit_car_transition_request(user_id, family_id):
 
 
 def connect_car_atomically(user_id, driver_name, family_id):
-    """Apply one family-scoped connect/handover transition and commit it atomically."""
-    with pool.connection() as conn:
-        require_user(conn, user_id)
-        with conn.transaction():
-            acquired = conn.execute(
-                "SELECT pg_try_advisory_xact_lock(%s, %s)",
-                (CAR_TRANSITION_LOCK_NAMESPACE, family_id),
-            ).fetchone()[0]
-            if not acquired:
-                raise CarTransitionBusyError()
-            active_driver = _get_active_driver_on_connection(conn, family_id)
-            if active_driver and active_driver[1] == user_id:
-                return {
-                    "transition": "none",
-                    "reason": "already_active",
-                    "current_driver": active_driver[0],
-                }
-
-            if active_driver:
-                _insert_car_event_on_connection(
-                    conn,
-                    active_driver[1],
-                    active_driver[0],
-                    "disconnected",
-                    family_id,
-                )
-
-            connected = _insert_car_event_on_connection(
-                conn,
-                user_id,
-                driver_name,
-                "connected",
-                family_id,
-            )
-            return {
-                "transition": "connected",
-                "event_id": connected["event_id"],
-                "event_time": connected["event_time"],
-            }
+    raise RuntimeError('Legacy connect disabled; acquisition identity is required')
 
 
 def disconnect_car_atomically(user_id, family_id):
-    """Disconnect only the canonical active driver under the family lock."""
-    with pool.connection() as conn:
-        require_user(conn, user_id)
-        with conn.transaction():
-            acquired = conn.execute(
-                "SELECT pg_try_advisory_xact_lock(%s, %s)",
-                (CAR_TRANSITION_LOCK_NAMESPACE, family_id),
-            ).fetchone()[0]
-            if not acquired:
-                raise CarTransitionBusyError()
-            active_driver = _get_active_driver_on_connection(conn, family_id)
-            if not active_driver:
-                return {"transition": "none", "reason": "already_available"}
-            if active_driver[1] != user_id:
-                return {
-                    "transition": "none",
-                    "reason": "different_driver",
-                    "current_driver": active_driver[0],
-                }
-
-            disconnected = _insert_car_event_on_connection(
-                conn,
-                user_id,
-                active_driver[0],
-                "disconnected",
-                family_id,
-            )
-            final_driver = _get_active_driver_on_connection(conn, family_id)
-            return {
-                "transition": "disconnected" if final_driver is None else "none",
-                "reason": None if final_driver is None else "still_occupied",
-                "event_id": disconnected["event_id"],
-                "event_time": disconnected["event_time"],
-            }
+    raise RuntimeError('Legacy disconnect disabled; acquisition identity is required')
 
 def get_latest_event(family_id):
-    with pool.connection() as conn:
-        cursor = conn.execute(
-            """
-            SELECT c.driver_name, c.status, c.event_time, c.user_id
-            FROM car_events c
-            WHERE c.family_id = %s
-              AND c.status = 'connected'
-              AND NOT EXISTS (SELECT 1 FROM car_events reset
-                              WHERE reset.family_id=c.family_id AND reset.status='state_reset' AND reset.id>c.id)
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM car_events d
-                  WHERE d.family_id = c.family_id
-                    AND d.status = 'disconnected'
-                    AND d.id > c.id
-                    AND (
-                        (c.user_id IS NOT NULL AND d.user_id = c.user_id)
-                        OR
-                        (c.user_id IS NULL AND d.driver_name = c.driver_name)
-                    )
-              )
-            ORDER BY c.id DESC
-            LIMIT 1
-            """,
-            (family_id,)
-        )
-
-        return cursor.fetchone()
+    rows = get_recent_events(family_id, 1)
+    return rows[0] if rows else None
 
 
 def get_active_driver(family_id):
     with pool.connection() as conn:
-        cursor = conn.execute(
-            """
-            SELECT c.driver_name, c.user_id
-            FROM car_events c
-            WHERE c.family_id = %s
-              AND c.status = 'connected'
-              AND NOT EXISTS (SELECT 1 FROM car_events reset
-                              WHERE reset.family_id=c.family_id AND reset.status='state_reset' AND reset.id>c.id)
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM car_events d
-                  WHERE d.family_id = c.family_id
-                    AND d.status = 'disconnected'
-                    AND d.id > c.id
-                    AND (
-                        (c.user_id IS NOT NULL AND d.user_id = c.user_id)
-                        OR
-                        (c.user_id IS NULL AND d.driver_name = c.driver_name)
-                    )
-              )
-            ORDER BY c.id DESC
-            LIMIT 1
-            """,
-            (family_id,)
-        )
-
-        return cursor.fetchone()
+        return _get_active_driver_on_connection(conn, family_id)
 
 
 class PushSubscriptionOwnershipError(Exception):
@@ -713,6 +560,25 @@ def get_user_by_token(shortcut_token):
             require_user(conn, user[0])
         return user
 
+
+def apply_carplay_transition(shortcut_token, acquisition_id, *, disconnect=False):
+    from carplay_adapter import transition
+    from identity import CurrentUser
+    from vehicle_identity import VehicleIdentityError
+    with pool.connection() as conn:
+        row = conn.execute('SELECT id,name,family_id,auth_user_id FROM users WHERE shortcut_token=%s',
+                           (shortcut_token,)).fetchone()
+        if not row or row[3] is None:
+            raise VehicleIdentityError('CARPLAY_CALLER_UNAVAILABLE', 'Shortcut caller unavailable', 403)
+        return transition(conn, CurrentUser(row[0], row[1], row[2], auth_user_id=str(row[3])),
+                          acquisition_id, disconnect=disconnect)
+
+
+def set_carplay_vehicle_binding(current_user, vehicle_ref):
+    from carplay_adapter import bind_vehicle
+    with pool.connection() as conn:
+        return bind_vehicle(conn, current_user, vehicle_ref)
+
 def get_user_by_auth_user_id(auth_user_id):
     with pool.connection() as conn:
         cursor = conn.execute(
@@ -730,36 +596,19 @@ def get_user_by_auth_user_id(auth_user_id):
         return user
 
 def get_last_driver(family_id):
-    with pool.connection() as conn:
-        cursor = conn.execute(
-            """
-            SELECT driver_name, status, event_time
-            FROM car_events
-            WHERE family_id = %s
-              AND status IN ('connected', 'disconnected')
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (family_id,)
-        )
-
-        return cursor.fetchone()
+    rows = get_recent_events(family_id, 1)
+    return rows[0] if rows else None
 
 def get_recent_events(family_id, limit=10):
     with pool.connection() as conn:
-        cursor = conn.execute(
-            """
-            SELECT driver_name, status, event_time
-            FROM car_events
-            WHERE family_id = %s
-              AND status IN ('connected', 'disconnected')
-            ORDER BY id DESC
-            LIMIT %s
-            """,
-            (family_id, limit)
-        )
+        return [(name, kind, timestamp.isoformat(), vehicle, str(ref))
+                for name, kind, timestamp, vehicle, ref in conn.execute(
+                    'SELECT u.name,e.event_type,e.occurred_at,v.display_name,v.vehicle_ref '
+                    'FROM vehicle_events e JOIN users u ON u.id=e.user_id JOIN vehicles v ON v.id=e.vehicle_id '
+                    "WHERE e.family_id=%s AND e.admission_outcome='accepted' "
+                    'ORDER BY e.occurred_at DESC,e.event_id DESC LIMIT %s',
+                    (family_id, min(max(int(limit), 1), 50))).fetchall()]
 
-        return cursor.fetchall()
 
 VEHICLE_UNSET = object()
 
@@ -1011,103 +860,33 @@ def get_user_reservations(user_id, family_id):
 
 
 def get_car_usage_history(family_id, completed_limit=50):
-    """Return the canonical active usage and defensively paired completed usages.
-
-    The active predicate intentionally mirrors get_active_driver(). Completed
-    sessions keep only the latest connect before its matching disconnect, so a
-    malformed duplicate-connect sequence cannot fabricate duplicate sessions.
-    """
     with pool.connection() as conn:
-        return conn.execute(
-            """
-            WITH family_events AS (
-                SELECT id, driver_name, user_id, status, event_time
-                FROM car_events
-                WHERE family_id = %s
-            ),
-            canonical_active AS (
-                SELECT c.id, c.driver_name, c.user_id, c.event_time
-                FROM family_events AS c
-                WHERE c.status = 'connected'
-                  AND NOT EXISTS (SELECT 1 FROM family_events reset
-                                  WHERE reset.status='state_reset' AND reset.id>c.id)
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM family_events AS d
-                      WHERE d.status = 'disconnected'
-                        AND d.id > c.id
-                        AND (
-                            (c.user_id IS NOT NULL AND d.user_id = c.user_id)
-                            OR
-                            (c.user_id IS NULL AND d.driver_name = c.driver_name)
-                        )
-                  )
-                ORDER BY c.id DESC
-                LIMIT 1
-            ),
-            completed_candidates AS (
-                SELECT
-                    c.id,
-                    c.driver_name,
-                    c.user_id,
-                    c.event_time AS started_at,
-                    d.id AS ended_event_id,
-                    d.event_time AS ended_at
-                FROM family_events AS c
-                JOIN LATERAL (
-                    SELECT next_disconnect.id, next_disconnect.event_time
-                    FROM family_events AS next_disconnect
-                    WHERE next_disconnect.status = 'disconnected'
-                      AND next_disconnect.id > c.id
-                      AND (
-                          (c.user_id IS NOT NULL AND next_disconnect.user_id = c.user_id)
-                          OR
-                          (c.user_id IS NULL AND next_disconnect.driver_name = c.driver_name)
-                      )
-                    ORDER BY next_disconnect.id ASC
-                    LIMIT 1
-                ) AS d ON TRUE
-                WHERE c.status = 'connected'
-                  AND NOT EXISTS (SELECT 1 FROM family_events reset
-                                  WHERE reset.status='state_reset' AND reset.id>c.id AND reset.id<d.id)
-            ),
-            completed AS (
-                SELECT candidate.*
-                FROM completed_candidates AS candidate
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM family_events AS newer_connect
-                    WHERE newer_connect.status = 'connected'
-                      AND newer_connect.id > candidate.id
-                      AND newer_connect.id < candidate.ended_event_id
-                      AND (
-                          (candidate.user_id IS NOT NULL AND newer_connect.user_id = candidate.user_id)
-                          OR
-                          (candidate.user_id IS NULL AND newer_connect.driver_name = candidate.driver_name)
-                      )
-                )
-                ORDER BY candidate.id DESC
-                LIMIT %s
-            )
-            SELECT
-                active.driver_name,
-                active.event_time AS started_at,
-                NULL::text AS ended_at,
-                TRUE AS is_active,
-                active.id AS sort_id
-            FROM canonical_active AS active
-            UNION ALL
-            SELECT
-                completed.driver_name,
-                completed.started_at,
-                completed.ended_at,
-                FALSE AS is_active,
-                completed.id AS sort_id
-            FROM completed
-            ORDER BY is_active DESC, sort_id DESC
-            """,
-            (family_id, completed_limit),
-        ).fetchall()
+        query = (
+            'SELECT u.name,s.started_at,s.ended_at,s.ended_at IS NULL,s.id,v.display_name,v.vehicle_ref '
+            'FROM vehicle_driver_sessions s JOIN users u ON u.id=s.user_id JOIN vehicles v ON v.id=s.vehicle_id '
+            'WHERE s.family_id=%s ')
+        # Active sessions must not disappear behind a busy completed-history page.
+        active = conn.execute(query + 'AND s.ended_at IS NULL ORDER BY s.started_at DESC,s.id DESC LIMIT 101',
+                              (family_id,)).fetchall()
+        if len(active) > 100:
+            raise ValueError('Vehicle history capacity exceeded')
+        rows = active + conn.execute(query + 'AND s.ended_at IS NOT NULL ORDER BY s.started_at DESC,s.id DESC LIMIT %s',
+            (family_id, min(max(int(completed_limit),1),50))).fetchall()
+        return [(name, start.isoformat(), end.isoformat() if end else None, active, sid, vehicle, str(ref))
+                for name,start,end,active,sid,vehicle,ref in rows]
+
+
+def get_vehicle_statuses(family_id):
+    with pool.connection() as conn:
+        rows = conn.execute(
+            'SELECT v.vehicle_ref,v.display_name,u.name FROM vehicles v '
+            'LEFT JOIN vehicle_driver_sessions s ON s.vehicle_id=v.id AND s.ended_at IS NULL '
+            'LEFT JOIN users u ON u.id=s.user_id WHERE v.family_id=%s AND v.retired_at IS NULL '
+            'ORDER BY v.id LIMIT 101', (family_id,)).fetchall()
+    if len(rows) > 100:
+        raise ValueError('Vehicle status capacity exceeded')
+    return [{'vehicle_ref': str(ref), 'vehicle_name': name, 'current_driver': driver,
+             'status': 'in_use' if driver is not None else 'available'} for ref,name,driver in rows]
 
 
 def list_family_reservations(

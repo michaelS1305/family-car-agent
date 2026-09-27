@@ -1,7 +1,8 @@
 # Internal bounded Vehicle Identity admission (MC-SEC-001)
 
-No native HTTP adapter is enabled. Legacy CarPlay and device enrollment are
-unchanged. This document describes internal code, not production activation.
+No native HTTP adapter is enabled. MC-SEC-003 now routes the Shortcut edge through
+this same engine; see `CARPLAY_VEHICLE_AUTHORITY.md` for its separately prepared
+activation and causal acquisition contract. Native sequencing is unchanged.
 
 ## Transaction and time policy
 
