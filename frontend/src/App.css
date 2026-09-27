@@ -1994,8 +1994,15 @@
 }
 
 .vehicles-screen-title {
-  margin-bottom: clamp(46px, 10dvh, 86px);
+  margin-bottom: 24px;
 }
+
+.vehicle-list, .vehicle-panel, .vehicle-actions { display: grid; gap: 12px; min-width: 0; }
+.vehicle-panel { padding: 20px; border: 1px solid var(--glass-border, rgba(110,130,150,.25)); border-radius: 20px; background: var(--glass-bg, rgba(140,155,170,.1)); color: inherit; text-align: start; overflow-wrap: anywhere; }
+.vehicle-panel h3, .vehicle-panel p { margin: 0; }
+.vehicles-screen .vehicle-panel button, .vehicle-add { min-height: 44px; padding: 10px 14px; border-radius: 12px; color: inherit; background: transparent; border: 1px solid currentColor; font: inherit; }
+.vehicle-card { width: 100%; min-height: 80px; font: inherit; cursor: pointer; }
+.vehicle-panel input { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; min-height: 44px; padding: 10px; border-radius: 12px; font: inherit; color: inherit; background: transparent; border: 1px solid currentColor; }
 
 .vehicles-development-card {
   width: min(100%, 390px);

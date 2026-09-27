@@ -357,9 +357,9 @@ export function MainAppScreen({ user, userEmail, accessToken, authUserId, onLogo
           </span>
         </button>
         <strong className="main-chat-title">{CHAT_HEADER.title}</strong>
-        <div className={`car-status-pill is-${displayedCarStatus.tone}`} aria-label={`מצב הרכב: ${displayedCarStatus.label}`}>
+        <div className={`car-status-pill is-${displayedCarStatus.tone}`} aria-label="מצב רכבי המשפחה">
           <i aria-hidden="true" />
-          <span>{displayedCarStatus.label}</span>
+          <span>{carStatus === 'occupied' ? 'יש רכב בשימוש' : carStatus === 'available' ? 'אין רכב בשימוש' : displayedCarStatus.label}</span>
         </div>
       </header>
 
@@ -477,6 +477,7 @@ export function MainAppScreen({ user, userEmail, accessToken, authUserId, onLogo
       </form>
 
       <DashboardScreen
+        authUserId={authUserId}
         open={dashboardOpen}
         userName={user.name}
         userEmail={userEmail}

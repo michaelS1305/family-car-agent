@@ -175,6 +175,69 @@ type RequestOptions = {
   signal?: AbortSignal
 }
 
+export type FamilyVehicle = {
+  vehicle_ref: string
+  display_name: string
+  retired_at: string | null
+}
+export type FamilyVehicleStatus = FamilyVehicle & { in_use: boolean; current_driver: string | null }
+
+function isVehicle(value: unknown): value is FamilyVehicle {
+  if (!value || typeof value !== 'object') return false
+  const v = value as Partial<FamilyVehicle>
+  return typeof v.vehicle_ref === 'string' && typeof v.display_name === 'string'
+    && (v.retired_at === null || typeof v.retired_at === 'string')
+}
+
+async function vehicleRequest(token: string, path: string, options: RequestOptions, body?: object): Promise<unknown> {
+  let response: Response
+  try {
+    response = await (options.fetcher ?? fetch)(getApiUrl(path, options.baseUrl), {
+      method: body ? 'POST' : 'GET', signal: options.signal,
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ApiRequestError('network', 'לא הצלחנו להתחבר. נסו שוב עם אותה בקשה.')
+  }
+  if (!response.ok) {
+    const parsed = await response.json().catch(() => null)
+    const code = typeof parsed?.detail?.code === 'string' ? parsed.detail.code : undefined
+    const messages: Record<string, string> = {
+      VEHICLE_ACTIVE_LIMIT: 'הגעתם למספר הרכבים הפעילים המותר במשפחה.',
+      VEHICLE_LIFETIME_LIMIT: 'הגעתם למכסת יצירת הרכבים במשפחה.',
+      CREATION_IDEMPOTENCY_CONFLICT: 'הבקשה אינה תואמת לבקשה הקודמת. חזרו לרשימה ובדקו את הרכבים.',
+      INVALID_VEHICLE_NAME: 'יש להזין שם לרכב שאינו ריק.',
+      VEHICLE_NOT_FOUND_OR_UNAVAILABLE: 'הרכב אינו זמין עוד.',
+      VEHICLES_BUSY: 'מתבצעת פעולה אחרת. נסו שוב בעוד רגע.',
+    }
+    throw new ApiRequestError('server', messages[code ?? ''] ?? (response.status === 401 ? 'יש להתחבר מחדש.' : 'לא ניתן להשלים את הבקשה. נסו שוב.'), response.status, code)
+  }
+  return response.json().catch(() => { throw new ApiRequestError('invalid-response', 'התקבלה תשובה לא תקינה. נסו שוב עם אותה בקשה.') })
+}
+
+function statusVehicle(value: unknown): value is FamilyVehicleStatus {
+  return isVehicle(value) && typeof (value as FamilyVehicleStatus).in_use === 'boolean'
+    && ((value as FamilyVehicleStatus).current_driver === null || typeof (value as FamilyVehicleStatus).current_driver === 'string')
+}
+
+export async function listFamilyVehicles(token: string, options: RequestOptions = {}): Promise<FamilyVehicleStatus[]> {
+  const result = await vehicleRequest(token, '/api/vehicles', options)
+  if (!Array.isArray(result) || !result.every(statusVehicle)) throw new ApiRequestError('invalid-response', 'לא ניתן לטעון את הרכבים.')
+  return result.filter(v => v.retired_at === null)
+}
+export async function getFamilyVehicle(token: string, ref: string, options: RequestOptions = {}): Promise<FamilyVehicleStatus> {
+  const result = await vehicleRequest(token, `/api/vehicles/${encodeURIComponent(ref)}`, options)
+  if (!statusVehicle(result) || result.retired_at !== null) throw new ApiRequestError('invalid-response', 'הרכב אינו זמין עוד.')
+  return result
+}
+export async function createFamilyVehicle(token: string, request: { display_name: string; request_id: string }, options: RequestOptions = {}): Promise<FamilyVehicle> {
+  const result = await vehicleRequest(token, '/api/vehicles', options, { display_name: request.display_name, request_id: request.request_id })
+  if (!isVehicle(result)) throw new ApiRequestError('invalid-response', 'לא ניתן לאמת את התוצאה. נסו שוב עם אותה בקשה.')
+  return result
+}
+
 export type CreateFamilyErrorCode =
   | 'INVALID_FAMILY_NAME'
   | 'INVALID_FAMILY_CODE'
