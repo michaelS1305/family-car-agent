@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import JSONResponse
 from account_deletion_api import router as deletion_router, deletion_lifespan
+from vehicle_api import router as vehicle_router
 from deletion_gate import IdentityUnavailable
 
 load_dotenv()
@@ -119,6 +120,7 @@ def _cors_allowed_origins() -> list[str]:
 
 app = FastAPI(lifespan=deletion_lifespan)
 app.include_router(deletion_router)
+app.include_router(vehicle_router)
 
 
 @app.exception_handler(IdentityUnavailable)
