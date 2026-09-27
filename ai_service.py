@@ -6,8 +6,9 @@ from dotenv import load_dotenv
 from google import genai
 
 from database import (
-    get_active_driver,
+    get_vehicle_statuses,
     get_ai_reservations,
+    get_ai_vehicles,
     get_last_driver,
     get_recent_events,
 )
@@ -131,26 +132,38 @@ IMPORTANT:
 """
 
 
+SYSTEM_INSTRUCTION += """
+Multi-car reservations:
+- Use get_family_vehicles_tool for active vehicle_ref/display_name choices.
+- With multiple active vehicles ask the user which vehicle; never guess a ref.
+- With zero/one active vehicle the backend handles omitted create selection.
+- VEHICLE_REQUIRED means no booking occurred; present the returned choices.
+- Use reservation_ref from reservation listings to modify/cancel; never use internal numeric IDs.
+- Omit vehicle_ref on update to retain association. Use null only for an explicitly requested general booking.
+- General reservations conflict with all cars; specific reservations conflict only with that car and general bookings.
+"""
+
 TOOL_DECLARATIONS = [
+    {"name": "get_family_vehicles_tool", "description": "Get safe active family vehicle choices.", "parameters": {"type": "object", "properties": {}}},
     {"name": "get_car_status_tool", "description": "Get this family's current car status.", "parameters": {"type": "object", "properties": {}}},
-    {"name": "get_last_driver_tool", "description": "Get this family's most recent car event.", "parameters": {"type": "object", "properties": {}}},
-    {"name": "get_recent_events_tool", "description": "Get this family's recent car events.", "parameters": {"type": "object", "properties": {}}},
+    {"name": "get_last_driver_tool", "description": "Most recent accepted vehicle evidence, not necessarily a state change. Use status tool for current drivers.", "parameters": {"type": "object", "properties": {}}},
+    {"name": "get_recent_events_tool", "description": "Recent accepted TAKE/RETURN evidence per vehicle; redundant or already-ended evidence is not proof of a physical return. Use status tool for current state.", "parameters": {"type": "object", "properties": {}}},
     {
         "name": "create_reservation_tool",
         "description": "Reserve this family's car for the current user.",
-        "parameters": {"type": "object", "properties": {"start_time": {"type": "string"}, "end_time": {"type": "string"}}, "required": ["start_time", "end_time"]},
+        "parameters": {"type": "object", "properties": {"start_time": {"type": "string"}, "end_time": {"type": "string"}, "vehicle_ref": {"type": "string"}}, "required": ["start_time", "end_time"]},
     },
     {"name": "get_user_reservations_tool", "description": "Get the current user's reservations.", "parameters": {"type": "object", "properties": {}}},
     {"name": "get_family_reservations_tool", "description": "Get this family's reservations.", "parameters": {"type": "object", "properties": {}}},
     {
         "name": "cancel_reservation_tool",
         "description": "Cancel one reservation owned by the current user.",
-        "parameters": {"type": "object", "properties": {"reservation_id": {"type": "integer"}}, "required": ["reservation_id"]},
+        "parameters": {"type": "object", "properties": {"reservation_ref": {"type": "string"}}, "required": ["reservation_ref"]},
     },
     {
         "name": "update_reservation_tool",
         "description": "Update one reservation owned by the current user.",
-        "parameters": {"type": "object", "properties": {"reservation_id": {"type": "integer"}, "start_time": {"type": "string"}, "end_time": {"type": "string"}}, "required": ["reservation_id", "start_time", "end_time"]},
+        "parameters": {"type": "object", "properties": {"reservation_ref": {"type": "string"}, "start_time": {"type": "string"}, "end_time": {"type": "string"}, "vehicle_ref": {"type": "string", "nullable": True}}, "required": ["reservation_ref", "start_time", "end_time"]},
     },
 ]
 
@@ -201,14 +214,19 @@ def _structured_history(history):
 
 def _read_tool(name, current_user):
     family_id = current_user.family_id
+    if name == 'get_family_vehicles_tool':
+        return get_ai_vehicles(family_id)
     if name == "get_car_status_tool":
-        active_driver = get_active_driver(family_id)
-        return {"status": "in_use" if active_driver else "available", "current_driver": active_driver[0] if active_driver else None}
+        vehicles = get_vehicle_statuses(family_id)
+        return {"status": "in_use" if any(v['status'] == 'in_use' for v in vehicles) else "available",
+                "vehicles": vehicles}
     if name == "get_last_driver_tool":
         event = get_last_driver(family_id)
-        return {"driver": event[0] if event else None, "status": event[1] if event else None, "event_time": event[2] if event else None}
+        return {"driver": event[0], "evidence_type": event[1], "event_time": event[2],
+                "vehicle_name": event[3], "vehicle_ref": event[4]} if event else None
     if name == "get_recent_events_tool":
-        return [{"driver": row[0], "status": row[1], "event_time": row[2]} for row in get_recent_events(family_id)]
+        return [{"driver": row[0], "evidence_type": row[1], "event_time": row[2],
+                 "vehicle_name": row[3], "vehicle_ref": row[4]} for row in get_recent_events(family_id)]
     if name == "get_user_reservations_tool":
         return get_ai_reservations(family_id, current_user.user_id)
     if name == "get_family_reservations_tool":
@@ -220,9 +238,9 @@ def _safe_mutation_arguments(action_type, arguments):
     if not isinstance(arguments, dict):
         return {}
     allowed = {
-        "create_reservation": ("start_time", "end_time"),
-        "update_reservation": ("reservation_id", "start_time", "end_time"),
-        "cancel_reservation": ("reservation_id",),
+        "create_reservation": ("start_time", "end_time", "vehicle_ref"),
+        "update_reservation": ("reservation_ref", "start_time", "end_time", "vehicle_ref"),
+        "cancel_reservation": ("reservation_ref",),
     }
     return {
         key: arguments[key]

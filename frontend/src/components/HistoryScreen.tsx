@@ -97,13 +97,13 @@ export function HistoryScreen({
 
         {!loading && !error && history ? (
           <div className="history-content">
-            {history.active_usage ? (
-              <section className="history-current is-active" aria-label="הרכב כרגע בשימוש">
+            {history.active_usages.length > 0 ? history.active_usages.map((usage) => (
+              <section key={usage.vehicle_ref} className="history-current is-active" aria-label="הרכב כרגע בשימוש">
                 <span><i aria-hidden="true" /> הרכב כרגע בשימוש</span>
-                <strong>{history.active_usage.name}</strong>
-                <p>נלקח ב־{formatHistoryDate(history.active_usage.started_at)}, {formatHistoryTime(history.active_usage.started_at)}</p>
+                <strong>{usage.vehicle_name} — {usage.name}</strong>
+                <p>נלקח ב־{formatHistoryDate(usage.started_at)}, {formatHistoryTime(usage.started_at)}</p>
               </section>
-            ) : (
+            )) : (
               <section className="history-current is-available" aria-label="הרכב זמין כעת">
                 <span><i aria-hidden="true" /> הרכב זמין כעת</span>
               </section>
@@ -115,8 +115,8 @@ export function HistoryScreen({
                 <div className="history-list">
                   {history.recent_usage.map((usage) => {
                     return (
-                      <article className="history-card" key={`${usage.name}|${usage.started_at}|${usage.ended_at}`}>
-                        <strong>{usage.name}</strong>
+                      <article className="history-card" key={`${usage.vehicle_ref}|${usage.name}|${usage.started_at}|${usage.ended_at}`}>
+                        <strong>{usage.vehicle_name} — {usage.name}</strong>
                         <span>{formatHistoryDate(usage.started_at)}</span>
                         <time>{formatHistoryTime(usage.started_at)}–{formatHistoryTime(usage.ended_at)}</time>
                       </article>
@@ -124,7 +124,7 @@ export function HistoryScreen({
                   })}
                 </div>
               </section>
-            ) : history.active_usage ? null : (
+            ) : history.active_usages.length > 0 ? null : (
               <p className="history-empty">אין עדיין היסטוריית שימוש ברכב</p>
             )}
           </div>

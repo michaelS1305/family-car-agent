@@ -13,6 +13,7 @@ def load_chat_service():
     database_stub = types.ModuleType("database")
     database_stub.pool = Mock()
     database_stub._create_reservation_on_connection = Mock()
+    database_stub._lock_reservation_family = Mock()
     database_stub._update_reservation_on_connection = Mock()
     database_stub._cancel_reservation_on_connection = Mock()
     ai_stub = types.ModuleType("ai_service")
@@ -383,16 +384,16 @@ class MutationBoundaryTests(unittest.TestCase):
         cases = (
             (
                 "update_reservation",
-                {"reservation_id": 5, "start_time": "2030-01-11T10:00:00", "end_time": "2030-01-12T10:00:00"},
+                {"reservation_ref": '00000000-0000-0000-0000-000000000005', "start_time": "2030-01-11T10:00:00", "end_time": "2030-01-12T10:00:00"},
                 "_update_reservation_on_connection",
-                (5, 7, 42, "2030-01-11T10:00:00", "2030-01-12T10:00:00"),
+                (None, 7, 42, "2030-01-11T10:00:00", "2030-01-12T10:00:00"),
                 {"success": True, "code": "RESERVATION_UPDATED"},
             ),
             (
                 "cancel_reservation",
-                {"reservation_id": 5},
+                {"reservation_ref": '00000000-0000-0000-0000-000000000005'},
                 "_cancel_reservation_on_connection",
-                (5, 7, 42),
+                (None, 7, 42),
                 {"success": True, "code": "RESERVATION_CANCELLED"},
             ),
         )
@@ -408,7 +409,7 @@ class MutationBoundaryTests(unittest.TestCase):
                         action_type,
                         arguments,
                     )
-                helper.assert_called_once_with(connection, *expected_args)
+                helper.assert_called_once_with(connection, *expected_args, reservation_ref=arguments['reservation_ref'])
                 self.assertTrue(connection.transaction_state.committed)
                 self.assertEqual(executed["result"], result)
 

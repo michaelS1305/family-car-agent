@@ -1,8 +1,7 @@
 from database import (
     CarTransitionBusyError,
     admit_car_transition_request,
-    connect_car_atomically,
-    disconnect_car_atomically,
+    apply_carplay_transition,
     get_active_driver,
     get_user_by_token,
     get_family_by_id,
@@ -11,6 +10,9 @@ from math import radians, sin, cos, sqrt, atan2, isfinite, ceil
 
 from identity import CurrentUser
 from push_service import dispatch_car_transition_notification
+from vehicle_identity import VehicleIdentityError
+from psycopg.errors import LockNotAvailable, QueryCanceled
+from vehicle_work import AdmissionDeadlineExceeded
 
 
 class CarStatusError(Exception):
@@ -67,7 +69,21 @@ def get_car_status(current_user: CurrentUser):
     return "occupied" if get_active_driver(current_user.family_id) else "available"
 
 
-def connect_user(shortcut_token):
+def _apply(shortcut_token, acquisition_id, *, disconnect=False):
+    try:
+        result, event_id, event_time = apply_carplay_transition(
+            shortcut_token, acquisition_id, disconnect=disconnect)
+    except VehicleIdentityError as error:
+        raise CarTransitionError(error.code, error.message, error.status_code, 1) from error
+    except (CarTransitionBusyError, LockNotAvailable, QueryCanceled, AdmissionDeadlineExceeded) as error:
+        raise _transition_busy_error() from error
+    if result.kind not in ('accepted', 'retry') or result.admission_outcome != 'accepted':
+        raise CarTransitionError('CARPLAY_EVENT_REJECTED',
+                                 'לא ניתן להשלים את הפעולה בבטחה.', 409, 1)
+    return result, event_id, event_time
+
+
+def connect_user(shortcut_token, acquisition_id):
     user = get_user_by_token(shortcut_token)
 
     if not user:
@@ -83,27 +99,23 @@ def connect_user(shortcut_token):
         }
 
     _admit_transition(user[0], family_id)
-    try:
-        transition = connect_car_atomically(user[0], user[1], family_id)
-    except CarTransitionBusyError as error:
-        raise _transition_busy_error() from error
-    if transition["transition"] == "none":
+    result, event_id, event_time = _apply(shortcut_token, acquisition_id)
+    if result.transition != 'opened':
         return {
-            "message": "User is already the current driver",
-            "current_driver": transition["current_driver"],
+            "message": "הפעולה כבר טופלה",
         }
 
     dispatch_car_transition_notification(
         family_id=family_id,
         actor_user_id=user[0],
         actor_name=user[1],
-        event_id=transition["event_id"],
+        event_id=event_id,
         transition="connected",
     )
     return {
         "message": "Car connected",
         "user": user[1],
-        "event_time": transition["event_time"],
+        "event_time": event_time,
     }
 
 
@@ -117,7 +129,7 @@ def _valid_coordinates(latitude, longitude):
         return False
 
 
-def disconnect_user(shortcut_token, latitude=None, longitude=None):
+def disconnect_user(shortcut_token, latitude=None, longitude=None, *, acquisition_id):
     user = get_user_by_token(shortcut_token)
 
     if not user:
@@ -130,22 +142,6 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
     if family_id is None:
         return {
             "message": "User family not found"
-        }
-
-    active_driver = get_active_driver(family_id)
-
-    if not active_driver:
-        return {
-            "message": "הרכב כבר פנוי"
-        }
-
-    active_driver_name = active_driver[0]
-    active_driver_user_id = active_driver[1]
-
-    if active_driver_user_id != user[0]:
-        return {
-            "message": "Only the current driver can disconnect",
-            "current_driver": active_driver_name
         }
 
     if latitude is None or longitude is None:
@@ -186,25 +182,15 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
         }
 
     _admit_transition(user[0], family_id)
-    try:
-        transition = disconnect_car_atomically(user[0], family_id)
-    except CarTransitionBusyError as error:
-        raise _transition_busy_error() from error
-    if transition["transition"] == "none":
-        if transition["reason"] == "already_available":
-            return {"message": "הרכב כבר פנוי"}
-        if transition["reason"] == "different_driver":
-            return {
-                "message": "Only the current driver can disconnect",
-                "current_driver": transition["current_driver"],
-            }
-        return {"message": "הרכב לא התפנה"}
+    result, event_id, event_time = _apply(shortcut_token, acquisition_id, disconnect=True)
+    if result.transition != 'returned':
+        return {"message": "הפעולה כבר טופלה"}
 
     dispatch_car_transition_notification(
         family_id=family_id,
         actor_user_id=user[0],
         actor_name=user[1],
-        event_id=transition["event_id"],
+        event_id=event_id,
         transition="disconnected",
     )
 
@@ -213,7 +199,7 @@ def disconnect_user(shortcut_token, latitude=None, longitude=None):
         "result": {
             "message": "Car disconnected",
             "user": user[1],
-            "event_time": transition["event_time"],
+            "event_time": event_time,
         },
     }
 

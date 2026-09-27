@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import os
+from pathlib import Path
 import sys
 import threading
 import unittest
@@ -117,6 +118,9 @@ class AccountDeletionPostgresTests(unittest.TestCase):
           CREATE TABLE carplay_transition_admissions(user_id int REFERENCES users ON DELETE CASCADE,
             family_id int REFERENCES families ON DELETE CASCADE);
         ''')
+        source = (Path(__file__).resolve().parents[1] / 'supabase/manual_migrations/2026092001_vehicle_identity_foundation.sql').read_text()
+        ddl = source.split('ALTER TABLE public.users ADD CONSTRAINT', 1)[1].split('-- Nullable-first UUID backfill', 1)[0]
+        self.query(('ALTER TABLE public.users ADD CONSTRAINT' + ddl).replace('public.', self.schema + '.'))
         self.creator = self.person()
         self.family = self.query("INSERT INTO families(name,family_code,created_by_user_id) VALUES('family','abc123',%s) RETURNING id", (self.creator[1],))[0][0]
         self.query('UPDATE users SET family_id=%s WHERE id=%s', (self.family, self.creator[1]))
@@ -195,7 +199,7 @@ class AccountDeletionPostgresTests(unittest.TestCase):
         self.assertEqual(self.query('SELECT id FROM users'), [(stranger[1],)])
         self.assertEqual(self.query('SELECT count(*) FROM family_code_history'), [(1,)])
 
-    def test_active_deletion_barrier_preserves_legacy_and_other_member_events(self):
+    def test_deletion_preserves_unattributable_dormant_legacy_events(self):
         member = self.person(self.family)
         self.event(None)
         self.event(member[1])  # malformed older unmatched connect
@@ -205,18 +209,18 @@ class AccountDeletionPostgresTests(unittest.TestCase):
         self.assertIsNone(self.database.get_latest_event(self.family))
         self.assertEqual(self.database.get_car_usage_history(self.family), [])
         self.assertEqual(self.query("SELECT count(*) FROM car_events WHERE user_id IS NULL AND status='connected'"), [(1,)])
-        self.assertEqual(self.query("SELECT driver_name,user_id FROM car_events WHERE status='state_reset'"), [('',None)])
+        self.assertEqual(self.query("SELECT driver_name,user_id FROM car_events WHERE status='state_reset'"), [])
         self.assertEqual(self.query("SELECT count(*) FROM car_events WHERE status='disconnected'"), [(0,)])
-        self.database.connect_car_atomically(member[1], 'member', self.family)
-        self.assertEqual(self.database.get_active_driver(self.family)[1], member[1])
+        with self.assertRaises(RuntimeError):
+            self.database.connect_car_atomically(member[1], 'member', self.family)
 
-    def test_nonactive_deletion_keeps_current_driver(self):
+    def test_legacy_events_cannot_resurrect_driver_after_deletion(self):
         member = self.person(self.family)
         self.event(self.creator[1])
         self.event(self.creator[1], 'disconnected')
         self.event(member[1])
         self.delete(self.creator)
-        self.assertEqual(self.database.get_active_driver(self.family)[1], member[1])
+        self.assertIsNone(self.database.get_active_driver(self.family))
 
     def test_completed_history_does_not_pair_across_logical_reset(self):
         member = self.person(self.family)
@@ -377,24 +381,37 @@ class AccountDeletionPostgresTests(unittest.TestCase):
         self.assertEqual(self.query('SELECT created_by_user_id FROM families'),[(member[1],)])
 
     def test_carplay_inflight_write_finishes_before_confirmation_then_is_erased(self):
+        import carplay_adapter
+        import vehicle_admission
+        from identity import CurrentUser
         self.person(self.family)
+        self.query('CREATE TABLE carplay_vehicle_bindings(user_id integer PRIMARY KEY REFERENCES users ON DELETE CASCADE, '
+                   'family_id integer NOT NULL, vehicle_id integer NOT NULL REFERENCES vehicles ON DELETE CASCADE)')
+        ref = self.query("INSERT INTO vehicles(family_id,display_name) VALUES(%s,'Car') RETURNING vehicle_ref", (self.family,))[0][0]
+        current = CurrentUser(self.creator[1], 'creator', self.family, auth_user_id=self.creator[0])
+        with self.connection() as conn:
+            carplay_adapter.bind_vehicle(conn, current, ref)
         entered, release = threading.Event(), threading.Event()
-        original = self.database._insert_car_event_on_connection
+        original = vehicle_admission._receipt
         def held_insert(*args):
             entered.set()
             self.assertTrue(release.wait(3))
             return original(*args)
-        with patch.object(self.database,'_insert_car_event_on_connection',side_effect=held_insert), ThreadPoolExecutor(2) as workers:
-            connecting = workers.submit(self.database.connect_car_atomically,self.creator[1],'creator',self.family)
+        def connect():
+            with self.connection() as conn:
+                return carplay_adapter.transition(conn, current, uuid4())[0]
+        with patch.object(vehicle_admission, '_receipt', side_effect=held_insert), ThreadPoolExecutor(2) as workers:
+            connecting = workers.submit(connect)
             self.assertTrue(entered.wait(3))
-            confirming = workers.submit(deletion.confirm,self.pool,self.creator[0])
+            confirming = workers.submit(deletion.confirm, self.pool, self.creator[0])
             release.set()
-            self.assertEqual(connecting.result(10)['transition'],'connected')
+            self.assertEqual(connecting.result(10).kind, 'accepted')
             confirming.result(10)
-        self.assertTrue(deletion.cleanup(self.pool,self.creator[0]))
+        self.assertTrue(deletion.cleanup(self.pool, self.creator[0]))
         self.assertIsNone(self.database.get_active_driver(self.family))
+        self.assertEqual(self.query('SELECT count(*) FROM carplay_vehicle_bindings'), [(0,)])
         with self.assertRaises(gate.IdentityUnavailable):
-            self.database.connect_car_atomically(self.creator[1],'creator',self.family)
+            connect()
 
     def test_uncertain_extension_wins_over_cleanup_expiry_observation(self):
         # Independent connections: cleanup waits on the retained row and then

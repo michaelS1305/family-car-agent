@@ -177,7 +177,10 @@ Fresh authenticated private-channel reception for connect/disconnect and
 cross-family denial remain the recommended Realtime regression smoke checks;
 this execution report confirms privileges, not those smoke-test results.
 
-`2026092001_vehicle_identity_foundation.sql`: PREPARED / UNEXECUTED.
+`2026092001_vehicle_identity_foundation.sql`: EXECUTED / OPERATOR-CONFIRMED.
+Operator verified all four tables, family/reservation columns, indexes,
+validated FK/CHECK/UNIQUE/EXCLUDE constraints, both guard triggers, and absent
+anon/authenticated table privileges. Runtime integration remains disabled.
 Additive Multi-Car schema only: vehicles, registered devices, immutable event
 evidence/admission outcomes, mutable session projections, family checkpoint
 metadata, and reservation UUID references/nullable vehicle targeting. It does
@@ -186,11 +189,11 @@ Requires PostgreSQL 15+ (column-specific SET NULL on composite FKs) and built-in
 UUID/range support; installs no extension. Range GiST exclusion constraints cover
 historical vehicle/user session overlaps, in addition to active partial indexes.
 
-Future manual execution requires a controlled maintenance window: existing
+Historical execution guidance called for a controlled maintenance window: existing
 reservations are updated only to populate UUIDs, and transactional index/DDL
 locks block concurrent writes. Existing reservation timestamps and meaning remain
 unchanged; vehicle_id stays NULL. Preflight/conflicts/reruns fail closed and any
-failure rolls back the transaction. No SQL has been executed for this preparation.
+failure rolls back the transaction. Execution was manually confirmed by the operator.
 After execution, rollback requires a separately reviewed migration; do not drop
 these objects once new data or public reservation references are in use.
 
@@ -210,3 +213,29 @@ requires owned event cleanup; revocation is the operational path. User deletion
 must remove attributable state and finalize/mark remaining sessions first, never
 rely on cascades alone. Last-member cleanup removes reservations before vehicles.
 Policy thresholds and retries remain future runtime decisions, not SQL constants.
+
+`2026092301_vehicle_events_accepted_device_index.sql`: PREPARED / UNEXECUTED IN PRODUCTION.
+Adds only the partial `(device_id, device_sequence)` index for accepted Vehicle
+Identity events. Apply before the bounded-reconciliation backend rollout; old
+workers remain compatible. Preflight and reruns fail closed, and any failure
+rolls back. The transactional index build can briefly block event writes; use a
+quiet/controlled window, especially if internal writers are running. No native
+HTTP ingestion is activated. No table/constraint/privilege changes are made.
+Local disposable validation is not evidence of production execution.
+
+`2026092501_vehicle_creation_bounds.sql`: PREPARED / UNEXECUTED IN PRODUCTION.
+MC-SEC-002 resource-local creation keys/fingerprints and scoped unique constraints;
+family device lifetime counter survives member deletion. Existing identities/refs
+are preserved. Backfill includes currently persisted devices, not unknowable
+previously deleted history. Pause lifecycle writers through migration/backend
+cutover; old creation workers must not resume. See `VEHICLE_CREATION.md` for
+preflight, verification, quota semantics and recovery guidance. No ACL/RLS change.
+
+`2026092502_carplay_vehicle_authority.sql`: PREPARED / UNEXECUTED IN PRODUCTION.
+MC-SEC-003 adds backend-only per-user CarPlay vehicle bindings and an active-session
+lookup index; moves Realtime invalidation from legacy car_events to accepted
+VehicleEvents and adds surviving-family invalidation on member deletion.
+No legacy test-history backfill or topic-authorization changes. Pause/drain old
+writers across migration/backend/external Shortcut cutover; do not run dual
+authorities. See `CARPLAY_VEHICLE_AUTHORITY.md` for exact request/binding contracts,
+operator verification and coordinated activation. This migration was not executed.

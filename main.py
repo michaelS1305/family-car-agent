@@ -14,6 +14,7 @@ load_dotenv()
 
 from models import (
     CarConnection,
+    CarPlayVehicleBindingRequest,
     CarDisconnectRequest,
     CarPlaySetupResponse,
     CarPlaySetupStatusRequest,
@@ -130,10 +131,10 @@ async def identity_unavailable(request, exc):
 
 @app.exception_handler(RequestValidationError)
 async def safe_disconnect_validation_error(request, exc):
-    if request.url.path == "/car/disconnect":
+    if request.url.path in ("/car/connect", "/car/disconnect"):
         # Never serialize non-finite inputs or echo the credential/body.
         return JSONResponse(status_code=422, content={
-            "detail": "Invalid disconnect request"
+            "detail": "Invalid disconnect request" if request.url.path == "/car/disconnect" else "Invalid connect request"
         })
     return await request_validation_exception_handler(request, exc)
 
@@ -245,7 +246,8 @@ def update_current_family_address(
 def _raise_reservation_center_error(error):
     raise HTTPException(
         status_code=error.status_code,
-        detail={"code": error.code, "message": error.message},
+        detail={"code": error.code, "message": error.message,
+                **({'vehicles': error.vehicles} if error.vehicles is not None else {})},
     ) from error
 
 
@@ -316,6 +318,7 @@ def create_reservation_route(
             current_user,
             request.start_time,
             request.end_time,
+            **({'vehicle_ref': request.vehicle_ref} if 'vehicle_ref' in request.model_fields_set else {}),
         )
     except ReservationCenterError as error:
         _raise_reservation_center_error(error)
@@ -333,6 +336,8 @@ def update_reservation_route(
             request.original_end_time,
             request.start_time,
             request.end_time,
+            **({'reservation_ref': request.reservation_ref} if request.reservation_ref is not None else {}),
+            **({'vehicle_ref': request.vehicle_ref} if 'vehicle_ref' in request.model_fields_set else {}),
         )
     except ReservationCenterError as error:
         _raise_reservation_center_error(error)
@@ -348,6 +353,7 @@ def cancel_reservation_route(
             current_user,
             request.original_start_time,
             request.original_end_time,
+            **({'reservation_ref': request.reservation_ref} if request.reservation_ref is not None else {}),
         )
     except ReservationCenterError as error:
         _raise_reservation_center_error(error)
@@ -401,6 +407,16 @@ def car_status(
             detail={"code": error.code, "message": error.message},
         ) from error
     return {"status": status}
+
+
+@app.patch('/api/carplay/vehicle')
+def bind_carplay_vehicle(request: CarPlayVehicleBindingRequest, current_user: CurrentUser = Depends(get_current_user)):
+    from database import set_carplay_vehicle_binding
+    from vehicle_identity import VehicleIdentityError
+    try:
+        return set_carplay_vehicle_binding(current_user, request.vehicle_ref)
+    except VehicleIdentityError as error:
+        raise HTTPException(error.status_code, detail={'code': error.code, 'message': error.message}) from error
 
 
 @app.get("/api/car/history", response_model=CarHistoryResponse, status_code=200)
@@ -653,7 +669,7 @@ def complete_join(
 @app.post("/car/connect")
 def connect_car(connection: CarConnection):
     try:
-        return connect_user(connection.shortcut_token)
+        return connect_user(connection.shortcut_token, connection.acquisition_id)
     except CarTransitionError as error:
         _raise_car_transition_error(error)
 
@@ -665,6 +681,7 @@ def disconnect_car(connection: CarDisconnectRequest):
             connection.shortcut_token,
             connection.latitude,
             connection.longitude,
+            acquisition_id=connection.acquisition_id,
         )
     except CarTransitionError as error:
         _raise_car_transition_error(error)

@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 from tests.test_database_atomic_creation import RecordingContext, database
@@ -7,45 +8,33 @@ from tests.test_database_atomic_creation import RecordingContext, database
 class CarHistoryDatabaseTests(unittest.TestCase):
     def setUp(self):
         self.connection = Mock(name="connection")
-        self.connection_context = RecordingContext(self.connection)
         self.pool_patch = patch.object(database, "pool")
         self.pool = self.pool_patch.start()
-        self.pool.connection.return_value = self.connection_context
+        self.addCleanup(self.pool_patch.stop)
+        self.pool.connection.return_value = RecordingContext(self.connection)
 
-    def tearDown(self):
-        self.pool_patch.stop()
+    def test_queries_are_bounded_family_scoped_projection_reads(self):
+        self.connection.execute.return_value.fetchall.return_value = []
+        database.get_car_usage_history(42, completed_limit=500)
+        active, completed = [call.args for call in self.connection.execute.call_args_list]
+        for sql, _ in (active, completed):
+            self.assertIn('vehicle_driver_sessions', sql)
+            self.assertIn('WHERE s.family_id=%s', sql)
+            self.assertNotIn('car_events', sql)
+            self.assertNotIn('shortcut_token', sql)
+            self.assertNotIn('auth_user_id', sql)
+        self.assertIn('s.ended_at IS NULL', active[0])
+        self.assertIn('LIMIT 101', active[0])
+        self.assertEqual(active[1], (42,))
+        self.assertIn('s.ended_at IS NOT NULL', completed[0])
+        self.assertEqual(completed[1], (42, 50))
 
-    def test_query_is_family_scoped_and_matches_canonical_active_semantics(self):
-        cursor = Mock()
-        cursor.fetchall.return_value = []
-        self.connection.execute.return_value = cursor
-        database.get_car_usage_history(42, completed_limit=50)
-        sql, parameters = self.connection.execute.call_args.args
-
-        self.assertIn("WHERE family_id = %s", sql)
-        self.assertIn("c.status = 'connected'", sql)
-        self.assertIn("d.status = 'disconnected'", sql)
-        self.assertIn("d.id > c.id", sql)
-        self.assertIn("c.user_id IS NOT NULL AND d.user_id = c.user_id", sql)
-        self.assertIn("c.user_id IS NULL AND d.driver_name = c.driver_name", sql)
-        self.assertEqual(parameters, (42, 50))
-
-    def test_duplicate_connect_is_deduplicated_and_only_display_fields_are_selected(self):
-        cursor = Mock()
-        cursor.fetchall.return_value = [
-            ("מיכאל", "2026-09-05T10:00:00", "2026-09-05T11:00:00", False, 8)
-        ]
-        self.connection.execute.return_value = cursor
+    def test_active_cannot_be_pushed_off_completed_page_and_timestamps_are_aware(self):
+        start = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        active = ('A', start, None, True, 1, 'Car A', 'ref-a')
+        ended = ('B', start, start, False, 2, 'Car B', 'ref-b')
+        self.connection.execute.return_value.fetchall.side_effect = [[active], [ended] * 50]
         rows = database.get_car_usage_history(42)
-        sql = self.connection.execute.call_args.args[0]
-
-        self.assertEqual(len(rows), 1)
-        self.assertIn("newer_connect.id > candidate.id", sql)
-        self.assertIn("newer_connect.id < candidate.ended_event_id", sql)
-        self.assertIn("ORDER BY is_active DESC, sort_id DESC", sql)
-        self.assertNotIn("shortcut_token", sql)
-        self.assertNotIn("auth_user_id", sql)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.assertEqual(len(rows), 51)
+        self.assertEqual(rows[0], ('A', start.isoformat(), None, True, 1, 'Car A', 'ref-a'))
+        self.assertTrue(rows[1][2].endswith('+00:00'))

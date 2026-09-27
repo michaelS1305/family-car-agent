@@ -4,9 +4,15 @@ import test from 'node:test'
 import { getCarHistory } from '../src/api/apiClient.ts'
 
 const history = {
-  active_usage: { name: 'מיכאל', started_at: '2026-09-06T08:00:00' },
+  active_usage: { name: 'מיכאל', started_at: '2026-09-06T08:00:00', vehicle_name: 'A', vehicle_ref: 'a' },
+  active_usages: [
+    { name: 'מיכאל', started_at: '2026-09-06T08:00:00', vehicle_name: 'A', vehicle_ref: 'a' },
+    { name: 'נועה', started_at: '2026-09-06T09:00:00', vehicle_name: 'B', vehicle_ref: 'b' },
+  ],
   recent_usage: [{
     name: 'נועה',
+    vehicle_name: 'B',
+    vehicle_ref: 'b',
     started_at: '2026-09-05T10:00:00',
     ended_at: '2026-09-05T11:00:00',
   }],

@@ -10,13 +10,16 @@ from identity import CurrentUser
 
 
 database_stub = types.ModuleType("database")
+database_stub.VEHICLE_UNSET = object()
 database_stub.cancel_current_user_reservation = Mock()
 database_stub.create_current_user_reservation = Mock()
 database_stub.list_family_reservations = Mock()
 database_stub.update_current_user_reservation = Mock()
 
 
-def load_service():
+def load_service(vehicle_unset=None):
+    if vehicle_unset is not None:
+        database_stub.VEHICLE_UNSET = vehicle_unset
     path = Path(__file__).resolve().parents[1] / "reservation_service.py"
     spec = importlib.util.spec_from_file_location("reservation_service_under_test", path)
     module = importlib.util.module_from_spec(spec)
@@ -38,8 +41,8 @@ class ReservationServiceTests(unittest.TestCase):
         ):
             mock.reset_mock(return_value=True, side_effect=True)
         database_stub.list_family_reservations.return_value = [
-            ("מיכאל", "2026-09-08T10:00:00", "2026-09-08T11:00:00", True),
-            ("נועה", "2026-09-09T10:00:00", "2026-09-09T11:00:00", False),
+            ("מיכאל", "2026-09-08T10:00:00", "2026-09-08T11:00:00", True, '00000000-0000-0000-0000-000000000001', None, None),
+            ("נועה", "2026-09-09T10:00:00", "2026-09-09T11:00:00", False, '00000000-0000-0000-0000-000000000002', None, None),
         ]
         database_stub.create_current_user_reservation.return_value = {"success": True}
         database_stub.update_current_user_reservation.return_value = {
@@ -172,6 +175,22 @@ class ReservationServiceTests(unittest.TestCase):
         with self.assertRaises(service.ReservationCenterError) as raised:
             service.list_reservations(self.user(family_id=None))
         self.assertEqual(raised.exception.status_code, 403)
+
+    def test_vehicle_required_preserves_safe_choices_in_structured_error(self):
+        choices = [{'vehicle_ref': '00000000-0000-0000-0000-000000000001', 'display_name': 'Car'}]
+        database_stub.create_current_user_reservation.return_value = {
+            'success': False, 'code': 'VEHICLE_REQUIRED', 'message': 'יש לבחור רכב.', 'vehicles': choices}
+        with self.assertRaises(service.ReservationCenterError) as raised:
+            service.create_reservation_for_current_user(self.user(), '2026-09-08T10:00:00', '2026-09-08T11:00:00')
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(raised.exception.vehicles, choices)
+
+    def test_explicit_general_update_and_opaque_locator_are_forwarded(self):
+        ref = '00000000-0000-0000-0000-000000000001'
+        service.update_reservation_for_current_user(self.user(), None, None,
+            '2026-09-08T12:00:00', '2026-09-08T13:00:00', reservation_ref=ref, vehicle_ref=None)
+        self.assertEqual(database_stub.update_current_user_reservation.call_args.kwargs,
+                         {'reservation_ref': ref, 'vehicle_ref': None})
 
 
 if __name__ == "__main__":

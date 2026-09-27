@@ -2,10 +2,11 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from ai_service import GEMINI_MODEL, generate_agent_response
 from database import (
+    _lock_reservation_family,
     _cancel_reservation_on_connection,
     _create_reservation_on_connection,
     _update_reservation_on_connection,
@@ -276,6 +277,7 @@ def _execute_mutation(
     with pool.connection() as conn:
         require_user(conn, current_user.user_id)
         with conn.transaction():
+            _lock_reservation_family(conn, current_user.family_id, reservation_lock=False)
             request = conn.execute(
                 """
                 SELECT id
@@ -324,7 +326,7 @@ def _execute_mutation(
             recorded_arguments = {} if invalid_arguments else {
                 key: canonical_time(value) if key in {"start_time", "end_time"} else value
                 for key, value in arguments.items()
-                if key in {"start_time", "end_time", "reservation_id"}
+                if key in {"start_time", "end_time", "reservation_ref", "vehicle_ref"}
             }
             action = conn.execute(
                 """
@@ -355,22 +357,26 @@ def _execute_mutation(
                     arguments["start_time"],
                     arguments["end_time"],
                     expected_family_id=current_user.family_id,
+                    **({'vehicle_ref': arguments['vehicle_ref']} if 'vehicle_ref' in arguments else {}),
                 )
             elif action_type == "update_reservation":
                 result = _update_reservation_on_connection(
                     conn,
-                    arguments["reservation_id"],
+                    None,
                     current_user.user_id,
                     current_user.family_id,
                     arguments["start_time"],
                     arguments["end_time"],
+                    reservation_ref=arguments['reservation_ref'],
+                    **({'vehicle_ref': arguments['vehicle_ref']} if 'vehicle_ref' in arguments else {}),
                 )
             elif action_type == "cancel_reservation":
                 result = _cancel_reservation_on_connection(
                     conn,
-                    arguments["reservation_id"],
+                    None,
                     current_user.user_id,
                     current_user.family_id,
+                    reservation_ref=arguments['reservation_ref'],
                 )
             else:
                 raise ValueError("Unsupported mutation action")
@@ -407,9 +413,16 @@ def _invalid_mutation_arguments(action_type, arguments):
         except ReservationValidationError as error:
             return error.result()
     if action_type in {"update_reservation", "cancel_reservation"}:
-        if type(arguments.get("reservation_id")) is not int or arguments["reservation_id"] <= 0:
+        try:
+            UUID(arguments.get('reservation_ref'))
+        except (ValueError, TypeError, AttributeError):
             return {"success": False, "code": "RESERVATION_NOT_FOUND_OR_UNAVAILABLE",
                     "message": "לא מצאנו הזמנה זמינה לשינוי."}
+    if 'vehicle_ref' in arguments and arguments['vehicle_ref'] is not None:
+        try:
+            UUID(arguments['vehicle_ref'])
+        except (ValueError, TypeError, AttributeError):
+            return {'success': False, 'code': 'VEHICLE_NOT_FOUND_OR_UNAVAILABLE', 'message': 'הרכב אינו זמין.'}
     return None
 
 

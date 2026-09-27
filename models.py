@@ -2,19 +2,23 @@ from typing import Literal
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, UUID4, field_validator, model_validator
 from onboarding_rules import HUMAN_NAME_MAX_LENGTH
 from push_security import validate_push_endpoint
 
 
 class CarConnection(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     shortcut_token: str
+    acquisition_id: UUID4
     latitude: float | None = None
     longitude: float | None = None
 
 
 class CarDisconnectRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     shortcut_token: str
+    acquisition_id: UUID4
     latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
     longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
 
@@ -27,6 +31,11 @@ class CarPlaySetupResponse(BaseModel):
 
 class CarPlaySetupStatusRequest(BaseModel):
     status: Literal["completed", "skipped"]
+
+
+class CarPlayVehicleBindingRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    vehicle_ref: UUID
 
 
 class CarStatusResponse(BaseModel):
@@ -91,9 +100,11 @@ class PushSubscriptionRemoveRequest(BaseModel):
 class ActiveCarUsageResponse(BaseModel):
     name: str
     started_at: str
+    vehicle_name: str
+    vehicle_ref: UUID
 
 
-class CompletedCarUsageResponse(BaseModel):
+class CompletedCarUsageResponse(ActiveCarUsageResponse):
     name: str
     started_at: str
     ended_at: str
@@ -101,6 +112,7 @@ class CompletedCarUsageResponse(BaseModel):
 
 class CarHistoryResponse(BaseModel):
     active_usage: ActiveCarUsageResponse | None
+    active_usages: list[ActiveCarUsageResponse]
     recent_usage: list[CompletedCarUsageResponse]
 
 
@@ -160,6 +172,9 @@ class ReservationResponse(BaseModel):
     start_time: str
     end_time: str
     is_mine: bool
+    reservation_ref: UUID | None = None
+    vehicle_ref: UUID | None = None
+    vehicle_display_name: str | None = None
 
 
 class ReservationIntervalRequest(BaseModel):
@@ -167,29 +182,46 @@ class ReservationIntervalRequest(BaseModel):
 
     start_time: datetime
     end_time: datetime
+    vehicle_ref: UUID | None = None
 
 
 class ReservationUpdateRequest(ReservationIntervalRequest):
-    original_start_time: str
-    original_end_time: str
+    original_start_time: str | None = None
+    original_end_time: str | None = None
+    reservation_ref: UUID | None = None
+
+    @model_validator(mode='after')
+    def require_locator(self):
+        if self.reservation_ref is None and (self.original_start_time is None or self.original_end_time is None):
+            raise ValueError('Reservation reference or complete original interval required')
+        return self
 
     @field_validator("original_start_time", "original_end_time")
     @classmethod
     def validate_original_time(cls, value):
-        datetime.fromisoformat(value)
+        if value is not None:
+            datetime.fromisoformat(value)
         return value
 
 
 class ReservationCancelRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    original_start_time: str
-    original_end_time: str
+    original_start_time: str | None = None
+    original_end_time: str | None = None
+    reservation_ref: UUID | None = None
+
+    @model_validator(mode='after')
+    def require_locator(self):
+        if self.reservation_ref is None and (self.original_start_time is None or self.original_end_time is None):
+            raise ValueError('Reservation reference or complete original interval required')
+        return self
 
     @field_validator("original_start_time", "original_end_time")
     @classmethod
     def validate_original_time(cls, value):
-        datetime.fromisoformat(value)
+        if value is not None:
+            datetime.fromisoformat(value)
         return value
 
 

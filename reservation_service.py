@@ -6,6 +6,7 @@ from reservation_rules import (
 )
 
 from database import (
+    VEHICLE_UNSET,
     cancel_current_user_reservation,
     create_current_user_reservation,
     list_family_reservations,
@@ -14,11 +15,12 @@ from database import (
 
 
 class ReservationCenterError(Exception):
-    def __init__(self, code, message, status_code):
+    def __init__(self, code, message, status_code, vehicles=None):
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.vehicles = vehicles
 
 
 def _require_family(current_user):
@@ -43,6 +45,9 @@ def _safe_reservation(row):
         "start_time": row[1],
         "end_time": row[2],
         "is_mine": bool(row[3]),
+        "reservation_ref": str(row[4]),
+        "vehicle_ref": str(row[5]) if row[5] else None,
+        "vehicle_display_name": row[6],
     }
 
 
@@ -67,7 +72,7 @@ def list_reservations(current_user, time_filter="future", scope="all"):
     ]
 
 
-def create_reservation_for_current_user(current_user, start_time, end_time):
+def create_reservation_for_current_user(current_user, start_time, end_time, *, vehicle_ref=VEHICLE_UNSET):
     _require_family(current_user)
     start, end = _validated_interval(start_time, end_time, _local_now())
     result = create_current_user_reservation(
@@ -75,6 +80,7 @@ def create_reservation_for_current_user(current_user, start_time, end_time):
         current_user.family_id,
         start,
         end,
+        **({} if vehicle_ref is VEHICLE_UNSET else {'vehicle_ref': vehicle_ref}),
     )
     _raise_for_result(result)
     return {
@@ -82,6 +88,7 @@ def create_reservation_for_current_user(current_user, start_time, end_time):
         "start_time": start,
         "end_time": end,
         "is_mine": True,
+        **{key: result.get(key) for key in ('reservation_ref', 'vehicle_ref', 'vehicle_display_name')},
     }
 
 
@@ -91,6 +98,7 @@ def update_reservation_for_current_user(
     original_end_time,
     start_time,
     end_time,
+    *, reservation_ref=None, vehicle_ref=VEHICLE_UNSET,
 ):
     _require_family(current_user)
     now = _local_now()
@@ -102,6 +110,8 @@ def update_reservation_for_current_user(
         _canonical_time(now),
         start_time,
         end_time,
+        **({} if reservation_ref is None else {'reservation_ref': reservation_ref}),
+        **({} if vehicle_ref is VEHICLE_UNSET else {'vehicle_ref': vehicle_ref}),
     )
     _raise_for_result(result)
     return {
@@ -109,6 +119,7 @@ def update_reservation_for_current_user(
         "start_time": result["start_time"],
         "end_time": result["end_time"],
         "is_mine": True,
+        **{key: result.get(key) for key in ('reservation_ref', 'vehicle_ref', 'vehicle_display_name')},
     }
 
 
@@ -116,6 +127,7 @@ def cancel_reservation_for_current_user(
     current_user,
     original_start_time,
     original_end_time,
+    *, reservation_ref=None,
 ):
     _require_family(current_user)
     now = _local_now()
@@ -125,6 +137,7 @@ def cancel_reservation_for_current_user(
         original_start_time,
         original_end_time,
         _canonical_time(now),
+        **({} if reservation_ref is None else {'reservation_ref': reservation_ref}),
     )
     _raise_for_result(result)
     return {"cancelled": True}
@@ -133,6 +146,10 @@ def cancel_reservation_for_current_user(
 def _raise_for_result(result):
     if result.get("success"):
         return
+    if result.get('code') in {'VEHICLE_REQUIRED', 'RESERVATION_AMBIGUOUS', 'VEHICLE_NOT_FOUND_OR_UNAVAILABLE'}:
+        raise ReservationCenterError(result['code'], result['message'],
+                                     404 if result['code'] == 'VEHICLE_NOT_FOUND_OR_UNAVAILABLE' else 409,
+                                     result.get('vehicles'))
     if result.get("code") in {"INVALID_RESERVATION_TIME", "RESERVATION_TIME_IN_PAST"}:
         raise ReservationCenterError(result["code"], result["message"], 422)
     if result.get("code") == "RESERVATION_CONFLICT":
