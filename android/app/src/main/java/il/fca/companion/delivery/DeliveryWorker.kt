@@ -19,11 +19,15 @@ class DeliveryWorker(context: Context, params: WorkerParameters) : Worker(contex
                 val event = app.store.next(owner) ?: return Result.success()
                 val body = JSONObject().put("event_id", event.id).put("device_sequence", event.sequence)
                     .put("vehicle_ref", event.vehicle).put("occurred_at", event.occurredAt)
-                val result = JSONObject(app.api.call(owner, "/api/devices/${event.device}/events/take", "POST", body))
+                event.evidence?.let { raw ->
+                    val evidence = JSONObject(raw)
+                    evidence.keys().forEach { body.put(it, evidence.get(it)) }
+                }
+                val result = JSONObject(app.api.call(owner, "/api/devices/${event.device}/events/${event.type}", "POST", body))
                 val kind = result.getString("kind")
                 if (kind in setOf("accepted", "retry", "terminal")) {
                     app.store.finish(event.id, kind)
-                    app.store.diagnostic("delivery_$kind")
+                    app.store.diagnostic("${event.type}_delivery_$kind")
                 } else {
                     // Gap/conflict/skew/unavailable never consume a local sequence.
                     app.store.diagnostic("delivery_needs_attention")
