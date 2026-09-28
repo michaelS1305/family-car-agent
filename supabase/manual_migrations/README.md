@@ -1,5 +1,12 @@
 # Manual Supabase migrations
 
+`2026092701_registered_device_vehicle_bindings.sql`: PREPARED / UNEXECUTED.
+Backend-only many-to-many native device authorization, no backfill. Apply before
+enabling the matching Android endpoints. Revocation/retirement retains rows but
+blocks new admissions; hard device/vehicle deletion cascades bindings. No changes
+to CarPlay, sessions, event evidence or existing migrations. Existing internal
+native admission is not a public ingress: Android must use the binding-gated path.
+
 These SQL files are intentionally run by hand in the Supabase SQL Editor. They are
 not executed by application startup and must not be run through `init_db()`.
 
