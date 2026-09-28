@@ -1,4 +1,4 @@
-# FCA Android TAKE companion
+# FCA Android TAKE / RETURN companion
 
 Independent Kotlin Android project; no PWA build/layout changes. This first
 detector targets **Android 16 / API 36+** (Samsung S24 FE). Earlier versions are
@@ -91,7 +91,7 @@ disabled so installation sequence/credentials cannot be cloned by normal backup.
    repeat setup; an existing matching system association is reused.
 8. Start a fresh physical Bluetooth connection (disconnect/reconnect if already
    connected during setup). Only `EVENT_BT_CONNECTED` produces a TAKE; BLE nearby
-   events are ignored. `EVENT_BT_DISCONNECTED` records diagnostics only.
+   events are ignored. `EVENT_BT_DISCONNECTED` starts the RETURN grace described below.
 9. Observe pending count/delivery diagnostics; refresh PWA and confirm Hyundai's
    driver is the mother. Screen can be closed; do not force-stop the app.
 10. Test airplane/no-network, then restoration: exact event ID/sequence must retry.
@@ -107,7 +107,7 @@ callbacks produce no second event. Disconnect only rearms TAKE detection; rapid
 real reconnects may produce another TAKE and existing server no-op rules apply.
 An OS boot-count change also rearms connection detection without resetting the
 sequence or queue; an ordinary process restart preserves the connection latch.
-No guessed disconnect grace/RETURN policy is encoded.
+RETURN extends this latch with the durable causal link and grace described below.
 
 WorkManager delivers strictly ordered pending events per installation with network
 constraints/exponential retry. Unique immediate work plus periodic recovery covers
@@ -126,10 +126,83 @@ event the OS never delivers.
 
 UI is basic: authenticated name, installation ref, vehicles, local associations,
 connection state, pending count, safe HTTP/category diagnostics, manual retry and
-unlink. No address, GPS, token, full provider response or MAC is sent to the backend.
+unlink. No address text, full provider response or MAC is sent to the backend.
+RETURN sends only a one-shot location fix and its accuracy/time over authenticated HTTPS.
 
-Deferred: RETURN, home/geofence, disconnect grace, full offline RETURN handling,
-polish, all other native FCA screens, older Android compatibility, iPhone/CarPlay.
+Deferred: polish, all other native FCA screens, older Android compatibility, iPhone/CarPlay.
+
+## RETURN physical slice
+
+No new PostgreSQL schema is required. Deploy the matching backend before installing
+this APK. TAKE remains the same physical callback and admission path.
+
+- `GET /api/devices/{device_ref}/return-home`: own active Android device only;
+  authenticated family's latitude/longitude, no-store response. Android keeps one
+  account-scoped home pair for at most 24 hours, cleared on sign-out. Refresh before
+  testing. This small cache is necessary to qualify an event **offline**, not a
+  client authorization claim. The server rechecks the current family home.
+- `POST /api/devices/{device_ref}/events/return`: TAKE envelope plus UUID4
+  `take_event_id`, finite numeric `latitude` [-90,90], `longitude` [-180,180],
+  `accuracy_m` (0,100], aware `location_at`. The fix must be 0–30 seconds older
+  than `occurred_at` (not receipt time). Unknown fields rejected.
+- Both sides require distance + reported accuracy <=500 metres. Location is
+  client evidence, not tamper-proof attestation. Backend checks family home,
+  ownership, active binding/device/vehicle and delegates causal/sequence handling
+  to existing admission. No location is inserted into PostgreSQL event/history.
+- Existing committed receipt replay bypasses changing home/binding eligibility,
+  but retains exact event-envelope matching and revoked-device rejection.
+  Invalid home/fix returns 409/422 without consuming sequence or mutating state.
+  Such a rejected queue head remains pending/action-required, never skipped or
+  regenerated. An address change while offline can therefore require operator
+  investigation; the app does not re-home or rewrite captured evidence.
+
+SQLite v2 upgrades v1 additively, preserving installation, sequence, associations
+and pending TAKEs. A fresh TAKE saves its UUID on the acquisition; acknowledgement
+pruning cannot remove that causal link. Disconnect persists a candidate with a
+**60-second grace** (one constant), wall and monotonic deadline. Reconnect cancels
+it; the pre-existing reconnect TAKE/no-op-alias behavior remains. The final local
+queue transaction rechecks account, acquisition, disconnected state and deadlines,
+then appends exactly one RETURN after its TAKE. Offline delivery reuses the same
+payload/UUID/sequence. Location payload is removed from the local row after receipt.
+
+A no-network-constraint worker requests one GPS fix, bounded to 20 seconds, only
+after grace. Freshness uses monotonic and wall clocks; mock, inaccurate or absent
+fixes fail closed. Permission/home/location failure or outside-home abandons this
+candidate with diagnostics, requiring a new physical cycle. A worker more than
+five minutes late also abandons it: later arrival home must not retroactively
+qualify an old disconnect. Periodic recovery and app startup recover durable
+candidates, but WorkManager/OEM scheduling is not exact. Reboot invalidates pending
+physical candidates, never immutable outbox events. No continuous GPS or force-stop
+guarantee. Missed OS connection callbacks remain a physical-validation limitation.
+
+Permissions: first grant precise foreground location, then choose **Allow all the
+time** in app location settings using the diagnostic setup button. Background
+location is required because the screen need not be open. Approximate/foreground-only
+permission fails closed. Background GPS can fail or be delayed by Android/Samsung
+power policy; no foreground-service or battery-policy bypass is added.
+
+### First RETURN using the existing mother's Hyundai session
+
+1. Update with `adb install -r` (do not uninstall/clear data). Keep the same account,
+   installation and Hyundai association. Configure location permissions above.
+2. Refresh device/vehicles/home while online; verify the account is ז'אנה.
+3. **Perform a real Hyundai Bluetooth disconnect/reconnect after upgrading.** v1
+   did not record a proven acquisition link; this upgrade deliberately guesses none.
+   The new TAKE is an alias/no-op for the mother's existing active Hyundai session,
+   not a manual reset. Verify TAKE delivery and that Hyundai remains occupied.
+4. At the configured home, disconnect Hyundai Bluetooth, keep the phone there,
+   and do not reconnect during grace. The UI may be closed (not force-stopped).
+5. Expect `bluetooth_disconnected`, `return_grace_started`,
+   `return_home_check_started`, `return_queued`, `return_delivery_accepted`;
+   pending returns to zero, PWA available, original session gains its causal end.
+6. Separately test quick reconnect cancellation; outside-home rejection; offline
+   TAKE then RETURN with home cached in the preceding 24h; network restoration;
+   normal process restart. Fail-closed diagnostics are not evidence of a RETURN.
+
+Android location constraints:
+https://developer.android.com/develop/sensors-and-location/location/permissions/runtime
+https://developer.android.com/develop/sensors-and-location/location/permissions/background
+https://developer.android.com/reference/android/location/LocationManager
 
 ## API references used
 

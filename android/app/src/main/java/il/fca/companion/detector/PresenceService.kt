@@ -16,8 +16,9 @@ class PresenceService : CompanionDeviceService() {
         // Tiny local transaction, no network. Return only after durable recording.
         try {
             val queued = app.store.observe(event.associationId, connected)
-            app.store.diagnostic(if (connected) "bluetooth_connected" else "bluetooth_disconnected_no_return")
+            app.store.diagnostic(if (connected) "bluetooth_connected" else "bluetooth_disconnected")
             if (queued) DeliveryWorker.enqueue(this)
+            if (!connected) ReturnWorker.enqueue(this)
         } catch (_: Exception) {
             // Never crash the system-bound service or log identity/Bluetooth data.
             runCatching { app.store.diagnostic("detector_storage_error") }

@@ -17,5 +17,6 @@ class FcaApplication : Application() {
         store.observeBoot(android.provider.Settings.Global.getInt(contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0))
         DeliveryWorker.ensureRecovery(this)
         DeliveryWorker.enqueue(this)
+        il.fca.companion.detector.ReturnWorker.recover(this)
     }
 }

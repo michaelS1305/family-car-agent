@@ -64,7 +64,7 @@ class MainActivity : Activity() {
     }
     private fun draw() {
         content.removeAllViews()
-        label("FCA Companion — TAKE בלבד")
+        label("FCA Companion — TAKE / RETURN")
         status = TextView(this).also { content.addView(it) }
         val owner = app.store.activeOwner()
         if (owner == null) {
@@ -82,6 +82,14 @@ class MainActivity : Activity() {
         val installation = app.store.installation(owner)
         label("התקנה: ${installation.device ?: "טרם נרשמה"}")
         button("רענון משתמש, מכשיר ורכבים") { task { load(owner) } }
+        label("החזרה אוטומטית: לאחר ניתוק ודקת המתנה, בדיקת מיקום חד־פעמית ליד הבית. נדרשת הרשאת מיקום מדויק גם ברקע; אין מעקב רציף.")
+        button("הגדרת הרשאת מיקום להחזרה") {
+            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+                requestPermissions(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION), 13)
+            else startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                android.net.Uri.parse("package:$packageName")))
+        }
+        label("בהגדרות מיקום יש לבחור ‘כל הזמן’. לאחר מכן רעננו את נתוני הרכב והבית.")
         button("רישום ההתקנה") { task {
             val device = JSONObject(app.api.call(owner, "/api/devices", "POST", JSONObject().put("request_id", installation.request)))
             check(device.isNull("revoked_at"))
@@ -111,7 +119,7 @@ class MainActivity : Activity() {
             app.auth.signOut()
             vehicles = emptyList(); displayName = ""; draw()
         }
-        label("ניתוק Bluetooth אינו מחזיר רכב. אין RETURN בגרסה זו.")
+        label("ניתוק ללא מיקום בית תקין לא מחזיר רכב. לאחר שדרוג נדרש חיבור Bluetooth אמיתי חדש לפני ההחזרה הראשונה.")
     }
     private fun task(action: () -> Unit) {
         if (busy) return
@@ -141,6 +149,14 @@ class MainActivity : Activity() {
             app.store.associations(owner).filter { it.vehicle !in usable }.forEach {
                 app.store.remove(owner, it.vehicle)
                 companion.stopObservingDevicePresence(ObservingDevicePresenceRequest.Builder().setAssociationId(it.companionId).build())
+            }
+            // RETURN setup failure must not prevent existing TAKE/binding refresh.
+            runCatching {
+                val home = JSONObject(app.api.call(owner, "/api/devices/$device/return-home"))
+                app.store.saveHome(owner, home.getDouble("latitude"), home.getDouble("longitude"))
+            }.onFailure {
+                app.store.clearHome(owner)
+                app.store.diagnostic("return_home_refresh_failed")
             }
         }
     }

@@ -69,4 +69,91 @@ class LocalStoreTest {
         assertEquals(first, store.next("mother"))
         assertEquals(3L, store.installation("mother").next)
     }
+    @Test fun disconnectGraceOfflineCausalityAndDuplicateProtection() {
+        val store = setup(); store.observe(1, true)
+        val take = store.next("mother")!!
+        store.observe(1, false, 1_000, 1_000)
+        val candidate = store.candidates("mother").single()
+        assertEquals(take.id, candidate.take)
+        assertEquals(61_000L, candidate.due)
+        assertFalse(store.queueReturn(candidate, "{}", 60_999, 60_999))
+        assertFalse(store.queueReturn(candidate, "{}", 61_000, 60_999))
+        assertFalse(store.observe(1, false, 2_000))
+        assertEquals(candidate, store.candidates("mother").single())
+        val evidence = org.json.JSONObject().put("take_event_id", candidate.take).toString()
+        assertTrue(store.queueReturn(candidate, evidence, 61_000, 61_000))
+        assertFalse(store.queueReturn(candidate, evidence, 61_000, 61_000))
+        assertEquals(2L, store.pending("mother"))
+        assertEquals(take, store.next("mother"))
+        store.finish(take.id, "accepted")
+        val returned = store.next("mother")!!
+        assertEquals("return", returned.type)
+        assertEquals(2L, returned.sequence)
+        assertEquals(take.id, org.json.JSONObject(returned.evidence!!).getString("take_event_id"))
+    }
+    @Test fun reconnectAndAccountChangeFenceInFlightHomeCheck() {
+        val store = setup(); store.observe(1, true); store.observe(1, false, 1_000)
+        val candidate = store.candidates("mother").single()
+        store.observe(1, true)
+        assertTrue(store.candidates("mother").isEmpty())
+        assertFalse(store.queueReturn(candidate, "{}", 61_000))
+        store.observe(1, false, 2_000)
+        val other = store.candidates("mother").single()
+        store.activate("other")
+        assertFalse(store.queueReturn(other, "{}", 62_000))
+    }
+    @Test fun candidateSurvivesReopenAndFailedLocationDoesNotCreateReturn() {
+        val store = setup(); store.observe(1, true); store.observe(1, false, 1_000)
+        val candidate = store.candidates("mother").single(); store.close()
+        val reopened = LocalStore(RuntimeEnvironment.getApplication())
+        assertEquals(candidate, reopened.candidates("mother").single())
+        reopened.abandon(candidate)
+        assertEquals(1L, reopened.pending("mother"))
+        assertTrue(reopened.candidates("mother").isEmpty())
+    }
+    @Test fun homeBoundaryUsesAccuracyAndCacheIsAccountScoped() {
+        val store = setup(); store.saveHome("mother", 32.0, 34.0)
+        assertEquals(32.0 to 34.0, store.home("mother"))
+        assertNull(store.home("other"))
+        assertNull(store.home("mother", System.currentTimeMillis() + 86_400_001))
+        val fix = android.location.Location("gps").apply { latitude = 32.0; longitude = 34.0; accuracy = 10f }
+        assertTrue(il.fca.companion.detector.ReturnWorker.insideHome(fix, 32.0 to 34.0))
+        assertFalse(il.fca.companion.detector.ReturnWorker.insideHome(fix, 33.0 to 34.0))
+        store.activate(null); assertNull(store.home("mother"))
+    }
+    @Test fun missingStaleInaccurateAndOutsideFixesDoNotEnqueueReturn() {
+        val store = setup(); store.observe(1, true); store.observe(1, false, 1_000, 1_000)
+        val candidate = store.candidates("mother").single()
+        val fix = android.location.Location("gps").apply {
+            latitude = 32.0; longitude = 34.0; accuracy = 10f; time = 61_000; elapsedRealtimeNanos = 61_000_000_000
+        }
+        val policy = il.fca.companion.detector.ReturnWorker
+        assertFalse(policy.usableFix(null, 61_000, 61_000_000_000))
+        assertTrue(policy.usableFix(fix, 61_000, 61_000_000_000))
+        assertFalse(policy.usableFix(fix, 92_000, 92_000_000_000))
+        fix.accuracy = 101f
+        assertFalse(policy.usableFix(fix, 61_000, 61_000_000_000))
+        fix.accuracy = 10f
+        assertFalse(policy.insideHome(fix, 33.0 to 34.0))
+        store.abandon(candidate)
+        assertEquals(1L, store.pending("mother"))
+        assertEquals("take", store.next("mother")!!.type)
+    }
+    @Test fun sqliteVersionOneUpgradePreservesExistingQueueButDoesNotGuessAcquisition() {
+        val store = setup(); store.close()
+        val context = RuntimeEnvironment.getApplication()
+        context.deleteDatabase("fca.db")
+        val db = context.openOrCreateDatabase("fca.db", 0, null)
+        db.execSQL("CREATE TABLE installations(owner TEXT PRIMARY KEY, request TEXT, device TEXT, next_seq INTEGER)")
+        db.execSQL("CREATE TABLE associations(owner TEXT, vehicle TEXT, address TEXT, companion_id INTEGER, connected INTEGER)")
+        db.execSQL("CREATE TABLE outbox(id TEXT PRIMARY KEY, owner TEXT, device TEXT, vehicle TEXT, seq INTEGER, occurred TEXT, result TEXT)")
+        db.execSQL("INSERT INTO outbox VALUES('old','mother','device','Hyundai',1,'2026-09-28T12:00:00Z',NULL)")
+        db.execSQL("INSERT INTO associations VALUES('mother','Hyundai','address',1,1)")
+        db.version = 1; db.close()
+        val upgraded = LocalStore(context)
+        assertEquals("old", upgraded.next("mother")!!.id)
+        assertEquals("take", upgraded.next("mother")!!.type)
+        assertTrue(upgraded.candidates("mother").isEmpty())
+        assertEquals(2, upgraded.readableDatabase.version)
+    }
 }
