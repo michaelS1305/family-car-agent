@@ -1,0 +1,4 @@
+# Public client configuration only. Never use a service-role key.
+FCA_BASE_URL=https://your-backend.example
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_PUBLISHABLE_KEY=replace-with-public-publishable-or-anon-key
