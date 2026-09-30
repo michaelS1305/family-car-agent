@@ -1,5 +1,13 @@
 # FCA current production schema baseline
 
+**Historical checkpoint, superseded for fresh environments:** use
+[`../bootstrap/2026-09-30/`](../bootstrap/2026-09-30/README.md) for the reconciled
+2026-09-30 current-state contract. The SQL below is retained unchanged as the
+earlier 17-table capture, not the current 23-table bootstrap. Its original
+validator targets the former flat Markdown evidence layout; current validation
+uses the new checkpoint's dated JSON validator. Neither SQL has been executed
+as part of preparing the new checkpoint.
+
 **DO NOT APPLY TO THE EXISTING FCA PRODUCTION DATABASE.**
 
 This is a CURRENT production-schema reference / empty-database bootstrap baseline,

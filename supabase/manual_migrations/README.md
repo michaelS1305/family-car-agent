@@ -1,8 +1,21 @@
 # Manual Supabase migrations
 
-`2026092701_registered_device_vehicle_bindings.sql`: PREPARED / UNEXECUTED.
-Backend-only many-to-many native device authorization, no backfill. Apply before
-enabling the matching Android endpoints. Revocation/retirement retains rows but
+## Fresh-environment checkpoint boundary
+
+Use [`../bootstrap/2026-09-30/`](../bootstrap/2026-09-30/README.md) for a new,
+isolated environment. It directly represents reconciled Production state as of
+2026-09-30, including effects through 2026092701. Do not replay this historical
+directory over that checkpoint. Future migrations follow the checkpoint.
+Checkpoint preparation has not executed SQL or validated a runtime clean rebuild.
+
+The 2026-09-30 catalog capture proves current effects, not execution provenance.
+Historical SQL (including original prepared/unexecuted comments) remains unchanged.
+
+`2026092701_registered_device_vehicle_bindings.sql`: EXECUTED / OPERATOR-CONFIRMED
+in the rollout history supplied by the operator. The 2026-09-30 capture separately
+confirms its intended effects; no execution date is inferred from that capture.
+Backend-only many-to-many native device authorization, no backfill. Historical
+compatibility order: apply before enabling matching Android endpoints. Revocation/retirement retains rows but
 blocks new admissions; hard device/vehicle deletion cascades bindings. No changes
 to CarPlay, sessions, event evidence or existing migrations. Existing internal
 native admission is not a public ingress: Android must use the binding-gated path.
@@ -187,7 +200,8 @@ this execution report confirms privileges, not those smoke-test results.
 `2026092001_vehicle_identity_foundation.sql`: EXECUTED / OPERATOR-CONFIRMED.
 Operator verified all four tables, family/reservation columns, indexes,
 validated FK/CHECK/UNIQUE/EXCLUDE constraints, both guard triggers, and absent
-anon/authenticated table privileges. Runtime integration remains disabled.
+anon/authenticated table privileges. The former runtime-disabled note described
+the foundation rollout stage, not the current integrated backend.
 Additive Multi-Car schema only: vehicles, registered devices, immutable event
 evidence/admission outcomes, mutable session projections, family checkpoint
 metadata, and reservation UUID references/nullable vehicle targeting. It does
@@ -204,7 +218,8 @@ failure rolls back the transaction. Execution was manually confirmed by the oper
 After execution, rollback requires a separately reviewed migration; do not drop
 these objects once new data or public reservation references are in use.
 
-Do not enable Multi-Car writes until the matching backend implements deletion
+Historical rollout prerequisites (not outstanding tasks): enabling Multi-Car
+writes required the matching backend to implement deletion
 finalization and FK-safe cleanup, identity/family locking, bounded replay and
 sequence admission, retirement checks, reservation vehicle authorization, and
 explicit legacy routing. The schema enforces membership/vehicle/device bindings;
@@ -219,30 +234,43 @@ event deletion without deleting another member's session. Device hard deletion
 requires owned event cleanup; revocation is the operational path. User deletion
 must remove attributable state and finalize/mark remaining sessions first, never
 rely on cascades alone. Last-member cleanup removes reservations before vehicles.
-Policy thresholds and retries remain future runtime decisions, not SQL constants.
+Policy thresholds and retries are runtime decisions, not SQL constants.
 
-`2026092301_vehicle_events_accepted_device_index.sql`: PREPARED / UNEXECUTED IN PRODUCTION.
+`2026092301_vehicle_events_accepted_device_index.sql`: EXECUTED / OPERATOR-CONFIRMED
+in the rollout history supplied by the operator. The 2026-09-30 capture separately
+confirms the exact valid/ready accepted-device index; no execution date is inferred.
 Adds only the partial `(device_id, device_sequence)` index for accepted Vehicle
-Identity events. Apply before the bounded-reconciliation backend rollout; old
+Identity events. Historical compatibility order: apply before the bounded-reconciliation backend rollout; old
 workers remain compatible. Preflight and reruns fail closed, and any failure
 rolls back. The transactional index build can briefly block event writes; use a
 quiet/controlled window, especially if internal writers are running. No native
 HTTP ingestion is activated. No table/constraint/privilege changes are made.
 Local disposable validation is not evidence of production execution.
 
-`2026092501_vehicle_creation_bounds.sql`: PREPARED / UNEXECUTED IN PRODUCTION.
+`2026092501_vehicle_creation_bounds.sql`: STRUCTURAL EFFECT PRESENT IN PRODUCTION
+(2026-09-30 capture); historical backfill/execution provenance is not established
+by metadata. Existing application records were not inspected.
 MC-SEC-002 resource-local creation keys/fingerprints and scoped unique constraints;
 family device lifetime counter survives member deletion. Existing identities/refs
 are preserved. Backfill includes currently persisted devices, not unknowable
-previously deleted history. Pause lifecycle writers through migration/backend
+previously deleted history. Historical cutover guidance: pause lifecycle writers through migration/backend
 cutover; old creation workers must not resume. See `VEHICLE_CREATION.md` for
 preflight, verification, quota semantics and recovery guidance. No ACL/RLS change.
 
-`2026092502_carplay_vehicle_authority.sql`: PREPARED / UNEXECUTED IN PRODUCTION.
+`2026092502_carplay_vehicle_authority.sql`: EFFECT PRESENT IN PRODUCTION
+(2026-09-30 capture, including exact targeted function/trigger definitions);
+execution provenance is not inferred from equivalent state.
 MC-SEC-003 adds backend-only per-user CarPlay vehicle bindings and an active-session
 lookup index; moves Realtime invalidation from legacy car_events to accepted
 VehicleEvents and adds surviving-family invalidation on member deletion.
-No legacy test-history backfill or topic-authorization changes. Pause/drain old
+No legacy test-history backfill or topic-authorization changes. Historical cutover
+guidance: pause/drain old
 writers across migration/backend/external Shortcut cutover; do not run dual
 authorities. See `CARPLAY_VEHICLE_AUTHORITY.md` for exact request/binding contracts,
-operator verification and coordinated activation. This migration was not executed.
+operator verification and coordinated activation. The former unexecuted status
+does not describe the effects now captured in Production.
+
+Current-state fidelity notes: Production enables RLS on all six Vehicle Identity/
+binding tables, although five enablements are not in their historical creation
+SQL. Current table ACLs include MAINTAIN for backend roles. The dated checkpoint
+preserves both facts; no enablement/grant execution provenance is invented here.
