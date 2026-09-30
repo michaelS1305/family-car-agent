@@ -5,3 +5,13 @@ local.properties
 fca.properties
 .idea/
 *.iml
+
+
+# Local FCA diagnostics and device database exports
+/fca-auth-callback-log.txt
+/fca-login-log.txt
+/fca-diagnostics.txt
+/fca-device.db
+/fca-device.db-wal
+/fca-device.db-shm
+/fca-device.db-journal
