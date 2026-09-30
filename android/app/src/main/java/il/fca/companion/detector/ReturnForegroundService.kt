@@ -122,6 +122,12 @@ class ReturnForegroundService : Service() {
                 }
             }
             override fun decide(candidate: ReturnCandidate, result: ReturnWorker.LocationCheck) = execution.decide(candidate, result)
+            override fun retryReady(candidate: ReturnCandidate) = store.returnRetry(candidate)?.waitMs(System.currentTimeMillis(), SystemClock.elapsedRealtime()) == 0L
+            override fun claim(candidate: ReturnCandidate) = store.claimReturn(candidate)
+            override fun defer(candidate: ReturnCandidate) {
+                store.deferReturn(candidate)
+            }
+            override fun schedule(candidate: ReturnCandidate) = scheduleRetry(applicationContext, store, candidate)
             override fun abandon(candidate: ReturnCandidate) = store.abandon(candidate)
             override fun awake(remaining: Long) {
                 release()
@@ -172,6 +178,14 @@ class ReturnForegroundService : Service() {
             is SecurityException -> "permission"
             else -> "platform"
         }
+        private fun scheduleRetry(context: Context, store: LocalStore, candidate: ReturnCandidate) {
+            val retry = store.returnRetry(candidate) ?: return
+            val now = System.currentTimeMillis()
+            val elapsed = SystemClock.elapsedRealtime()
+            val lifetime = LocalStore.returnLifetime(candidate, now, elapsed)
+            if (lifetime > 0) ReturnWorker.enqueueDeferred(context, candidate,
+                minOf(lifetime, retry.waitMs(now, elapsed)).coerceAtLeast(1))
+        }
         fun request(context: Context) {
             val app = context.applicationContext as FcaApplication
             serial.execute {
@@ -182,13 +196,20 @@ class ReturnForegroundService : Service() {
                     var eligible = false
                     for (candidate in candidates) {
                         val reason = execution.invalid(candidate)
-                        if (reason != null) {
+                        if (reason != null && ReturnOutcome.from(reason).disposition != ReturnDisposition.DEFERRED) {
                             app.store.abandon(candidate)
                             log("return_fgs_start_denied_$reason")
                         } else if (ReturnController.remainingLifetime(candidate, System.currentTimeMillis(),
                                 SystemClock.elapsedRealtime()) <= 0) {
                             app.store.abandon(candidate)
                             log("return_fgs_watchdog_expired")
+                        } else if (app.store.returnRetry(candidate)?.waitMs(System.currentTimeMillis(),
+                                SystemClock.elapsedRealtime()) != 0L) {
+                            scheduleRetry(app, app.store, candidate)
+                        } else if (reason != null) {
+                            if (app.store.claimReturn(candidate)) app.store.deferReturn(candidate)
+                            scheduleRetry(app, app.store, candidate)
+                            log("return_fgs_start_denied_$reason")
                         } else eligible = true
                     }
                     if (eligible) {

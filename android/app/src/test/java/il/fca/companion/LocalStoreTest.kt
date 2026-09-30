@@ -155,6 +155,78 @@ class LocalStoreTest {
         assertEquals("old", upgraded.next("mother")!!.id)
         assertEquals("take", upgraded.next("mother")!!.type)
         assertTrue(upgraded.candidates("mother").isEmpty())
-        assertEquals(2, upgraded.readableDatabase.version)
+        assertEquals(3, upgraded.readableDatabase.version)
+    }
+
+    @Test fun versionTwoUpgradePreservesCandidateHomeIdentityAndOutbox() {
+        val context = RuntimeEnvironment.getApplication()
+        context.deleteDatabase("fca.db")
+        context.openOrCreateDatabase("fca.db", 0, null).use { db ->
+            db.execSQL("CREATE TABLE installations(owner TEXT PRIMARY KEY,request TEXT,device TEXT,next_seq INTEGER)")
+            db.execSQL("CREATE TABLE associations(owner TEXT,vehicle TEXT,address TEXT,companion_id INTEGER,connected INTEGER,take_id TEXT,return_due INTEGER,return_elapsed INTEGER)")
+            db.execSQL("CREATE TABLE outbox(id TEXT PRIMARY KEY,owner TEXT,device TEXT,vehicle TEXT,seq INTEGER,occurred TEXT,result TEXT,type TEXT,evidence TEXT)")
+            db.execSQL("CREATE TABLE active_account(id INTEGER PRIMARY KEY,owner TEXT)")
+            db.execSQL("CREATE TABLE return_home(owner TEXT PRIMARY KEY,latitude REAL,longitude REAL,saved INTEGER)")
+            db.execSQL("INSERT INTO installations VALUES('mother','registration','device',3)")
+            db.execSQL("INSERT INTO active_account VALUES(1,'mother')")
+            db.execSQL("INSERT INTO associations VALUES('mother','Hyundai','local',1,0,'take',31000,31000)")
+            db.execSQL("INSERT INTO return_home VALUES('mother',32,34,1000)")
+            db.execSQL("INSERT INTO outbox VALUES('take','mother','device','Hyundai',1,'original',NULL,'take',NULL)")
+            db.execSQL("INSERT INTO outbox VALUES('return','mother','device','Hyundai',2,'later',NULL,'return','immutable')")
+            db.version = 2
+        }
+        LocalStore(context).use { upgraded ->
+            assertEquals(3, upgraded.readableDatabase.version)
+            assertEquals("registration", upgraded.installation("mother").request)
+            assertEquals(3L, upgraded.installation("mother").next)
+            assertEquals(32.0 to 34.0, upgraded.home("mother", 32_000))
+            val candidate = upgraded.candidates("mother").single()
+            assertEquals("take", candidate.take)
+            assertEquals(0, upgraded.returnRetry(candidate)!!.attempts)
+            assertEquals(0L, upgraded.returnRetry(candidate)!!.waitMs(31_000, 31_000))
+            assertEquals(2L, upgraded.pending("mother"))
+            upgraded.finish("take", "accepted")
+            assertEquals("immutable", upgraded.next("mother")!!.evidence)
+            assertEquals("later", upgraded.next("mother")!!.occurredAt)
+        }
+    }
+
+    @Test fun retryClaimIsDurableAndTtlCannotBeExtendedByClockOrRetries() {
+        val store = setup(); store.observeBoot(1)
+        store.observe(1, true, 100_000, 100_000); store.observe(1, false, 100_000, 100_000)
+        val candidate = store.candidates("mother").single()
+        val take = store.next("mother")!!
+        assertTrue(store.claimReturn(candidate, 130_000, 130_000))
+        assertFalse(store.claimReturn(candidate, 130_000, 130_000))
+        store.close()
+        LocalStore(RuntimeEnvironment.getApplication()).use { reopened ->
+            assertEquals(90_000L, reopened.returnRetry(candidate)!!.waitMs(130_000, 130_000))
+            assertEquals(candidate, reopened.candidates("mother").single())
+            assertEquals(take, reopened.next("mother"))
+            assertEquals(0L, LocalStore.returnLifetime(candidate, 99_999, 130_000))
+            assertEquals(0L, LocalStore.returnLifetime(candidate, 130_000, 99_999))
+            assertEquals(0L, LocalStore.returnLifetime(candidate, 1_900_000, 130_000))
+            assertEquals(0L, LocalStore.returnLifetime(candidate, 130_000, 1_900_000))
+            assertFalse(reopened.queueReturn(candidate, "{}", 1_900_000, 1_900_000))
+            assertFalse(reopened.deferReturn(candidate, 1_900_000, 1_900_000))
+            reopened.observeBoot(2)
+            assertTrue(reopened.candidates("mother").isEmpty())
+            assertEquals(take, reopened.next("mother"))
+        }
+        assertEquals(listOf(60_000L,120_000L,240_000L,480_000L,480_000L), (1..5).map(LocalStore::returnBackoff))
+    }
+
+    @Test fun staleCandidateCannotDeleteDeferOrQueueForDifferentMonotonicGeneration() {
+        setup().use { store ->
+            store.observe(1, true, 100_000, 100_000); store.observe(1, false, 100_000, 100_000)
+            val candidate = store.candidates("mother").single()
+            val stale = candidate.copy(elapsedDue = candidate.elapsedDue - 1)
+            store.abandon(stale)
+            assertEquals(candidate, store.candidates("mother").single())
+            assertFalse(store.deferReturn(stale, 130_000, 130_000))
+            assertFalse(store.queueReturn(stale, "{}", 130_000, 130_000))
+            store.remove("mother", "Hyundai")
+            assertFalse(store.queueReturn(candidate, "{}", 130_000, 130_000))
+        }
     }
 }

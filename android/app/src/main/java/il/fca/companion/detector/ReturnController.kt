@@ -14,6 +14,10 @@ internal class ReturnController(private val ports: Ports) {
         fun later(delay: Long, action: () -> Unit): Cancel
         fun acquire(candidate: ReturnCandidate, complete: (ReturnWorker.LocationCheck) -> Unit): Cancel
         fun decide(candidate: ReturnCandidate, result: ReturnWorker.LocationCheck): String
+        fun retryReady(candidate: ReturnCandidate): Boolean
+        fun claim(candidate: ReturnCandidate): Boolean
+        fun defer(candidate: ReturnCandidate)
+        fun schedule(candidate: ReturnCandidate)
         fun abandon(candidate: ReturnCandidate)
         fun awake(remaining: Long)
         fun release()
@@ -43,25 +47,34 @@ internal class ReturnController(private val ports: Ports) {
         }
         for (candidate in ports.candidates()) {
             val invalid = ports.invalid(candidate)
-            if (invalid != null) {
-                ports.abandon(candidate)
-                log("return_fgs_candidate_invalid")
-                log("return_fgs_stopped_$invalid")
-                continue
-            }
             val remaining = remainingLifetime(candidate, ports.wall(), ports.elapsed())
             if (remaining <= 0) {
                 ports.abandon(candidate)
                 log("return_fgs_watchdog_expired")
                 continue
             }
+            if (invalid != null && ReturnOutcome.from(invalid).disposition != ReturnDisposition.DEFERRED) {
+                ports.abandon(candidate)
+                log("return_fgs_stopped_$invalid")
+                continue
+            }
+            if (!ports.retryReady(candidate)) { ports.schedule(candidate); continue }
+            if (invalid != null) {
+                if (ports.claim(candidate)) ports.defer(candidate)
+                ports.schedule(candidate)
+                log("return_fgs_stopped_$invalid")
+                continue
+            }
             val slot = Active(candidate)
             active = slot
-            ports.awake(remaining)
-            slot.watchdog = ports.later(remaining) {
+            // Candidate lifetime is NOT a foreground/wake-lock lifetime.
+            val attemptBudget = minOf(remaining,
+                remainingGrace(candidate, ports.wall(), ports.elapsed()) + LocalStore.RETURN_ATTEMPT_MS)
+            ports.awake(attemptBudget)
+            slot.watchdog = ports.later(attemptBudget) {
                 if (active === slot) {
                     log("return_fgs_watchdog_expired")
-                    end(slot, "watchdog")
+                    end(slot, if (remainingLifetime(candidate, ports.wall(), ports.elapsed()) <= 0) "expired" else "watchdog")
                     refresh()
                 }
             }
@@ -76,7 +89,7 @@ internal class ReturnController(private val ports: Ports) {
         val invalid = ports.invalid(slot.candidate)
         if (invalid != null) { end(slot, invalid); refresh(); return }
         if (remainingLifetime(slot.candidate, ports.wall(), ports.elapsed()) <= 0) {
-            log("return_fgs_watchdog_expired"); end(slot, "watchdog"); refresh(); return
+            log("return_fgs_watchdog_expired"); end(slot, "expired"); refresh(); return
         }
         val grace = remainingGrace(slot.candidate, ports.wall(), ports.elapsed())
         if (grace > 0) {
@@ -84,25 +97,31 @@ internal class ReturnController(private val ports: Ports) {
             return
         }
         log("return_fgs_acquisition_started")
+        if (!ports.claim(slot.candidate)) { end(slot, "retry_not_ready", false); refresh(); return }
+        ports.schedule(slot.candidate) // Recover the reserved attempt after process loss.
         slot.acquisition = ports.acquire(slot.candidate) { result ->
             if (!closed && active === slot) {
                 val reason = ports.invalid(slot.candidate)
                 if (remainingLifetime(slot.candidate, ports.wall(), ports.elapsed()) <= 0) {
-                    log("return_fgs_watchdog_expired"); end(slot, "watchdog")
-                } else if (reason != null) end(slot, reason)
-                else end(slot, ports.decide(slot.candidate, result))
+                    log("return_fgs_watchdog_expired"); end(slot, "expired")
+                } else end(slot, reason ?: ports.decide(slot.candidate, result))
                 refresh()
             }
         }
     }
 
-    private fun end(slot: Active, reason: String) {
+    private fun end(slot: Active, reason: String, abandon: Boolean = true) {
         if (active !== slot) return
         active = null // Late completion/cancellation can never act on a successor.
         slot.grace?.cancel()
         slot.watchdog?.cancel()
         slot.acquisition?.cancel()
-        ports.abandon(slot.candidate) // Conditional SQL cannot erase a newer candidate.
+        if (abandon) {
+            if (ReturnOutcome.from(reason).disposition == ReturnDisposition.DEFERRED) {
+                ports.defer(slot.candidate)
+                ports.schedule(slot.candidate)
+            } else ports.abandon(slot.candidate)
+        } else ports.schedule(slot.candidate)
         ports.release()
         log("return_fgs_stopped_$reason")
     }
@@ -122,7 +141,6 @@ internal class ReturnController(private val ports: Ports) {
         fun remainingGrace(c: ReturnCandidate, wall: Long, elapsed: Long): Long =
             maxOf(0L, c.due - wall, c.elapsedDue - elapsed)
         fun remainingLifetime(c: ReturnCandidate, wall: Long, elapsed: Long): Long =
-            minOf(c.due + LocalStore.RETURN_GRACE_MS - wall,
-                c.elapsedDue + LocalStore.RETURN_GRACE_MS - elapsed)
+            LocalStore.returnLifetime(c, wall, elapsed)
     }
 }
