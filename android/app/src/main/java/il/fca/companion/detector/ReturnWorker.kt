@@ -58,6 +58,17 @@ class ReturnWorker(context: Context, params: WorkerParameters) : Worker(context,
             WorkManager.getInstance(context).enqueueUniqueWork("fca-return", ExistingWorkPolicy.APPEND_OR_REPLACE,
                 OneTimeWorkRequestBuilder<ReturnWorker>().setInitialDelay(LocalStore.RETURN_GRACE_MS, TimeUnit.MILLISECONDS).build())
         }
+        internal fun deferredWorkName(candidate: ReturnCandidate): String = "fca-return-deferred-" +
+            java.util.UUID.nameUUIDFromBytes(listOf(candidate.owner, candidate.vehicle, candidate.take,
+                candidate.due.toString(), candidate.elapsedDue.toString()).joinToString("\u0000").toByteArray(Charsets.UTF_8))
+
+        fun enqueueDeferred(context: Context, candidate: ReturnCandidate, delayMs: Long) {
+            // Replace only this candidate's wakeup, never another candidate or an acquisition.
+            // Recovered deadlines are absolute in SQLite; no shared predecessor can delay them.
+            WorkManager.getInstance(context).enqueueUniqueWork(deferredWorkName(candidate),
+                ExistingWorkPolicy.REPLACE,
+                OneTimeWorkRequestBuilder<ReturnWorker>().setInitialDelay(delayMs.coerceAtLeast(1), TimeUnit.MILLISECONDS).build())
+        }
         fun recover(context: Context) {
             WorkManager.getInstance(context).enqueueUniquePeriodicWork("fca-return-recovery", ExistingPeriodicWorkPolicy.KEEP,
                 PeriodicWorkRequestBuilder<ReturnWorker>(15, TimeUnit.MINUTES).build())

@@ -12,10 +12,22 @@ data class PendingTake(val id: String, val owner: String, val device: String, va
                        val sequence: Long, val occurredAt: String, val type: String = "take",
                        val evidence: String? = null)
 data class ReturnCandidate(val owner: String, val vehicle: String, val take: String, val due: Long, val elapsedDue: Long)
+data class ReturnRetry(val attempts: Int, val next: Long, val elapsedNext: Long) {
+    fun waitMs(now: Long, elapsed: Long) = maxOf(0L, next - now, elapsedNext - elapsed)
+}
 
-class LocalStore(context: Context) : SQLiteOpenHelper(context, "fca.db", null, 2) {
+class LocalStore(context: Context) : SQLiteOpenHelper(context, "fca.db", null, 3) {
     companion object {
         const val RETURN_GRACE_MS = 30_000L
+        const val RETURN_TTL_MS = 30 * 60_000L
+        const val RETURN_ATTEMPT_MS = 30_000L // 20s acquisition plus bounded setup/cleanup.
+        fun returnLifetime(c: ReturnCandidate, now: Long, elapsed: Long): Long {
+            val wallAnchor = c.due - RETURN_GRACE_MS
+            val elapsedAnchor = c.elapsedDue - RETURN_GRACE_MS
+            if (now < wallAnchor || elapsed < elapsedAnchor) return 0
+            return minOf(wallAnchor + RETURN_TTL_MS - now, elapsedAnchor + RETURN_TTL_MS - elapsed)
+        }
+        fun returnBackoff(attempts: Int): Long = 60_000L * (1L shl (attempts - 1).coerceIn(0, 3))
         private val stateListeners = java.util.concurrent.CopyOnWriteArraySet<() -> Unit>()
         internal fun listen(listener: () -> Unit) { stateListeners.add(listener) }
         internal fun unlisten(listener: () -> Unit) { stateListeners.remove(listener) }
@@ -29,6 +41,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "fca.db", null, 2
         db.execSQL("CREATE TABLE active_account(id INTEGER PRIMARY KEY CHECK(id=1), owner TEXT NOT NULL)")
         db.execSQL("CREATE TABLE boot_state(id INTEGER PRIMARY KEY CHECK(id=1), boot INTEGER NOT NULL)")
         upgradeReturn(db)
+        upgradeDeferredReturn(db)
     }
     private fun upgradeReturn(db: SQLiteDatabase) {
         db.execSQL("ALTER TABLE outbox ADD COLUMN type TEXT NOT NULL DEFAULT 'take'")
@@ -41,8 +54,14 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "fca.db", null, 2
         // from a receipt; a real reconnect creates a safe TAKE alias on server.
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        check(oldVersion == 1 && newVersion == 2)
-        upgradeReturn(db)
+        check(oldVersion in 1..2 && newVersion == 3)
+        if (oldVersion == 1) upgradeReturn(db)
+        upgradeDeferredReturn(db)
+    }
+    private fun upgradeDeferredReturn(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE associations ADD COLUMN return_attempts INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE associations ADD COLUMN return_next INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE associations ADD COLUMN return_next_elapsed INTEGER NOT NULL DEFAULT 0")
     }
     private fun <T> transaction(action: (SQLiteDatabase) -> T): T {
         val db = writableDatabase
@@ -116,7 +135,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "fca.db", null, 2
         db.execSQL("UPDATE associations SET connected=? WHERE owner=? AND companion_id=?",
             arrayOf(if (connected) 1 else 0, owner, companionId))
         if (!connected) {
-            db.execSQL("UPDATE associations SET return_due=?,return_elapsed=? WHERE owner=? AND vehicle=? AND take_id IS NOT NULL",
+            db.execSQL("UPDATE associations SET return_due=?,return_elapsed=?,return_attempts=0,return_next=0,return_next_elapsed=0 WHERE owner=? AND vehicle=? AND take_id IS NOT NULL",
                 arrayOf(now + RETURN_GRACE_MS, elapsed + RETURN_GRACE_MS, owner, association.first))
             message = if (candidates(owner).any { it.vehicle == association.first }) "return_grace_started" else "return_missing_take"
             return@transaction false
@@ -170,16 +189,41 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "fca.db", null, 2
         "SELECT vehicle,take_id,return_due,return_elapsed FROM associations WHERE owner=? AND return_due IS NOT NULL AND take_id IS NOT NULL",
         arrayOf(owner)).use { buildList { while (it.moveToNext()) add(ReturnCandidate(owner, it.getString(0), it.getString(1), it.getLong(2), it.getLong(3))) } }
     fun abandon(candidate: ReturnCandidate) {
-        writableDatabase.execSQL("UPDATE associations SET return_due=NULL WHERE owner=? AND vehicle=? AND take_id=? AND return_due=?",
-            arrayOf(candidate.owner, candidate.vehicle, candidate.take, candidate.due))
+        writableDatabase.execSQL("UPDATE associations SET return_due=NULL WHERE owner=? AND vehicle=? AND take_id=? AND return_due=? AND return_elapsed=?",
+            arrayOf(candidate.owner, candidate.vehicle, candidate.take, candidate.due, candidate.elapsedDue))
         stateChanged()
+    }
+    fun returnRetry(c: ReturnCandidate): ReturnRetry? = readableDatabase.rawQuery(
+        "SELECT return_attempts,return_next,return_next_elapsed FROM associations " +
+            "WHERE owner=? AND vehicle=? AND take_id=? AND return_due=? AND return_elapsed=? AND connected=0",
+        arrayOf(c.owner, c.vehicle, c.take, c.due.toString(), c.elapsedDue.toString())).use {
+        if (it.moveToFirst()) ReturnRetry(it.getInt(0), it.getLong(1), it.getLong(2)) else null
+    }
+    /** Reserve a retry deadline BEFORE starting work, including process loss during acquisition. */
+    fun claimReturn(c: ReturnCandidate, now: Long = System.currentTimeMillis(),
+                    elapsed: Long = android.os.SystemClock.elapsedRealtime()): Boolean = transaction { db ->
+        val retry = returnRetry(c) ?: return@transaction false
+        if (activeOwner() != c.owner || returnLifetime(c, now, elapsed) <= 0 || retry.waitMs(now, elapsed) > 0)
+            return@transaction false
+        val count = retry.attempts + 1
+        val delay = RETURN_ATTEMPT_MS + returnBackoff(count)
+        db.execSQL("UPDATE associations SET return_attempts=?,return_next=?,return_next_elapsed=? WHERE owner=? AND vehicle=?",
+            arrayOf(count, maxOf(now, c.due) + delay, maxOf(elapsed, c.elapsedDue) + delay, c.owner, c.vehicle))
+        true
+    }
+    fun deferReturn(c: ReturnCandidate, now: Long = System.currentTimeMillis(),
+                    elapsed: Long = android.os.SystemClock.elapsedRealtime()): Boolean = transaction { db ->
+        val retry = returnRetry(c) ?: return@transaction false
+        if (activeOwner() != c.owner || returnLifetime(c, now, elapsed) <= 0) return@transaction false
+        val delay = returnBackoff(retry.attempts)
+        db.execSQL("UPDATE associations SET return_next=?,return_next_elapsed=? WHERE owner=? AND vehicle=?",
+            arrayOf(now + delay, elapsed + delay, c.owner, c.vehicle))
+        true
     }
     fun queueReturn(candidate: ReturnCandidate, evidence: String, now: Long = System.currentTimeMillis(),
                     elapsed: Long = android.os.SystemClock.elapsedRealtime()): Boolean = transaction { db ->
-        if (activeOwner() != candidate.owner || now < candidate.due || elapsed < candidate.elapsedDue) return@transaction false
-        val valid = db.rawQuery("SELECT 1 FROM associations WHERE owner=? AND vehicle=? AND take_id=? AND return_due=? AND connected=0",
-            arrayOf(candidate.owner, candidate.vehicle, candidate.take, candidate.due.toString())).use { it.moveToFirst() }
-        if (!valid) return@transaction false
+        if (activeOwner() != candidate.owner || now < candidate.due || elapsed < candidate.elapsedDue ||
+            returnLifetime(candidate, now, elapsed) <= 0 || returnRetry(candidate) == null) return@transaction false
         val installation = installation(candidate.owner)
         val device = installation.device ?: return@transaction false
         check(installation.next < Long.MAX_VALUE)
