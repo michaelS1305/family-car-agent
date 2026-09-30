@@ -1,0 +1,4 @@
+<resources>
+    <bool name="acl_detector_enabled">false</bool>
+    <bool name="presence_detector_enabled">true</bool>
+</resources>

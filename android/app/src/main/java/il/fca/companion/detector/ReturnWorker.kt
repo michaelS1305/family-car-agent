@@ -1,81 +1,53 @@
 package il.fca.companion.detector
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.location.Location
-import android.location.LocationManager
-import android.os.CancellationSignal
 import android.os.SystemClock
 import androidx.work.*
-import il.fca.companion.FcaApplication
 import il.fca.companion.data.LocalStore
-import il.fca.companion.delivery.DeliveryWorker
-import org.json.JSONObject
-import java.time.Instant
-import java.util.concurrent.CountDownLatch
+import il.fca.companion.data.ReturnCandidate
 import java.util.concurrent.TimeUnit
 
-/** One bounded location request per disconnect, not a location tracker. No network constraint. */
+/** Recovery requests the same FGS controller; it never acquires location itself. */
 class ReturnWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
     override fun doWork(): Result {
-        val app = applicationContext as FcaApplication
-        val owner = app.store.activeOwner() ?: return Result.success()
-        for (candidate in app.store.candidates(owner)) {
-            val now = System.currentTimeMillis()
-            if (now < candidate.due || SystemClock.elapsedRealtime() < candidate.elapsedDue) continue
-            // A delayed background job must not interpret arrival home hours later
-            // as evidence for an old disconnect. Fail closed, requiring a new cycle.
-            if (now - candidate.due > 300_000) {
-                app.store.abandon(candidate); app.store.diagnostic("return_not_created_stale_disconnect"); continue
-            }
-            app.store.diagnostic("return_home_check_started")
-            val home = app.store.home(owner)
-            val fix = if (home != null) freshLocation() else null
-            if (fix == null || home == null) {
-                app.store.abandon(candidate)
-                app.store.diagnostic("return_home_check_failed_permission_location_or_home")
-                continue
-            }
-            if (!insideHome(fix, home)) {
-                app.store.abandon(candidate); app.store.diagnostic("outside_home_return_not_created"); continue
-            }
-            if (isStopped) return Result.retry()
-            val body = JSONObject().put("take_event_id", candidate.take).put("latitude", fix.latitude)
-                .put("longitude", fix.longitude).put("accuracy_m", fix.accuracy.toDouble())
-                .put("location_at", Instant.ofEpochMilli(fix.time).toString())
-            if (app.store.queueReturn(candidate, body.toString())) {
-                app.store.diagnostic("return_queued"); DeliveryWorker.enqueue(applicationContext)
-            }
-        }
+        ReturnForegroundService.request(applicationContext)
         return Result.success()
     }
 
-    private fun freshLocation(): Location? {
-        if (listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                .any { applicationContext.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) return null
-        val cancellation = CancellationSignal()
-        return try {
-            val manager = applicationContext.getSystemService(LocationManager::class.java)
-            val done = CountDownLatch(1)
-            var result: Location? = null
-            manager.getCurrentLocation(LocationManager.GPS_PROVIDER, cancellation, applicationContext.mainExecutor) {
-                result = it; done.countDown()
-            }
-            if (!done.await(20, TimeUnit.SECONDS) || isStopped) null else result?.takeIf { usableFix(it) }
-        } catch (_: Exception) { null } finally { cancellation.cancel() }
-    }
+    internal data class LocationCheck(val fix: Location? = null, val reason: String? = null)
 
     companion object {
+        internal fun graceElapsed(candidate: ReturnCandidate, now: Long, elapsed: Long): Boolean =
+            now >= candidate.due && elapsed >= candidate.elapsedDue
+
+        internal fun homeRadiusFailure(fix: Location, home: Pair<Double, Double>): String? =
+            if (insideHome(fix, home)) null else "outside_home_radius"
+
+        internal fun diagnostic(write: (String) -> Unit, category: String) {
+            // Observability must never prevent mutation, abandonment or delivery scheduling.
+            runCatching { write(category) }
+        }
+
         fun usableFix(fix: Location?, now: Long = System.currentTimeMillis(),
-                      elapsedNanos: Long = SystemClock.elapsedRealtimeNanos()): Boolean {
-            if (fix == null) return false
+                      elapsedNanos: Long = SystemClock.elapsedRealtimeNanos()): Boolean = fixFailure(fix, now, elapsedNanos) == null
+
+        internal fun fixFailure(fix: Location?, now: Long = System.currentTimeMillis(),
+                               elapsedNanos: Long = SystemClock.elapsedRealtimeNanos()): String? {
+            if (fix == null) return "location_unavailable"
             val age = elapsedNanos - fix.elapsedRealtimeNanos
             val wallAge = now - fix.time
-            return age in 0..30_000_000_000L && wallAge in 0..30_000L && !fix.isMock && fix.hasAccuracy() &&
-                fix.accuracy.isFinite() && fix.accuracy > 0 && fix.accuracy <= 100 &&
-                fix.latitude.isFinite() && fix.latitude in -90.0..90.0 &&
-                fix.longitude.isFinite() && fix.longitude in -180.0..180.0
+            return when {
+                age < 0 || wallAge < 0 -> "location_timestamp_invalid"
+                age > 30_000_000_000L || wallAge > 30_000L -> "location_too_old"
+                fix.isMock -> "location_mock"
+                !fix.hasAccuracy() -> "location_accuracy_missing"
+                !fix.accuracy.isFinite() || fix.accuracy <= 0 -> "location_accuracy_invalid"
+                fix.accuracy > 100 -> "location_accuracy_too_low"
+                !fix.latitude.isFinite() || fix.latitude !in -90.0..90.0 ||
+                    !fix.longitude.isFinite() || fix.longitude !in -180.0..180.0 -> "location_coordinates_invalid"
+                else -> null
+            }
         }
         fun insideHome(fix: Location, home: Pair<Double, Double>): Boolean {
             val distances = FloatArray(1)
@@ -90,6 +62,7 @@ class ReturnWorker(context: Context, params: WorkerParameters) : Worker(context,
             WorkManager.getInstance(context).enqueueUniquePeriodicWork("fca-return-recovery", ExistingPeriodicWorkPolicy.KEEP,
                 PeriodicWorkRequestBuilder<ReturnWorker>(15, TimeUnit.MINUTES).build())
             enqueue(context)
+            ReturnForegroundService.request(context) // Process restart must not add another grace period.
         }
     }
 }

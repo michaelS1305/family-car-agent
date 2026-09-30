@@ -14,6 +14,7 @@ import android.view.View
 import android.view.WindowInsets
 import android.widget.*
 import il.fca.companion.delivery.DeliveryWorker
+import il.fca.companion.detector.DetectorPlatform
 import il.fca.companion.net.HttpFailure
 import org.json.JSONArray
 import org.json.JSONObject
@@ -82,7 +83,7 @@ class MainActivity : Activity() {
         val installation = app.store.installation(owner)
         label("התקנה: ${installation.device ?: "טרם נרשמה"}")
         button("רענון משתמש, מכשיר ורכבים") { task { load(owner) } }
-        label("החזרה אוטומטית: לאחר ניתוק ודקת המתנה, בדיקת מיקום חד־פעמית ליד הבית. נדרשת הרשאת מיקום מדויק גם ברקע; אין מעקב רציף.")
+        label("החזרה אוטומטית: לאחר ניתוק ו־30 שניות המתנה, בדיקת מיקום חד־פעמית ליד הבית. נדרשת הרשאת מיקום מדויק גם ברקע; אין מעקב רציף.")
         button("הגדרת הרשאת מיקום להחזרה") {
             if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
                 requestPermissions(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION), 13)
@@ -108,7 +109,7 @@ class MainActivity : Activity() {
                 val device = app.store.installation(owner).device ?: error("Register first")
                 app.api.call(owner, "/api/devices/$device/vehicle-bindings/${association.vehicle}", "DELETE")
                 app.store.remove(owner, association.vehicle)
-                companion.stopObservingDevicePresence(ObservingDevicePresenceRequest.Builder().setAssociationId(association.companionId).build())
+                DetectorPlatform.stop(companion, association.companionId)
             } }
         }
         label("אירועים ממתינים: ${app.store.pending(owner)}")
@@ -148,7 +149,7 @@ class MainActivity : Activity() {
                 .filter { it.getBoolean("usable") }.map { it.getString("vehicle_ref") }.toSet()
             app.store.associations(owner).filter { it.vehicle !in usable }.forEach {
                 app.store.remove(owner, it.vehicle)
-                companion.stopObservingDevicePresence(ObservingDevicePresenceRequest.Builder().setAssociationId(it.companionId).build())
+                DetectorPlatform.stop(companion, it.companionId)
             }
             // RETURN setup failure must not prevent existing TAKE/binding refresh.
             runCatching {
@@ -204,9 +205,9 @@ class MainActivity : Activity() {
         app.api.call(owner, "/api/devices/$device/vehicle-bindings/$vehicle", "PUT")
         val old = app.store.associations(owner).find { it.vehicle == vehicle }
         if (old != null && old.companionId != info.id)
-            companion.stopObservingDevicePresence(ObservingDevicePresenceRequest.Builder().setAssociationId(old.companionId).build())
+            DetectorPlatform.stop(companion, old.companionId)
         app.store.associate(owner, vehicle, address, info.id)
-        companion.startObservingDevicePresence(ObservingDevicePresenceRequest.Builder().setAssociationId(info.id).build())
+        DetectorPlatform.start(companion, info.id)
         app.store.diagnostic("association_enabled_wait_for_connection")
     }
 }

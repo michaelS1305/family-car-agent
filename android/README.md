@@ -1,9 +1,14 @@
 # FCA Android TAKE / RETURN companion
 
 Independent Kotlin Android project; no PWA build/layout changes. This first
-detector targets **Android 16 / API 36+** (Samsung S24 FE). Earlier versions are
-not claimed supported: their older presence callbacks do not distinguish BLE
-proximity from Classic connection as explicitly. No Android Auto/CarPlay work.
+detector supports **Android 15 / API 35+**. API 35 uses manifest Bluetooth ACL
+connected/disconnected broadcasts, filtered to the selected local bonded address
+and Classic (BR/EDR) transport. Missing/LE transport is ignored, not guessed.
+API 36+ retains Companion `DevicePresenceEvent` callbacks. Version-qualified
+component enablement and runtime guards prevent overlapping detectors and API 36
+class loading on 35. Both use the same durable TAKE/RETURN pipeline. Companion
+association/selection remains on both versions; legacy BLE-presence callbacks are
+not used. No permanent foreground service or Android Auto/CarPlay work.
 
 ## Backend prerequisite (operator-controlled, NOT applied by this task)
 
@@ -90,8 +95,10 @@ disabled so installation sequence/credentials cannot be cloned by normal backup.
    local association/presence observation is enabled. If approval is interrupted,
    repeat setup; an existing matching system association is reused.
 8. Start a fresh physical Bluetooth connection (disconnect/reconnect if already
-   connected during setup). Only `EVENT_BT_CONNECTED` produces a TAKE; BLE nearby
-   events are ignored. `EVENT_BT_DISCONNECTED` starts the RETURN grace described below.
+   connected during setup). API 36 uses `EVENT_BT_CONNECTED` / `EVENT_BT_DISCONNECTED`;
+   API 35 uses Classic `ACTION_ACL_CONNECTED` / `ACTION_ACL_DISCONNECTED` for the
+   bound paired address. BLE nearby events are ignored. Both start the same TAKE
+   and RETURN grace described below.
 9. Observe pending count/delivery diagnostics; refresh PWA and confirm Hyundai's
    driver is the mother. Screen can be closed; do not force-stop the app.
 10. Test airplane/no-network, then restoration: exact event ID/sequence must retry.
@@ -110,8 +117,18 @@ sequence or queue; an ordinary process restart preserves the connection latch.
 RETURN extends this latch with the durable causal link and grace described below.
 
 WorkManager delivers strictly ordered pending events per installation with network
-constraints/exponential retry. Unique immediate work plus periodic recovery covers
-death between DB commit and enqueue. Acknowledged local rows are bounded to 30;
+constraints. Each fresh kick is an independent expedited request (ordinary-work
+fallback if quota is exhausted), not a child of the old `fca-delivery` chain.
+Failed kicks finish after scheduling `fca-delivery-recovery`, which owns exponential
+backoff; future kicks do not wait for it. A process-wide drain lock serializes all
+kick/retry/periodic HTTP drains without holding a SQLite transaction over network.
+Every enqueue creates a new opportunity, including at another drain's exit.
+The unchanged 15-minute periodic recovery covers death between DB commit and
+enqueue. Existing WorkManager jobs remain compatible and use the same guard.
+Diagnostics distinguish kick requests/starts and recovery starts with attempt
+counts. Previously installed periodic/one-time requests without source metadata
+report `legacy_recovery`; new periodic requests report `periodic`. No jobs or
+outbox rows are reset. Acknowledged local rows are bounded to 30;
 unacknowledged events are never pruned. Server terminal receipts are acknowledged,
 but auth/transport/permission/sequence conflicts keep the original payload. An
 unbound/revoked head event can therefore block later sequence delivery: do not
@@ -129,7 +146,14 @@ connection state, pending count, safe HTTP/category diagnostics, manual retry an
 unlink. No address text, full provider response or MAC is sent to the backend.
 RETURN sends only a one-shot location fix and its accuracy/time over authenticated HTTPS.
 
-Deferred: polish, all other native FCA screens, older Android compatibility, iPhone/CarPlay.
+API 35 setup uses the same Nearby devices (`BLUETOOTH_CONNECT`) runtime grant and
+Android Companion approval. RETURN still requires precise location plus Allow all
+the time. The manifest ACL broadcasts are Android implicit-broadcast exceptions,
+so detection is intended to work with UI closed/screen locked (not force-stopped).
+Physical Samsung validation remains required for background callbacks, permissions,
+transport metadata, location and scheduling. No missing callback is synthesized.
+
+Deferred: polish, all other native FCA screens, API 34 and older, iPhone/CarPlay.
 
 ## RETURN physical slice
 
@@ -159,17 +183,27 @@ this APK. TAKE remains the same physical callback and admission path.
 SQLite v2 upgrades v1 additively, preserving installation, sequence, associations
 and pending TAKEs. A fresh TAKE saves its UUID on the acquisition; acknowledgement
 pruning cannot remove that causal link. Disconnect persists a candidate with a
-**60-second grace** (one constant), wall and monotonic deadline. Reconnect cancels
+**30-second grace** (one constant), wall and monotonic deadline. Reconnect cancels
 it; the pre-existing reconnect TAKE/no-op-alias behavior remains. The final local
 queue transaction rechecks account, acquisition, disconnected state and deadlines,
 then appends exactly one RETURN after its TAKE. Offline delivery reuses the same
 payload/UUID/sequence. Location payload is removed from the local row after receipt.
 
-A no-network-constraint worker requests one GPS fix, bounded to 20 seconds, only
-after grace. Freshness uses monotonic and wall clocks; mock, inaccurate or absent
-fixes fail closed. Permission/home/location failure or outside-home abandons this
-candidate with diagnostics, requiring a new physical cycle. A worker more than
-five minutes late also abandons it: later arrival home must not retroactively
+The bounded foreground-service acquisition first inspects enabled GPS/network providers' last-known
+fixes after grace. Each must satisfy the unchanged 30s wall/monotonic freshness,
+non-mock and <=100m accuracy checks. Newest monotonic timestamp wins; accuracy is
+only a tie-breaker, never home distance. Original timestamps are preserved.
+If no cache is usable, one asynchronous current-location request per enabled
+GPS/network provider races within a single 20s monotonic budget including cache
+inspection/setup. Invalid/null responses do not stop the other provider. First
+usable response wins and cancels outstanding requests; all failures finish early,
+otherwise the shared deadline cancels them. Controller stop also cancels; late callbacks
+are ignored. There is no polling, repeated acquisition, Play Services dependency,
+or continuous tracking. Freshness is rechecked before queueing. A selected usable
+fix outside `distance + accuracy <=500m` fails without searching for a more favourable
+fix. Permission/home/location failure or outside-home abandons this
+candidate with diagnostics, requiring a new physical cycle. The original-disconnect
+60-second watchdog also abandons expired candidates: later arrival home must not retroactively
 qualify an old disconnect. Periodic recovery and app startup recover durable
 candidates, but WorkManager/OEM scheduling is not exact. Reboot invalidates pending
 physical candidates, never immutable outbox events. No continuous GPS or force-stop
@@ -178,8 +212,73 @@ guarantee. Missed OS connection callbacks remain a physical-validation limitatio
 Permissions: first grant precise foreground location, then choose **Allow all the
 time** in app location settings using the diagnostic setup button. Background
 location is required because the screen need not be open. Approximate/foreground-only
-permission fails closed. Background GPS can fail or be delayed by Android/Samsung
-power policy; no foreground-service or battery-policy bypass is added.
+permission fails closed. The bounded location foreground-service experiment below
+changes execution context only; the operator has reported successful Samsung
+online / above-ground physical cycles, as summarized below.
+
+### Bounded RETURN foreground-service experiment (online / above-ground only)
+
+After persisting a disconnect candidate, FCA verifies its current system CDM
+association by both ID and Bluetooth address, then requests an internal location
+foreground service. Existing companion permissions are retained. Explicit app-owned
+FOREGROUND_SERVICE, FOREGROUND_SERVICE_LOCATION and WAKE_LOCK permissions are
+declared; no Play Services dependency or location-policy change is introduced.
+
+The service promotes immediately with a generic notification: `Family Car Agent` /
+`מעדכן את מצב הרכב…`. POST_NOTIFICATIONS is not a RETURN prerequisite: when notification
+permission is unavailable Android may show the service only in its active-apps/Task
+Manager surface rather than the notification drawer.
+
+A single serial controller waits the remaining persisted 30-second grace, then
+runs the unchanged cache-first GPS/network acquisition on a separate executor.
+Framework callbacks remain on mainExecutor. There is no acquisition during grace.
+The unchanged 20-second shared acquisition budget, home cache, accuracy, freshness,
+mock rejection and distance checks still apply. Only qualified evidence reaches
+the existing atomic queueReturn and delivery path; the service does not wait for HTTP.
+
+The watchdog is anchored to the original disconnect: grace deadline + 30 seconds
+(60 seconds total), bounded by both wall and elapsed clocks. Duplicate starts and
+recovery cannot reset it. A timed partial wake lock covers only the remaining window,
+because a service alone does not keep the CPU awake through locked-screen grace.
+Every terminal path releases it; the OS timeout is a final safety net.
+
+Reconnect/account/association changes notify the controller after SQLite commit.
+Cancellation and stale completion cannot act on a successor candidate. All service
+instances share a single location executor. WorkManager now only requests the same
+orchestrator, including an immediate process-start recovery request. SQLite remains
+authoritative after process death; expired candidates fail closed rather than gaining
+a new grace/watchdog window. No sticky intent or replacement event is generated.
+
+Fixed diagnostics include `return_fgs_start_requested`, `return_fgs_started`,
+`return_fgs_promoted`, `return_fgs_duplicate_suppressed`, `return_fgs_candidate_invalid`,
+`return_fgs_acquisition_started`, `return_fgs_watchdog_expired`, bounded
+`return_fgs_start_denied_*` and `return_fgs_stopped_*`. Existing provider diagnostics
+remain. No identity/location values or exception messages are logged.
+
+Operator-reported physical validation passed automatic TAKE, two consecutive home
+TAKE/RETURN cycles, reconnect within grace without RETURN, outside-home rejection,
+and subsequent automatic RETURN at home, without Companion interaction. Retained
+diagnostics confirm the latest cycle's foreground promotion, 30-second grace,
+fresh GPS callback, durable queueing, service shutdown and accepted delivery.
+This is not a guarantee across every device/OS/power-policy combination. Force-stop, revoked
+permissions, missing CDM association or unavailable location can still prevent RETURN.
+This does not implement underground/offline home evidence, geofencing or trip tracking.
+
+Source diagnostics are `return_location_source_cache_gps`, `_cache_network`,
+`_current_gps`, `_current_network` (each with the full `return_location_source`
+prefix). Provider availability uses `return_location_<gps|network>_<disabled|unavailable>`;
+cache/current rejection diagnostics append the existing bounded failure reason.
+Network positioning is device/OS-service dependent and may be unavailable or too
+coarse. The race improves opportunities, not guarantees; physical locked-screen
+testing on Android 15/16 remains necessary.
+
+Home-check failures use `return_home_check_failed_<reason>` with fixed categories
+for missing/expired/clock-invalid home cache, fine/background permissions, timeout,
+unavailable fix, stopped/interrupted worker, security/request error, old/invalid
+timestamps, mock fix, missing/invalid/insufficient accuracy, invalid coordinates,
+or outside-home radius. No measured location/accuracy/distance or exception text
+is logged. Diagnostic write failures do not block RETURN processing. Existing
+persisted candidates keep their original deadline; newly observed disconnects use 30s.
 
 ### First RETURN using the existing mother's Hyundai session
 
@@ -206,6 +305,8 @@ https://developer.android.com/reference/android/location/LocationManager
 
 ## API references used
 
+- https://developer.android.com/develop/background-work/background-tasks/broadcasts/broadcast-exceptions
+- https://developer.android.com/reference/android/bluetooth/BluetoothDevice
 - https://developer.android.com/reference/android/companion/CompanionDeviceManager
 - https://developer.android.com/reference/android/companion/DevicePresenceEvent
 - https://supabase.com/docs/guides/auth/sessions/pkce-flow

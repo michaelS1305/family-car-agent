@@ -1,9 +1,13 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE" />
     <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
@@ -15,6 +19,8 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:usesCleartextTraffic="false" android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <service android:name=".detector.ReturnForegroundService" android:exported="false"
+            android:foregroundServiceType="location" />
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -27,7 +33,17 @@
                 <data android:scheme="il.fca.companion" android:host="auth" android:path="/callback" />
             </intent-filter>
         </activity>
-        <service android:name=".detector.PresenceService" android:exported="true"
+        <receiver android:name=".detector.AclReceiver" android:exported="true"
+            android:enabled="@bool/acl_detector_enabled">
+            <!-- Protected system Bluetooth broadcasts, exempt from implicit broadcast limits. -->
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+                <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+            </intent-filter>
+        </receiver>
+        <!-- Enabled only by values-v36; API 35 never instantiates this class. -->
+        <service android:name=".detector.PresenceService" android:exported="true" tools:targetApi="36"
+            android:enabled="@bool/presence_detector_enabled"
             android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE">
             <intent-filter><action android:name="android.companion.CompanionDeviceService" /></intent-filter>
         </service>
