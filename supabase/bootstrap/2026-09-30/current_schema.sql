@@ -817,8 +817,6 @@ CREATE INDEX reservations_vehicle_time_idx ON public.reservations USING btree (v
 
 -- Constraint-backed index: CREATE UNIQUE INDEX vehicle_events_anchor_identity_key ON public.vehicle_events USING btree (event_id, user_id, vehicle_id, family_id);
 
--- Constraint-backed index: CREATE UNIQUE INDEX vehicle_events_anchor_identity_key ON public.vehicle_events USING btree (event_id, user_id, vehicle_id, family_id);
-
 CREATE INDEX vehicle_events_device_accepted_sequence_idx ON public.vehicle_events USING btree (device_id, device_sequence) WHERE (admission_outcome = 'accepted'::text);
 
 -- Constraint-backed index: CREATE UNIQUE INDEX vehicle_events_device_sequence_key ON public.vehicle_events USING btree (device_id, device_sequence);

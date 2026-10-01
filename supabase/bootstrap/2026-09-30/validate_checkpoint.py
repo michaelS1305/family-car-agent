@@ -50,6 +50,53 @@ def load_evidence(path):
     }
 
 
+def normalize_indexes(rows, constraints):
+    """Capture rows are index/constraint associations, not physical indexes.
+
+    This capture is public-only and omits schema. FK associations reference an
+    existing index; only p/u/x constraints own and implicitly create indexes.
+    """
+    grouped = {}
+    constraint_map = {(c['table'], c['name']): c for c in constraints}
+    owners = {(c['table'], c['name']): c for c in constraints if c['type'] in ('p', 'u', 'x')}
+    seen_owners = set()
+    for row in rows:
+        physical = {k: v for k, v in row.items() if k != 'constraint'}
+        physical.setdefault('schema', 'public')
+        require(physical['schema'] == 'public', 'Unexpected index schema')
+        key = (physical['schema'], physical['name'])
+        if key not in grouped:
+            grouped[key] = (physical, set())
+        previous, associations = grouped[key]
+        require(previous == physical, f'Conflicting physical index metadata: {key}')
+        associations.add(row['constraint'])
+    result = []
+    for key, (physical, associations) in sorted(grouped.items()):
+        owning = []
+        for name in associations - {None}:
+            c = constraint_map.get((physical['table'], name))
+            require(c is not None, f'Unknown index constraint association: {key}/{name}')
+            require(c['type'] in ('p', 'u', 'x', 'f'), 'Unexpected index constraint type')
+            if c['type'] in ('p', 'u', 'x'):
+                require(c['name'] == physical['name'], 'Unexpected owning index name')
+                owning.append(c)
+            else:
+                require(c['referenced_schema'] == key[0] and
+                        c['referenced_table'] == physical['table'], 'Invalid FK index reference')
+        require(len(owning) <= 1, 'Multiple owners for physical index')
+        owner = owning[0] if owning else None
+        require(not (owner and None in associations), 'Conflicting owner/null association')
+        require(physical['primary'] == bool(owner and owner['type'] == 'p') and
+                physical['exclusion'] == bool(owner and owner['type'] == 'x'),
+                'Index flags disagree with owning constraint')
+        if owner:
+            require(physical['unique'] == (owner['type'] in ('p', 'u')), 'Unexpected owning index uniqueness')
+            seen_owners.add((owner['table'], owner['name']))
+        result.append({**physical, 'constraint': owner['name'] if owner else None})
+    require(seen_owners == set(owners), 'Missing constraint-created physical index')
+    return result
+
+
 def render(e):
     """Return deterministic DDL from captured definitions, rejecting contract drift."""
     tables = [o for o in e["objects"] if o["schema"] == "public" and o["kind"] == "table"]
@@ -60,9 +107,11 @@ def render(e):
     require(len({(c["table"], c["column"]) for c in columns}) == 171, "Duplicate column evidence")
     require(all(not c["generated"] for c in columns), "Unexpected generated column")
     constraints = e["structure"]["constraints"]
-    indexes = e["structure"]["indexes"]
+    indexes = normalize_indexes(e["structure"]["indexes"], constraints)
     require(len(constraints) == 151 and all(c["validated"] for c in constraints), "Constraint contract drift")
-    require(len(indexes) == 88 and all(i["valid"] and i["ready"] for i in indexes), "Index contract drift")
+    require(len(indexes) == 87 and all(i["valid"] and i["ready"] for i in indexes), "Index contract drift")
+    require({kind: sum(c['type'] == kind for c in constraints) for kind in ('p', 'u', 'x')} ==
+            {'p': 23, 'u': 23, 'x': 2}, 'Constraint-created index inventory drift')
     require(sum(i["constraint"] is None for i in indexes) == 39, "Standalone index inventory drift")
     sequences = [dict(s) for s in e["sequences"]]
     require(len(sequences) == 12, "Sequence inventory drift")
@@ -264,7 +313,7 @@ def main():
         print("".join(difflib.unified_diff(expected.splitlines(True), actual.splitlines(True),
                                          fromfile="captured contract", tofile="checkpoint")))
         raise SystemExit("FAIL: checkpoint differs from evidence")
-    print("PASS: 23 tables / 171 columns / 151 constraints / 88 indexes / 12 sequences; "
+    print("PASS: 23 tables / 171 columns / 151 constraints / 87 physical indexes (48 constraint-created + 39 standalone) / 12 sequences; "
           "5 functions / 4 triggers / 1 policy; RLS, ACLs, 2 seeds. STATIC ONLY; no SQL executed.")
 
 

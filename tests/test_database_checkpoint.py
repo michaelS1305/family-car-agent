@@ -17,7 +17,12 @@ class DatabaseCheckpointTests(unittest.TestCase):
         self.assertEqual(tables, list(MODULE["TABLES"]))
         self.assertEqual(len(re.findall(r'^ALTER TABLE .* ADD CONSTRAINT ', SQL, re.M)), 151)
         self.assertEqual(len(re.findall(r'^CREATE (?:UNIQUE )?INDEX ', SQL, re.M)), 39)
-        self.assertEqual(SQL.count('-- Constraint-backed index:'), 49)
+        self.assertEqual(SQL.count('-- Constraint-backed index:'), 48)
+        explicit = re.findall(r'^CREATE (?:UNIQUE )?INDEX (\w+) ON', SQL, re.M)
+        implicit = re.findall(r'^ALTER TABLE public\."[^"]+" ADD CONSTRAINT "([^"]+)" (PRIMARY KEY|UNIQUE|EXCLUDE) ', SQL, re.M)
+        self.assertEqual({kind: sum(k == kind for _, k in implicit) for kind in ('PRIMARY KEY', 'UNIQUE', 'EXCLUDE')},
+                         {'PRIMARY KEY': 23, 'UNIQUE': 23, 'EXCLUDE': 2})
+        self.assertEqual(len(set(explicit + [name for name, _ in implicit])), 87)
         self.assertEqual(len(re.findall(r'^CREATE FUNCTION ', SQL, re.M)), 5)
         self.assertEqual(len(re.findall(r'^CREATE TRIGGER ', SQL, re.M)), 4)
         self.assertEqual(len(re.findall(r'^CREATE POLICY ', SQL, re.M)), 1)
@@ -93,6 +98,38 @@ class CaptureComparisonTests(unittest.TestCase):
 
     def test_complete_evidence_comparison(self):
         self.assertEqual(SQL, MODULE['render'](self.evidence))
+
+    def test_fk_reference_is_not_another_physical_index(self):
+        structure = self.evidence['structure']
+        original = copy.deepcopy(structure)
+        indexes = MODULE['normalize_indexes'](structure['indexes'], structure['constraints'])
+        self.assertEqual(len(structure['indexes']), 88)
+        self.assertEqual(len(indexes), 87)
+        anchor = [i for i in indexes if i['name'] == 'vehicle_events_anchor_identity_key']
+        self.assertEqual(len(anchor), 1)
+        self.assertEqual(anchor[0]['constraint'], 'vehicle_events_anchor_identity_key')
+        self.assertEqual(structure, original)
+        reversed_indexes = MODULE['normalize_indexes'](list(reversed(structure['indexes'])), structure['constraints'])
+        self.assertEqual(indexes, reversed_indexes)
+        explicit = re.findall(r'^CREATE (?:UNIQUE )?INDEX (\w+) ON', SQL, re.M)
+        implicit = re.findall(r'^ALTER TABLE public\."[^"]+" ADD CONSTRAINT "([^"]+)" (?:PRIMARY KEY|UNIQUE|EXCLUDE) ', SQL, re.M)
+        self.assertEqual({i['name'] for i in indexes}, set(explicit + implicit))
+
+    def test_conflicting_duplicate_index_metadata_rejected(self):
+        for field, value in [('table', 'users'), ('definition', 'conflict'),
+                             ('predicate', 'false'), ('unique', False), ('ready', False),
+                             ('valid', False), ('primary', True), ('exclusion', True)]:
+            e = copy.deepcopy(self.evidence)
+            row = next(i for i in e['structure']['indexes'] if i['constraint'] == 'vehicle_events_projection_fkey')
+            row[field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'Conflicting physical index metadata'):
+                MODULE['render'](e)
+
+    def test_missing_index_owner_cannot_be_replaced_by_fk_reference(self):
+        self.evidence['structure']['indexes'] = [i for i in self.evidence['structure']['indexes']
+                                                if i['constraint'] != 'vehicle_events_anchor_identity_key']
+        with self.assertRaisesRegex(ValueError, 'Missing constraint-created physical index'):
+            MODULE['render'](self.evidence)
 
     def test_missing_inventory_rejected(self):
         self.evidence['columns'].pop()

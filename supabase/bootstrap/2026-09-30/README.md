@@ -29,9 +29,15 @@ requires those local JSON files. The actual ACL filename is `08-privilege.json`.
 
 ## Represented contract
 
-23 public tables, 171 visible columns, 151 named constraints, 88 indexes (49
-constraint-backed, 39 standalone), 12 owned sequences, five functions, four
+23 public tables, 171 visible columns, 151 named constraints, 87 physical indexes (48
+constraint-created: 23 PRIMARY KEY, 23 UNIQUE, 2 EXCLUDE; plus 39 standalone), 12 owned sequences, five functions, four
 triggers and one FCA policy on provider-owned `realtime.messages`.
+
+The unchanged raw capture contains 88 index/constraint association rows, not 88
+physical indexes. `vehicle_events_anchor_identity_key` appears with both its
+owning UNIQUE constraint and the referencing `vehicle_events_projection_fkey`.
+Validation normalizes by schema/index name, rejects conflicting physical metadata,
+and distinguishes FK references from index-owning constraints.
 
 Tables are created before keys and CHECK/exclusion constraints; all FKs are added
 after referenced keys. This preserves the families/users cycle, self-referencing
@@ -58,6 +64,10 @@ The operator must explicitly opt in with session setting
 `fca.allow_empty_checkpoint = '2026-09-30'` before the transaction. This is an
 accident guard, not proof of environment identity. Verify the selected project
 independently; **never opt in on existing Production**.
+
+In Supabase SQL Editor choose **Run without RLS**, not **Run and enable RLS**.
+The checkpoint explicitly sets each table's intended RLS state; the latter UI
+option overrides that intent by enabling RLS on newly created tables.
 
 Supabase must already supply:
 
