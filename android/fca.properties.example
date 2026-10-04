@@ -1,3 +1,4 @@
+# RETIRED: generic fca.properties is no longer read. Use the dev/prod templates.
 # Public client configuration only. Never use a service-role key.
 FCA_BASE_URL=https://your-backend.example
 SUPABASE_URL=https://your-project.supabase.co

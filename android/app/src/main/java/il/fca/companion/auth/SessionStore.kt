@@ -51,12 +51,13 @@ class SessionStore(context: Context) {
             Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         Uri.parse(BuildConfig.SUPABASE_URL.trimEnd('/') + "/auth/v1/authorize").buildUpon()
             .appendQueryParameter("provider", "google")
-            .appendQueryParameter("redirect_to", "il.fca.companion://auth/callback?nonce=$nonce")
+            .appendQueryParameter("redirect_to", callbackUri(nonce).toString())
             .appendQueryParameter("code_challenge", challenge)
             .appendQueryParameter("code_challenge_method", "s256").build()
     }
     fun finishLogin(uri: Uri): String = synchronized(lock) {
-        require(uri.scheme == "il.fca.companion" && uri.host == "auth" && uri.path == "/callback")
+        val callback = Uri.parse(BuildConfig.OAUTH_CALLBACK_URI)
+        require(uri.scheme == callback.scheme && uri.host == callback.host && uri.path == callback.path)
         val pending = read("pkce") ?: error("Start sign-in again")
         require(uri.getQueryParameter("nonce") == pending.getString("nonce") &&
             System.currentTimeMillis() - pending.getLong("created") in 0..600000)
@@ -88,5 +89,9 @@ class SessionStore(context: Context) {
         session.getString("access_token")
     }
     fun signOut() = synchronized(lock) { check(prefs.edit().remove("session").remove("pkce").commit()) }
-    companion object { private val lock = Any() }
+    companion object {
+        private val lock = Any()
+        internal fun callbackUri(nonce: String): Uri = Uri.parse(BuildConfig.OAUTH_CALLBACK_URI).buildUpon()
+            .appendQueryParameter("nonce", nonce).build()
+    }
 }

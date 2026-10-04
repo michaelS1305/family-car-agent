@@ -65,7 +65,7 @@ class MainActivity : Activity() {
     }
     private fun draw() {
         content.removeAllViews()
-        label("FCA Companion — TAKE / RETURN")
+        label("${getString(R.string.app_name)} — TAKE / RETURN")
         status = TextView(this).also { content.addView(it) }
         val owner = app.store.activeOwner()
         if (owner == null) {

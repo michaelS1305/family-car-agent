@@ -1,0 +1,4 @@
+FCA_BASE_URL=https://family-car-agent-dev.onrender.com
+SUPABASE_URL=https://jouhqvbxhsvkluwkqmdg.supabase.co
+OAUTH_CALLBACK_URI=il.fca.companion.dev://auth/callback
+SUPABASE_PUBLISHABLE_KEY=replace-with-dev-public-key
