@@ -49,29 +49,69 @@ and Build Tools 36.0.0. JDK 17 builds the app; **JDK 21 is needed for Robolectri
 API 36 tests**. Install SDK/licenses explicitly through Android Studio/SDK Manager.
 Open this `android/` directory, not the Python/PWA root.
 
-Copy `fca.properties.example` to ignored `fca.properties` and set HTTPS backend,
-Supabase project URL, and **public publishable/anon key only**. These are compiled
-public client configuration, not secrets. Never put service-role credentials in
-this project. Missing configuration builds but sign-in fails closed.
+Use the `dev` / `prod` product flavors independently of debug / release:
+`devDebug`, `devRelease`, `prodDebug`, `prodRelease`. Namespace, SDK levels,
+signing configuration and all sensor/storage behavior remain unchanged.
+
+Copy `fca.dev.properties.example` to ignored `fca.dev.properties`, and the
+corresponding Prod template to ignored `fca.prod.properties`. Supply each project's
+**public publishable/anon key only**. Never use a service-role key. Generic
+`fca.properties` is no longer read; there is no fallback between environments.
+Only the selected variant needs its configuration. Missing or mixed endpoint,
+project or callback values fail its build. Endpoints and callback are flavor-owned;
+the local values must match exactly. Legacy anon JWT metadata must name the right
+project and anon role (this is not signature verification). Opaque publishable keys
+have no locally verifiable project identity: the operator must select the right
+project's key and verify login. Keys are compiled public client configuration;
+never share generated BuildConfig output or put private credentials in the APK.
+
+| Flavor | Application ID | Label | Callback |
+|---|---|---|---|
+| dev | `il.fca.companion.dev` | FCA Companion Dev | `il.fca.companion.dev://auth/callback` |
+| prod | `il.fca.companion` | FCA Companion | `il.fca.companion://auth/callback` |
+
+Dev targets `family-car-agent-dev.onrender.com` and Supabase project
+`jouhqvbxhsvkluwkqmdg`; Prod targets `family-car-agent.onrender.com` and project
+`xrgijytfigcuxmdktvmd`. No runtime environment switching is supported.
 
 With JDK/SDK configured, from this directory (the pinned wrapper is included):
 
 ```
-.\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+.\gradlew.bat :app:testEnvironmentConfiguration
+.\gradlew.bat :app:testDevDebugUnitTest :app:lintDevDebug :app:assembleDevDebug
+.\gradlew.bat :app:testProdDebugUnitTest :app:lintProdDebug :app:assembleProdDebug
 ```
 
-APK: `app/build/outputs/apk/debug/app-debug.apk`. Install using Android Studio or
-`adb install -r app/build/outputs/apk/debug/app-debug.apk` on the Samsung. A physical
+APKs: `app/build/outputs/apk/dev/debug/app-dev-debug.apk` and
+`app/build/outputs/apk/prod/debug/app-prod-debug.apk`. A physical
 test is required; successful compilation cannot prove OEM background delivery.
+
+Dev installs beside Prod with separate private data, Keystore credentials,
+WorkManager state and Companion associations. Do not copy databases, credentials,
+registration IDs or outbox events between them. Preserve Prod's existing signing
+certificate and package ID for in-place updates; verify version-code compatibility
+before installation. Do not uninstall/clear the existing installation. No release
+signing credentials are introduced by flavors.
+
+Initially test with only one environment's detector intentionally active. Separate
+packages do not exclude simultaneous detection of the same physical car. Switch
+only with vehicle free and queues/candidates settled; existing sign-out disables
+detection but invalidates active acquisition state. Do not sign out mid-trip.
+Complete FCA onboarding through Web Dev before native login, then register and
+bind a fresh Dev installation. Test callback routing, TAKE/RETURN, offline outbox
+and deferred recovery while checking only the intended environment changes.
 
 ## Google/Supabase setup
 
 Use the existing Supabase project's Google provider. This client uses the system
 browser and Supabase's **PKCE OAuth flow**, not a separate Android Google credential
-or shortcut token. Add `il.fca.companion://auth/**` to the Supabase Auth redirect
+or shortcut token. Keep `il.fca.companion://auth/**` in Production and add
+`il.fca.companion.dev://auth/**` only to the Dev Supabase Auth redirect
 allowlist to permit the callback and per-login nonce query. The client accepts
 only `/callback` with its own pending nonce and PKCE verifier. Keep the Google provider's existing Supabase callback
-configuration. Browser OAuth does not require an Android SHA fingerprint/client
+configuration; Dev Google OAuth must allow the Dev Supabase project's
+`https://jouhqvbxhsvkluwkqmdg.supabase.co/auth/v1/callback`. No external settings
+are changed by building these variants. Browser OAuth does not require an Android SHA fingerprint/client
 ID. The custom scheme is not a claimed HTTPS app link: interception can cause
 denial of login, but cannot redeem the code without the private verifier.
 

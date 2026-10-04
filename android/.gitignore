@@ -3,6 +3,8 @@
 **/build/
 local.properties
 fca.properties
+fca.dev.properties
+fca.prod.properties
 .idea/
 *.iml
 
