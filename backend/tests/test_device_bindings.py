@@ -94,7 +94,7 @@ class BindingPostgresTests(unittest.TestCase):
               EXECUTE format('CREATE ROLE %I NOLOGIN', r);
             END IF;
           END LOOP; END $$;""")
-        self.source = (Path(__file__).resolve().parents[1] / 'supabase/manual_migrations/2026092701_registered_device_vehicle_bindings.sql').read_text()
+        self.source = (Path(__file__).resolve().parents[2] / 'supabase/manual_migrations/2026092701_registered_device_vehicle_bindings.sql').read_text()
         self.local_sql = self.source.replace('public.', self.schema + '.').replace("current_user <> 'postgres'", "current_user <> 'gemini_test'").replace('BEGIN;', '').replace('COMMIT;', '')
         self.query(self.local_sql)
 

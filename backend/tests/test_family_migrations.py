@@ -2,7 +2,7 @@ from pathlib import Path
 import unittest
 
 
-MIGRATIONS = Path(__file__).resolve().parents[1] / "supabase" / "manual_migrations"
+MIGRATIONS = Path(__file__).resolve().parents[2] / "supabase" / "manual_migrations"
 
 
 class FamilyMigrationContractTests(unittest.TestCase):

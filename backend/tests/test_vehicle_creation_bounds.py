@@ -237,7 +237,7 @@ class CreationMigrationPostgresTests(unittest.TestCase):
     person = deletion_fixtures.AccountDeletionPostgresTests.person
 
     def apply(self):
-        source = (Path(__file__).resolve().parents[1] / 'supabase/manual_migrations/2026092501_vehicle_creation_bounds.sql').read_text()
+        source = (Path(__file__).resolve().parents[2] / 'supabase/manual_migrations/2026092501_vehicle_creation_bounds.sql').read_text()
         self.query(source.replace('public.', self.schema + '.').replace("current_user <> 'postgres'", "current_user <> 'gemini_test'").replace('BEGIN;', '').replace('COMMIT;', ''))
 
     def test_backfill_preserves_refs_revoked_rows_and_rerun_fails(self):

@@ -16,7 +16,8 @@ from tests.test_database_atomic_creation import database
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION = ROOT / "supabase" / "manual_migrations" / "2026091501_carplay_transition_rate_limit.sql"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+MIGRATION = REPOSITORY_ROOT / "supabase" / "manual_migrations" / "2026091501_carplay_transition_rate_limit.sql"
 
 
 def load_car_service(database_stub, push_stub):

@@ -14,7 +14,7 @@ is still required in a separately authorized isolated Dev project.**
 - `validate_checkpoint.py`: standard-library-only, read-only static comparison
   against the local dated JSON capture. It never connects to a database or writes
   files. It deliberately rejects changes to the frozen capture contract.
-- Focused tests: repository-root `tests/test_database_checkpoint.py`.
+- Focused tests: repository-root `backend/tests/test_database_checkpoint.py`.
 
 The older `../../schema_baseline/` and `../../manual_migrations/` remain historical
 evidence. All effects through `2026092701` are incorporated here. **Do not run the
@@ -114,7 +114,7 @@ Policy timestamps are generated locally from their captured defaults.
 From repository root:
 
 ```text
-python -B -m unittest discover -s tests -p test_database_checkpoint.py
+python -B -m unittest discover -s backend/tests -p test_database_checkpoint.py
 python -B supabase/bootstrap/2026-09-30/validate_checkpoint.py
 git diff --check
 ```
