@@ -1,13 +1,33 @@
 """Android authorization contracts; PostgreSQL fixtures are LOCAL-only."""
 import os
+import sys
+import types
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
-import device_api as api
-import vehicle_bindings as bindings
+if os.environ.get('GEMINI_TEST_DATABASE_URL'):
+    # Integration tests must retain the real production distance calculation.
+    import device_api as api
+    import vehicle_bindings as bindings
+else:
+    # API tests mock admission, so distance evaluation is not part of their scope.
+    # Avoid car_service's import-time database initialization during collection.
+    _previous_car_service = sys.modules.get('car_service')
+    _car_service_stub = types.ModuleType('car_service')
+    _car_service_stub.calculate_distance_meters = Mock(
+        side_effect=AssertionError('DB-free API tests must mock admission'))
+    sys.modules['car_service'] = _car_service_stub
+    try:
+        import device_api as api
+        import vehicle_bindings as bindings
+    finally:
+        if _previous_car_service is None:
+            sys.modules.pop('car_service', None)
+        else:
+            sys.modules['car_service'] = _previous_car_service
 import vehicle_lifecycle as lifecycle
 from vehicle_identity import VehicleIdentityError
 from tests import test_vehicle_api as api_fixtures
