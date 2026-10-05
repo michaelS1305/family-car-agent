@@ -7,7 +7,7 @@ import unittest
 class AccountDeletionMigrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.sql = (Path(__file__).resolve().parents[1] /
+        cls.sql = (Path(__file__).resolve().parents[2] /
                    "supabase/manual_migrations/2026091603_account_deletion_jobs.sql").read_text(encoding="utf-8")
         cls.statements = "\n".join(line for line in cls.sql.splitlines()
                                    if not line.lstrip().startswith("--"))

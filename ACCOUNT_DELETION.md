@@ -75,7 +75,8 @@ silently broaden this cleanup to unrelated Supabase data.
 
 ## Local verification
 
-Use the existing virtual environment and `python -m unittest discover -s tests`.
+Use the existing virtual environment and run `python -m unittest discover -s tests`
+from `backend/`.
 Set `GEMINI_TEST_DATABASE_URL` only to the disposable localhost `test_gemini`
 database for real PostgreSQL tests. Tests create/drop random isolated schemas,
 never apply production migrations, and stub Auth Admin HTTP. No live keys needed.

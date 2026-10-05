@@ -50,7 +50,7 @@ class VehicleAdmissionPostgresTests(unittest.TestCase):
             conn.execute("CREATE TABLE users(id integer PRIMARY KEY,family_id integer REFERENCES families,auth_user_id uuid UNIQUE REFERENCES auth_users)")
             # Exact foundation constraints, functions, triggers and indexes, in
             # an isolated schema. Not execution of the production migration.
-            source = (Path(__file__).resolve().parents[1] / "supabase/manual_migrations/2026092001_vehicle_identity_foundation.sql").read_text()
+            source = (Path(__file__).resolve().parents[2] / "supabase/manual_migrations/2026092001_vehicle_identity_foundation.sql").read_text()
             ddl = source.split("ALTER TABLE public.users ADD CONSTRAINT", 1)[1].split("-- Nullable-first UUID backfill", 1)[0]
             conn.execute(("ALTER TABLE public.users ADD CONSTRAINT" + ddl).replace("public.", self.schema + "."))
             conn.execute("INSERT INTO families(id) VALUES(10),(20)")

@@ -13,7 +13,7 @@ from vehicle_reconciliation import AcceptedEvent, reconcile
 from tests import test_vehicle_admission as fixtures
 
 
-MIGRATION = Path(__file__).resolve().parents[1] / 'supabase/manual_migrations/2026092301_vehicle_events_accepted_device_index.sql'
+MIGRATION = Path(__file__).resolve().parents[2] / 'supabase/manual_migrations/2026092301_vehicle_events_accepted_device_index.sql'
 
 
 class BudgetTests(unittest.TestCase):

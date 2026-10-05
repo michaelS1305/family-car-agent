@@ -179,7 +179,7 @@ class CapacityUnitTests(unittest.TestCase):
         self.assertFalse(database.get_ai_reservations(4)['truncated'])
 
     def test_migration_contract(self):
-        sql = (Path(__file__).resolve().parents[1] / 'supabase/manual_migrations/2026091401_gemini_capacity.sql').read_text()
+        sql = (Path(__file__).resolve().parents[2] / 'supabase/manual_migrations/2026091401_gemini_capacity.sql').read_text()
         for text in ['BEGIN;', 'COMMIT;', 'ON DELETE RESTRICT', 'BETWEEN 1 AND 3',
                      'FROM PUBLIC, anon, authenticated', "('gemini-default', 50)",
                      '(capacity_pool, expires_at)', 'isfinite(expires_at)']:

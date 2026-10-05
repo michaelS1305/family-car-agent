@@ -199,7 +199,7 @@ class GeocodingCapacityUnitTests(unittest.TestCase):
         self.assertEqual(rejection.retry_after_seconds, 3)
 
     def test_migration_has_expected_policy_and_backend_only_acl(self):
-        migration = Path(__file__).resolve().parents[1] / "supabase" / "manual_migrations" / "2026091402_geocoding_capacity.sql"
+        migration = Path(__file__).resolve().parents[2] / "supabase" / "manual_migrations" / "2026091402_geocoding_capacity.sql"
         sql = migration.read_text(encoding="utf-8")
         for fragment in (
             "CREATE TABLE public.geocoding_capacity_policies",

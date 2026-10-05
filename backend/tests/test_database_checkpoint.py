@@ -5,7 +5,7 @@ import re
 import runpy
 import unittest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 CHECKPOINT = ROOT / "supabase/bootstrap/2026-09-30"
 MODULE = runpy.run_path(str(CHECKPOINT / "validate_checkpoint.py"))
 SQL = (CHECKPOINT / "current_schema.sql").read_text(encoding="utf-8")

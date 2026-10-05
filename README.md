@@ -48,6 +48,8 @@ car state.
 
 ## Backend modules
 
+These modules are located in `backend/`.
+
 - `main.py` — FastAPI routes and configuration
 - `auth_service.py` — Supabase JWT verification and `CurrentUser`
 - `database.py` — PostgreSQL schema bootstrap and scoped queries
@@ -77,10 +79,10 @@ Create and activate a virtual environment, then install the backend:
 
 ```bash
 python -m venv .venv
-python -m pip install -r requirements.txt
+python -m pip install -r backend/requirements.txt
 ```
 
-Create a local `.env` file based on `.env.example`:
+Create a local repository-root `.env` file based on `backend/.env.example`:
 
 ```env
 DATABASE_URL=your_postgresql_connection_string
@@ -94,21 +96,22 @@ CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 Do not commit `.env` files. Keep `GOOGLE_MAPS_API_KEY` and `GEMINI_API_KEY`
 backend-only.
 
-Run the API:
+Run the API from the repository root:
 
 ```bash
+cd backend
 uvicorn main:app --reload
 ```
 
-Install and run the frontend:
+Install and run the frontend from the repository root:
 
 ```bash
-cd frontend
+cd web
 npm install
 npm run dev
 ```
 
-The frontend environment is documented in `frontend/.env.example`.
+The frontend environment is documented in `web/.env.example`.
 
 ## Production configuration
 
@@ -142,16 +145,17 @@ UI yet.
 
 ## Verification
 
-Backend tests:
+Backend tests, starting from the repository root:
 
 ```bash
+cd backend
 python -m unittest discover -s tests -v
 ```
 
-Frontend verification:
+Frontend verification, starting from the repository root:
 
 ```bash
-cd frontend
+cd web
 npm run test:frontend
 npm run lint
 npm run build

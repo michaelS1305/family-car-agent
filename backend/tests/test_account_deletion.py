@@ -118,7 +118,7 @@ class AccountDeletionPostgresTests(unittest.TestCase):
           CREATE TABLE carplay_transition_admissions(user_id int REFERENCES users ON DELETE CASCADE,
             family_id int REFERENCES families ON DELETE CASCADE);
         ''')
-        source = (Path(__file__).resolve().parents[1] / 'supabase/manual_migrations/2026092001_vehicle_identity_foundation.sql').read_text()
+        source = (Path(__file__).resolve().parents[2] / 'supabase/manual_migrations/2026092001_vehicle_identity_foundation.sql').read_text()
         ddl = source.split('ALTER TABLE public.users ADD CONSTRAINT', 1)[1].split('-- Nullable-first UUID backfill', 1)[0]
         self.query(('ALTER TABLE public.users ADD CONSTRAINT' + ddl).replace('public.', self.schema + '.'))
         self.creator = self.person()

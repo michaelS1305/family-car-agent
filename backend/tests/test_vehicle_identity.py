@@ -102,7 +102,7 @@ class VehicleIdentityPostgresTests(unittest.TestCase):
         # Nothing is committed; no public schema or production migration executes.
         self.conn.execute("CREATE TEMP TABLE families(id integer PRIMARY KEY)")
         self.conn.execute("CREATE TEMP TABLE users(id integer PRIMARY KEY, family_id integer)")
-        sql = (Path(__file__).resolve().parents[1] / "supabase/manual_migrations/2026092001_vehicle_identity_foundation.sql").read_text()
+        sql = (Path(__file__).resolve().parents[2] / "supabase/manual_migrations/2026092001_vehicle_identity_foundation.sql").read_text()
         for table in ("vehicles", "registered_devices"):
             definition = sql.split(f"CREATE TABLE public.{table} (", 1)[1].split("\n);", 1)[0]
             self.conn.execute(f"CREATE TEMP TABLE {table} (" + definition.replace("public.", "pg_temp.") + "\n)")

@@ -45,7 +45,7 @@ class LifecyclePostgresTests(unittest.TestCase):
 
     def setUp(self):
         fixtures.AccountDeletionPostgresTests.setUp(self)
-        source = (Path(__file__).resolve().parents[1] / 'supabase/manual_migrations/2026092501_vehicle_creation_bounds.sql').read_text()
+        source = (Path(__file__).resolve().parents[2] / 'supabase/manual_migrations/2026092501_vehicle_creation_bounds.sql').read_text()
         self.query(source.replace('public.', self.schema + '.').replace("current_user <> 'postgres'", "current_user <> 'gemini_test'").replace('BEGIN;', '').replace('COMMIT;', ''))
         self.member = self.person(self.family)
         self.foreign = self.person()

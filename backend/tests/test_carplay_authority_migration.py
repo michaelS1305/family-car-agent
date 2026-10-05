@@ -5,7 +5,7 @@ import unittest
 
 class AuthorityMigrationTests(unittest.TestCase):
     def test_minimal_binding_is_backend_only_and_family_constrained(self):
-        sql = (Path(__file__).resolve().parents[1] /
+        sql = (Path(__file__).resolve().parents[2] /
                'supabase/manual_migrations/2026092502_carplay_vehicle_authority.sql').read_text()
         for fragment in (
             'BEGIN;', 'COMMIT;', 'user_id integer PRIMARY KEY', 'vehicle_id integer NOT NULL',
