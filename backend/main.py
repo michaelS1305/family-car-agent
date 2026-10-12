@@ -427,10 +427,17 @@ def bind_carplay_vehicle(request: CarPlayVehicleBindingRequest, current_user: Cu
 def car_history(
     response: Response,
     current_user: CurrentUser = Depends(get_current_user),
+    limit: int = 50,
+    cursor: UUID | None = None,
+    vehicle_ref: UUID | None = None,
+    member_ref: UUID | None = None,
+    from_datetime: str | None = None,
+    to_datetime: str | None = None,
 ):
     response.headers["Cache-Control"] = "no-store"
     try:
-        return get_car_history(current_user)
+        return get_car_history(current_user, limit=limit, cursor=cursor, vehicle_ref=vehicle_ref,
+                               member_ref=member_ref, from_datetime=from_datetime, to_datetime=to_datetime)
     except CarHistoryError as error:
         raise HTTPException(
             status_code=error.status_code,

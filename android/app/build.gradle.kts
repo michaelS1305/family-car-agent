@@ -1,6 +1,9 @@
 import java.util.Properties
 import java.util.Base64
-plugins { id("com.android.application") }
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
 data class FcaEnvironment(val id: String, val label: String, val backend: String, val project: String) {
     val supabase get() = "https://$project.supabase.co"
     val callback get() = "$id://auth/callback"
@@ -62,7 +65,7 @@ android {
             }
         }
     }
-    buildFeatures { buildConfig = true; resValues = true }
+    buildFeatures { buildConfig = true; resValues = true; compose = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -122,6 +125,13 @@ tasks.register("testEnvironmentConfiguration") {
     }
 }
 dependencies {
+    // Realtime only; REST and credential ownership stay with FCA's existing clients.
+    implementation("io.github.jan-tennert.supabase:realtime-kt:3.2.2")
+    implementation("io.ktor:ktor-client-okhttp:3.2.2")
+    implementation(platform("androidx.compose:compose-bom:2026.02.01"))
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.activity:activity-compose:1.12.4")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0")
     implementation("androidx.work:work-runtime-ktx:2.11.2")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16.1")

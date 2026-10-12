@@ -31,7 +31,28 @@ object Http {
     }
     // No redirects, logging, retries or exception messages containing URL/body.
     fun request(base: String, path: String, method: String = "GET", body: JSONObject? = null,
-                bearer: String? = null, apiKey: String? = null): String {
+                bearer: String? = null, apiKey: String? = null): String =
+        execute(base, path, method, body, bearer, apiKey, error = ::failure)
+
+    internal fun chatRequest(base: String, path: String, method: String, body: JSONObject?, bearer: String): String {
+        require((path == "/api/chat" && method == "POST") ||
+            (path == "/api/chat/history?limit=30" && method == "GET"))
+        return execute(base, path, method, body, bearer, null,
+            readTimeoutMillis = if (method == "POST") 90000 else 15000, error = ChatFailure::read)
+    }
+
+    internal fun onboardingRequest(base: String, path: String, method: String, body: JSONObject?,
+                                   bearer: String): String {
+        require(OnboardingFailure.supports(path, method))
+        return execute(base, path, method, body, bearer, null) { connection, status ->
+            OnboardingFailure.read(connection, status, path)
+        }
+    }
+
+    private fun execute(base: String, path: String, method: String, body: JSONObject?,
+                        bearer: String?, apiKey: String?,
+                        readTimeoutMillis: Int = 15000,
+                        error: (HttpURLConnection, Int) -> IOException): String {
         val origin = URI(base)
         require(origin.scheme == "https" && origin.host != null && origin.userInfo == null &&
             origin.rawQuery == null && origin.rawFragment == null)
@@ -40,7 +61,7 @@ object Http {
             connection.instanceFollowRedirects = false
             connection.requestMethod = method
             connection.connectTimeout = 15000
-            connection.readTimeout = 15000
+            connection.readTimeout = readTimeoutMillis
             connection.setRequestProperty("Accept", "application/json")
             bearer?.let { connection.setRequestProperty("Authorization", "Bearer $it") }
             apiKey?.let { connection.setRequestProperty("apikey", it) }
@@ -50,7 +71,7 @@ object Http {
                 connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             }
             val status = connection.responseCode
-            if (status !in 200..299) throw failure(connection, status)
+            if (status !in 200..299) throw error(connection, status)
             return connection.inputStream.bufferedReader().use { it.readText() }
         } finally { connection.disconnect() }
     }

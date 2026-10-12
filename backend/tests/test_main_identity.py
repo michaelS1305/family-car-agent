@@ -777,9 +777,11 @@ class CarHistoryRouteTests(unittest.TestCase):
         result = main.car_history(response, current_user)
         parameters = inspect.signature(main.car_history).parameters
 
-        self.assertEqual(tuple(parameters), ("response", "current_user"))
+        self.assertEqual(tuple(parameters), ("response", "current_user", "limit", "cursor",
+                                            "vehicle_ref", "member_ref", "from_datetime", "to_datetime"))
         self.assertIs(parameters["current_user"].default.dependency, auth_stub.get_current_user)
-        history_stub.get_car_history.assert_called_once_with(current_user)
+        history_stub.get_car_history.assert_called_once_with(current_user, limit=50, cursor=None,
+            vehicle_ref=None, member_ref=None, from_datetime=None, to_datetime=None)
         self.assertEqual(result, {"active_usage": None, "recent_usage": []})
         self.assertEqual(response.headers["Cache-Control"], "no-store")
 

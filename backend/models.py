@@ -98,6 +98,8 @@ class PushSubscriptionRemoveRequest(BaseModel):
 
 
 class ActiveCarUsageResponse(BaseModel):
+    session_ref: UUID
+    member_ref: UUID
     name: str
     started_at: str
     vehicle_name: str
@@ -111,6 +113,8 @@ class CompletedCarUsageResponse(ActiveCarUsageResponse):
 
 
 class CarHistoryResponse(BaseModel):
+    has_more: bool
+    next_cursor: UUID | None
     active_usage: ActiveCarUsageResponse | None
     active_usages: list[ActiveCarUsageResponse]
     recent_usage: list[CompletedCarUsageResponse]

@@ -1,5 +1,7 @@
 import os
 import unittest
+from contextlib import nullcontext
+from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, patch
 from uuid import uuid4
 from fastapi import FastAPI
@@ -58,6 +60,52 @@ class VehicleApiTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/vehicles/' + str(uuid4())).status_code, 401)
         self.assertEqual(self.client.post('/api/vehicles', json={}).status_code, 401)
 
+    def test_current_status_preserves_independent_session_times_and_public_fields(self):
+        vehicles = [VehicleView(vehicle_ref=uuid4(), display_name=name, retired_at=None)
+                    for name in ('Available', 'First', 'Second')]
+        times = [datetime(2026, 10, 12, 10, tzinfo=timezone.utc),
+                 datetime(2026, 10, 12, 14, tzinfo=timezone(timedelta(hours=3)))]
+        conn = Mock()
+        conn.execute.return_value.fetchall.return_value = [
+            (vehicles[1].vehicle_ref, 'One', times[0]),
+            (vehicles[2].vehicle_ref, 'Two', times[1])]
+        with patch.object(api, '_bounded_connection', return_value=nullcontext(conn)), \
+                patch.object(api.lifecycle, '_scope', return_value=nullcontext()) as scope, \
+                patch.object(api.lifecycle, 'list_vehicles', return_value=vehicles) as listing:
+            rows = api._read(conn, self.user)
+        scope.assert_called_once_with(conn, self.user)
+        listing.assert_called_once_with(conn, self.user)
+        sql, params = conn.execute.call_args.args
+        self.assertIn('v.family_id=%s', sql)
+        self.assertIn('s.ended_at IS NULL', sql)
+        self.assertIn('s.started_at', sql)
+        self.assertEqual(params, (self.user.family_id, [v.vehicle_ref for v in vehicles]))
+        self.assertFalse(rows[0].in_use)
+        self.assertIsNone(rows[0].current_driver)
+        self.assertIsNone(rows[0].started_at)
+        for row, vehicle, name, started in zip(rows[1:], vehicles[1:], ('One', 'Two'), times):
+            self.assertTrue(row.in_use)
+            self.assertEqual(row.current_driver, name)
+            self.assertEqual(row.started_at, started)
+            self.assertEqual(row.vehicle_ref, vehicle.vehicle_ref)
+            self.assertEqual(row.display_name, vehicle.display_name)
+        with patch.object(api, '_read', return_value=rows):
+            response = self.client.get('/api/vehicles')
+        with patch.object(api, '_read', return_value=[rows[1]]):
+            detail = self.client.get('/api/vehicles/' + str(vehicles[1].vehicle_ref))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json(), response.json()[1])
+        for item, row in zip(response.json(), rows):
+            self.assertEqual(set(item), {'vehicle_ref', 'display_name', 'retired_at',
+                                         'current_driver', 'in_use', 'started_at'})
+            if row.started_at is not None:
+                parsed = datetime.fromisoformat(item['started_at'].replace('Z', '+00:00'))
+                self.assertEqual(parsed, row.started_at)
+                self.assertIsNotNone(parsed.utcoffset())
+            else:
+                self.assertIsNone(item['started_at'])
+
 
 @unittest.skipUnless(os.getenv('GEMINI_TEST_DATABASE_URL'), 'Local PostgreSQL not configured')
 class VehicleApiPostgresTests(unittest.TestCase):
@@ -94,6 +142,12 @@ class VehicleApiPostgresTests(unittest.TestCase):
         self.call(vehicle_admission.admit_native_event, self.event(vehicle, device))
         with self.connection() as conn:
             row = api._read(conn, self.current, vehicle.vehicle_ref)[0]
+            stored_start = conn.execute(
+                'SELECT s.started_at FROM vehicle_driver_sessions s '
+                'JOIN vehicles v ON v.id=s.vehicle_id '
+                'WHERE v.vehicle_ref=%s AND s.ended_at IS NULL',
+                (vehicle.vehicle_ref,)).fetchone()[0]
         self.assertTrue(row.in_use)
         self.assertIsNotNone(row.current_driver)
-        self.assertEqual(set(row.model_dump()), {'vehicle_ref', 'display_name', 'retired_at', 'current_driver', 'in_use'})
+        self.assertEqual(row.started_at, stored_start)
+        self.assertEqual(set(row.model_dump()), {'vehicle_ref', 'display_name', 'retired_at', 'current_driver', 'in_use', 'started_at'})

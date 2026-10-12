@@ -38,26 +38,7 @@ class MainActivity : Activity() {
         }
         setContentView(scroll)
         draw()
-        callback(intent)
-    }
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        callback(intent)
-    }
-    private fun callback(intent: Intent) {
-        val uri = intent.data ?: return
-        // Prevent duplicate code exchange on Activity recreation.
-        intent.data = null
-        task {
-            val owner = app.auth.finishLogin(uri)
-            val me = JSONObject(app.api.call(owner, "/api/me"))
-            check(!me.isNull("family_id"))
-            app.store.activate(owner)
-            displayName = me.getString("name")
-            load(owner)
-            DeliveryWorker.enqueue(this)
-        }
+        app.store.activeOwner()?.let { owner -> task { load(owner) } }
     }
     private fun label(text: String) { content.addView(TextView(this).apply { this.text = text; textSize = 16f }) }
     private fun button(text: String, action: () -> Unit) {
@@ -69,14 +50,8 @@ class MainActivity : Activity() {
         status = TextView(this).also { content.addView(it) }
         val owner = app.store.activeOwner()
         if (owner == null) {
-            button("כניסה עם Google") {
-                runCatching {
-                    check(BuildConfig.SUPABASE_URL.startsWith("https://") && BuildConfig.FCA_BASE_URL.startsWith("https://"))
-                    app.store.activate(null)
-                    startActivity(Intent(Intent.ACTION_VIEW, app.auth.beginLogin()))
-                }.onFailure { status.text = "יש לבדוק את הגדרות הבנייה ולהתחיל כניסה מחדש" }
-            }
-            label("יש להיכנס לחשבון FCA קיים. אירועים מחשבון קודם נשמרים ואינם מועברים לחשבון אחר.")
+            startActivity(Intent(this, il.fca.companion.ui.EntryActivity::class.java))
+            finish()
             return
         }
         label("משתמש FCA: $displayName")
@@ -138,28 +113,7 @@ class MainActivity : Activity() {
         displayName = me.getString("name")
         val data = JSONArray(app.api.call(owner, "/api/vehicles"))
         vehicles = (0 until data.length()).map { data.getJSONObject(it).let { v -> v.getString("vehicle_ref") to v.getString("display_name") } }
-        app.store.installation(owner).device?.let { device ->
-            // Fetch actual server device/binding state; never infer authorization from local mapping.
-            val devices = JSONArray(app.api.call(owner, "/api/devices"))
-            val registered = (0 until devices.length()).map { devices.getJSONObject(it) }
-                .find { it.getString("device_ref") == device }
-            check(registered != null && registered.isNull("revoked_at"))
-            val bindings = JSONArray(app.api.call(owner, "/api/devices/$device/vehicle-bindings"))
-            val usable = (0 until bindings.length()).map { bindings.getJSONObject(it) }
-                .filter { it.getBoolean("usable") }.map { it.getString("vehicle_ref") }.toSet()
-            app.store.associations(owner).filter { it.vehicle !in usable }.forEach {
-                app.store.remove(owner, it.vehicle)
-                DetectorPlatform.stop(companion, it.companionId)
-            }
-            // RETURN setup failure must not prevent existing TAKE/binding refresh.
-            runCatching {
-                val home = JSONObject(app.api.call(owner, "/api/devices/$device/return-home"))
-                app.store.saveHome(owner, home.getDouble("latitude"), home.getDouble("longitude"))
-            }.onFailure {
-                app.store.clearHome(owner)
-                app.store.diagnostic("return_home_refresh_failed")
-            }
-        }
+        CompanionAccountRefresh.refresh(app, owner)
     }
     private fun chooseVehicle(owner: String) {
         if (app.store.installation(owner).device == null || vehicles.isEmpty()) {

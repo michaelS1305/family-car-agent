@@ -6,6 +6,11 @@ import unittest
 from unittest.mock import Mock, patch
 
 from identity import CurrentUser
+from uuid import UUID
+
+
+def identified(rows):
+    return [row + (str(UUID(int=row[4])), str(UUID(int=17))) for row in rows]
 
 
 database_stub = types.ModuleType("database")
@@ -38,19 +43,21 @@ class HistoryServiceTests(unittest.TestCase):
         database_stub.get_car_usage_history.assert_called_once_with(
             42,
             completed_limit=50,
+            cursor=None, vehicle_ref=None, member_ref=None, from_datetime=None, to_datetime=None,
         )
 
     def test_active_usage_is_separate_and_has_no_fabricated_end(self):
-        database_stub.get_car_usage_history.return_value = [
+        database_stub.get_car_usage_history.return_value = identified([
             ("מיכאל", "2026-09-06T08:00:00+00:00", None, True, 9, 'Car A', '11111111-1111-4111-8111-111111111111'),
             ("נועה", "2026-09-05T10:00:00+00:00", "2026-09-05T11:00:00+00:00", False, 7, 'Car B', '22222222-2222-4222-8222-222222222222'),
-        ]
+        ])
         result = service.get_car_history(self.user())
         self.assertEqual(result["active_usage"], {
             "name": "מיכאל",
             "vehicle_name": "Car A",
             "vehicle_ref": "11111111-1111-4111-8111-111111111111",
             "started_at": "2026-09-06T08:00:00+00:00",
+            "session_ref": str(UUID(int=9)), "member_ref": str(UUID(int=17)),
         })
         self.assertNotIn("ended_at", result["active_usage"])
         self.assertEqual(result["recent_usage"][0]["name"], "נועה")
@@ -61,10 +68,10 @@ class HistoryServiceTests(unittest.TestCase):
         )
 
     def test_completed_usage_preserves_canonical_reverse_order_and_safe_fields(self):
-        database_stub.get_car_usage_history.return_value = [
+        database_stub.get_car_usage_history.return_value = identified([
             ("נועה", "2026-09-05T10:00:00+00:00", "2026-09-05T11:00:00+00:00", False, 7, 'Car B', '22222222-2222-4222-8222-222222222222'),
             ("מיכאל", "2026-09-04T08:00:00+00:00", "2026-09-04T09:00:00+00:00", False, 3, 'Car A', '11111111-1111-4111-8111-111111111111'),
-        ]
+        ])
         result = service.get_car_history(self.user())
         self.assertEqual([usage["name"] for usage in result["recent_usage"]], ["נועה", "מיכאל"])
         for prohibited in ("event_id", "user_id", "family_id", "auth_user_id", "shortcut_token"):
@@ -80,11 +87,11 @@ class HistoryServiceTests(unittest.TestCase):
         from models import CarHistoryResponse
         ref = '11111111-1111-4111-8111-111111111111'
         ref2 = '22222222-2222-4222-8222-222222222222'
-        database_stub.get_car_usage_history.return_value = [
+        database_stub.get_car_usage_history.return_value = identified([
             ('A', '2026-09-20T10:00:00+00:00', None, True, 1, 'Car A', ref),
             ('B', '2026-09-20T11:00:00+00:00', None, True, 2, 'Car B', ref2),
             ('A', '2026-09-19T10:00:00+00:00', '2026-09-19T11:00:00+00:00', False, 3, 'Car A', ref),
-        ]
+        ])
         body = CarHistoryResponse.model_validate(service.get_car_history(self.user())).model_dump(mode='json')
         self.assertEqual([item['vehicle_ref'] for item in body['active_usages']], [ref, ref2])
         self.assertEqual(body['recent_usage'][0]['vehicle_ref'], ref)

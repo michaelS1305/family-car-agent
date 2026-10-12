@@ -859,10 +859,20 @@ def get_user_reservations(user_id, family_id):
         return cursor.fetchall()
 
 
-def get_car_usage_history(family_id, completed_limit=50):
+def get_car_usage_history(family_id, completed_limit=50, *, cursor=None,
+                          vehicle_ref=None, member_ref=None, from_datetime=None, to_datetime=None):
     with pool.connection() as conn:
+        boundary = None
+        if cursor is not None:
+            boundary = conn.execute(
+                'SELECT started_at,id FROM vehicle_driver_sessions '
+                'WHERE family_id=%s AND session_ref=%s AND ended_at IS NOT NULL',
+                (family_id, cursor)).fetchone()
+            if boundary is None:
+                return None  # Identical outcome for missing, active and foreign-family cursors.
         query = (
-            'SELECT u.name,s.started_at,s.ended_at,s.ended_at IS NULL,s.id,v.display_name,v.vehicle_ref '
+            'SELECT u.name,s.started_at,s.ended_at,s.ended_at IS NULL,s.id,v.display_name,v.vehicle_ref,'
+            's.session_ref,u.member_public_id '
             'FROM vehicle_driver_sessions s JOIN users u ON u.id=s.user_id JOIN vehicles v ON v.id=s.vehicle_id '
             'WHERE s.family_id=%s ')
         # Active sessions must not disappear behind a busy completed-history page.
@@ -870,10 +880,27 @@ def get_car_usage_history(family_id, completed_limit=50):
                               (family_id,)).fetchall()
         if len(active) > 100:
             raise ValueError('Vehicle history capacity exceeded')
-        rows = active + conn.execute(query + 'AND s.ended_at IS NOT NULL ORDER BY s.started_at DESC,s.id DESC LIMIT %s',
-            (family_id, min(max(int(completed_limit),1),50))).fetchall()
-        return [(name, start.isoformat(), end.isoformat() if end else None, active, sid, vehicle, str(ref))
-                for name,start,end,active,sid,vehicle,ref in rows]
+        filters = 'AND s.ended_at IS NOT NULL '
+        params = [family_id]
+        for value, clause in (
+            (vehicle_ref, 'v.vehicle_ref=%s AND v.family_id=s.family_id'),
+            (member_ref, 'u.member_public_id=%s AND u.family_id=s.family_id'),
+            (from_datetime, 's.started_at >= %s'),
+            (to_datetime, 's.started_at <= %s'),
+        ):
+            if value is not None:
+                filters += 'AND ' + clause + ' '
+                params.append(value)
+        if boundary is not None:
+            filters += 'AND (s.started_at,s.id) < (%s,%s) '
+            params.extend(boundary)
+        # One lookahead row determines has_more without a count/all-history read.
+        params.append(min(max(int(completed_limit), 1), 50) + 1)
+        rows = active + conn.execute(query + filters + 'ORDER BY s.started_at DESC,s.id DESC LIMIT %s',
+                                     tuple(params)).fetchall()
+        return [(name, start.isoformat(), end.isoformat() if end else None, active, sid, vehicle,
+                 str(ref), str(session_ref), str(member_ref))
+                for name,start,end,active,sid,vehicle,ref,session_ref,member_ref in rows]
 
 
 def get_vehicle_statuses(family_id):

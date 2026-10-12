@@ -27,14 +27,14 @@ class CarHistoryDatabaseTests(unittest.TestCase):
         self.assertIn('LIMIT 101', active[0])
         self.assertEqual(active[1], (42,))
         self.assertIn('s.ended_at IS NOT NULL', completed[0])
-        self.assertEqual(completed[1], (42, 50))
+        self.assertEqual(completed[1], (42, 51))
 
     def test_active_cannot_be_pushed_off_completed_page_and_timestamps_are_aware(self):
         start = datetime(2026, 9, 20, tzinfo=timezone.utc)
-        active = ('A', start, None, True, 1, 'Car A', 'ref-a')
-        ended = ('B', start, start, False, 2, 'Car B', 'ref-b')
+        active = ('A', start, None, True, 1, 'Car A', 'ref-a', 'session-a', 'member-a')
+        ended = ('B', start, start, False, 2, 'Car B', 'ref-b', 'session-b', 'member-b')
         self.connection.execute.return_value.fetchall.side_effect = [[active], [ended] * 50]
         rows = database.get_car_usage_history(42)
         self.assertEqual(len(rows), 51)
-        self.assertEqual(rows[0], ('A', start.isoformat(), None, True, 1, 'Car A', 'ref-a'))
+        self.assertEqual(rows[0], ('A', start.isoformat(), None, True, 1, 'Car A', 'ref-a', 'session-a', 'member-a'))
         self.assertTrue(rows[1][2].endswith('+00:00'))

@@ -1,5 +1,6 @@
 """Authenticated PWA views over the existing vehicle lifecycle/authority."""
 from uuid import UUID
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, StrictStr, UUID4
 from psycopg.errors import LockNotAvailable, QueryCanceled
@@ -27,6 +28,7 @@ class CreateVehicleRequest(BaseModel):
 class VehicleStatusView(VehicleView):
     current_driver: str | None
     in_use: bool
+    started_at: datetime | None
 
 
 def _read(conn, current_user, vehicle_ref=None):
@@ -38,13 +40,14 @@ def _read(conn, current_user, vehicle_ref=None):
             raise VehicleIdentityError('VEHICLE_NOT_FOUND_OR_UNAVAILABLE', 'Vehicle unavailable')
         active = [vehicle for vehicle in vehicles if vehicle.retired_at is None]
         rows = bounded.execute(
-            'SELECT v.vehicle_ref,u.name,s.id FROM vehicles v '
+            'SELECT v.vehicle_ref,u.name,s.started_at FROM vehicles v '
             'JOIN vehicle_driver_sessions s ON s.vehicle_id=v.id AND s.ended_at IS NULL '
             'JOIN users u ON u.id=s.user_id WHERE v.family_id=%s AND v.vehicle_ref=ANY(%s)',
             (current_user.family_id, [v.vehicle_ref for v in active])).fetchall() if active else []
-        drivers = {ref: name for ref, name, _ in rows}
-        return [VehicleStatusView(**v.model_dump(), current_driver=drivers.get(v.vehicle_ref),
-                                  in_use=v.vehicle_ref in drivers) for v in active]
+        sessions = {ref: (name, started_at) for ref, name, started_at in rows}
+        return [VehicleStatusView(**v.model_dump(), current_driver=sessions.get(v.vehicle_ref, (None, None))[0],
+                                  in_use=v.vehicle_ref in sessions,
+                                  started_at=sessions.get(v.vehicle_ref, (None, None))[1]) for v in active]
 
 
 def _call(operation):
