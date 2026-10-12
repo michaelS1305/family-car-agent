@@ -233,12 +233,7 @@ internal fun HistoryScreen(
                 )
             }
 
-            items(
-                state.rows,
-                key = { it.sessionRef }
-            ) {
-                UsageRow(it, zone)
-            }
+            items(state.rows, key = { it.sessionRef }) { UsageRow(it, zone) }
 
             item(key = "footer") {
                 Column(
@@ -444,11 +439,7 @@ private fun CurrentCapsule(
 
 @Composable
 private fun IllustrationSlot() {
-    Spacer(
-        Modifier.size(
-            HISTORY_ILLUSTRATION_SLOT_DP.dp
-        )
-    )
+    Spacer(Modifier.size(HISTORY_ILLUSTRATION_SLOT_DP.dp))
 }
 
 @Composable
