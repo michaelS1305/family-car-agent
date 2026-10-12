@@ -592,7 +592,7 @@ private fun HistoryFilterSheet(
 
             FilterChoice(
                 label = "רכב",
-                asset = R.drawable.car,
+                asset = R.drawable.car_icon,
                 value = state.draft.vehicleRef,
                 choices = state.vehicleOptions.map {
                     it.ref to it.name
@@ -607,7 +607,7 @@ private fun HistoryFilterSheet(
 
             FilterChoice(
                 label = "משתמש",
-                asset = R.drawable.user,
+                asset = R.drawable.user_icon,
                 value = state.draft.memberRef,
                 choices = state.members.map {
                     it.ref to it.name

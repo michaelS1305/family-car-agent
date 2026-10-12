@@ -220,7 +220,7 @@ class HistoryTest {
     }
     @Test fun exactAssetsBlankSlotAndHistoryOnlySliderGate() {
         val ui = File("src/main/java/il/fca/companion/ui/HistoryScreen.kt").readText()
-        for (asset in listOf("fca_header_wordmark", "history_icon", "ic_chevron_back", "ic_filter", "car", "user", "ic_calender"))
+        for (asset in listOf("fca_header_wordmark", "history_icon", "ic_chevron_back", "ic_filter", "car_icon", "user_icon", "ic_calender"))
             assertTrue(ui.contains("R.drawable.$asset"))
         assertFalse(ui.contains("R.drawable.vehicle_"))
         assertTrue(ui.contains("Spacer(Modifier.size(HISTORY_ILLUSTRATION_SLOT_DP.dp))"))
