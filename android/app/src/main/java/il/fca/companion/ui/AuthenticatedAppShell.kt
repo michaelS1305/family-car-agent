@@ -59,7 +59,7 @@ internal class AppShellState {
 @Composable
 internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: String,
                                    logout: () -> Unit, logoutBusy: Boolean, logoutError: String?,
-                                   history: HistoryViewModel, familyId: Long?) {
+                                   history: HistoryViewModel, familyId: Long?, vehicles: VehiclesViewModel) {
 
     val state = remember {
         AppShellState()
@@ -139,6 +139,8 @@ internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: Strin
                         DashboardScreen(authenticatedName, state::openCategory, logout, logoutBusy, logoutError)
                     } else if (category == DashboardCategory.HISTORY) {
                         HistoryScreen(history, familyId, state::back)
+                    } else if (category == DashboardCategory.VEHICLES) {
+                        VehiclesScreen(vehicles, familyId, state::back)
                     } else {
                         DashboardCategoryPlaceholder(category, state::back)
                     }
@@ -154,7 +156,7 @@ internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: Strin
          * When the keyboard is closed, navigationBarsPadding keeps
          * the slider above Android's system navigation area.
          */
-        if (!imeVisible && state.category != DashboardCategory.HISTORY) {
+        if (!imeVisible && state.category != DashboardCategory.HISTORY && state.category != DashboardCategory.VEHICLES) {
 
             Box(
                 modifier = Modifier

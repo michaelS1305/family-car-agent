@@ -226,7 +226,7 @@ class HistoryTest {
         assertTrue(ui.contains("Spacer(Modifier.size(HISTORY_ILLUSTRATION_SLOT_DP.dp))"))
         assertTrue(ui.contains("items(state.rows, key = { it.sessionRef })"))
         val shell = File("src/main/java/il/fca/companion/ui/AuthenticatedAppShell.kt").readText()
-        assertTrue(shell.contains("if (!imeVisible && state.category != DashboardCategory.HISTORY)"))
+        assertTrue(shell.contains("if (!imeVisible && state.category != DashboardCategory.HISTORY && state.category != DashboardCategory.VEHICLES)"))
         assertTrue(shell.contains("HistoryScreen(history, familyId, state::back)"))
     }
     @Test fun staleVehicleReplyAfterFamilyChangeCannotApply() = runBlocking {

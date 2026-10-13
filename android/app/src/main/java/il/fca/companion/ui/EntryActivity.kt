@@ -13,6 +13,7 @@ import il.fca.companion.CompanionAccountRefresh
 import il.fca.companion.delivery.DeliveryWorker
 import il.fca.companion.net.ChatApi
 import il.fca.companion.net.HistoryApi
+import il.fca.companion.net.VehiclesApi
 import il.fca.companion.net.RealtimeBroadcast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -102,6 +103,7 @@ class EntryActivity : ComponentActivity() {
     private lateinit var viewModel: EntryViewModel
     private lateinit var chat: ChatViewModel
     private lateinit var history: HistoryViewModel
+    private lateinit var vehicles: VehiclesViewModel
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel = ViewModelProvider(this)[EntryViewModel::class.java]
@@ -125,11 +127,21 @@ class EntryActivity : ComponentActivity() {
                 }, { identity -> RealtimeBroadcast(app.auth).subscribe(identity.owner,
                     "family:${identity.family}:car-status", "car_status_changed") }) as T
         })[HistoryViewModel::class.java]
+        vehicles = ViewModelProvider(this, object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
+                VehiclesViewModel(VehiclesApi(app.api), {
+                    val owner = app.store.activeOwner()?.takeIf { it == app.auth.owner() }
+                    val family = entryModel.authenticatedFamilyId
+                    if (owner != null && family != null && entryModel.screen == EntryScreen.AUTHENTICATED_APP)
+                        VehiclesIdentity(owner, family) else null
+                }) as T
+        })[VehiclesViewModel::class.java]
         chat.activateOwner()
         if (intent.data != null) callback(intent)
         else if (savedInstanceState == null || viewModel.model.screen == EntryScreen.INTRO) viewModel.openExistingSession()
         setContent {
-            EntryUi(viewModel.model, chat, history,
+            EntryUi(viewModel.model, chat, history, vehicles,
                 login = { viewModel.beginLogin { startActivity(Intent(Intent.ACTION_VIEW, it)) } },
                 next = viewModel::next, back = viewModel::back, changeAddress = viewModel::changeAddress,
                 retryBootstrap = viewModel::openExistingSession, enteredApp = viewModel::enteredApp,
