@@ -23,6 +23,16 @@ class VehicleView(BaseModel):
     retired_at: datetime | None
 
 
+class VehicleDetailsView(VehicleView):
+    """Additive management/API projection; admission snapshots stay minimal."""
+    created_at: datetime
+    category: Literal['hatchback', 'sedan', 'crossover', 'minivan', 'suv'] | None = None
+    manufacturer_id: int | None = None
+    manufacturer_name_he: str | None = None
+    model: str | None = None
+    license_plate: str | None = None
+
+
 class DeviceView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     device_ref: UUID

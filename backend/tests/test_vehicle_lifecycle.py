@@ -47,6 +47,11 @@ class LifecyclePostgresTests(unittest.TestCase):
         fixtures.AccountDeletionPostgresTests.setUp(self)
         source = (Path(__file__).resolve().parents[2] / 'supabase/manual_migrations/2026092501_vehicle_creation_bounds.sql').read_text()
         self.query(source.replace('public.', self.schema + '.').replace("current_user <> 'postgres'", "current_user <> 'gemini_test'").replace('BEGIN;', '').replace('COMMIT;', ''))
+        # Only isolated test-fixture DDL, never public ACL/roles or production data.
+        metadata = (Path(__file__).resolve().parents[2] / 'supabase/manual_migrations/2026101301_vehicle_metadata_and_manufacturers.sql').read_text(encoding='utf-8')
+        for start in ('CREATE TABLE public.vehicle_manufacturers (', 'ALTER TABLE public.vehicles\n'):
+            statement = start + metadata.split(start, 1)[1].split(';', 1)[0] + ';'
+            self.query(statement.replace('public.', self.schema + '.'))
         self.member = self.person(self.family)
         self.foreign = self.person()
         other_family = self.query("INSERT INTO families(name,family_code,created_by_user_id) VALUES('Other','xyz123',%s) RETURNING id", (self.foreign[1],))[0][0]
@@ -75,12 +80,14 @@ class LifecyclePostgresTests(unittest.TestCase):
     def test_empty_lists_create_scope_safe_views_and_shared_family_vehicle(self):
         self.assertEqual(self.call(lifecycle.list_vehicles), [])
         self.assertEqual(self.call(lifecycle.list_devices), [])
-        vehicle = self.vehicle(user=self.peer)
-        self.assertEqual(set(vehicle.model_dump()), {'vehicle_ref', 'display_name', 'retired_at'})
+        vehicle = self.vehicle()
+        self.assertEqual(set(vehicle.model_dump()), {'vehicle_ref', 'display_name', 'retired_at',
+                         'created_at', 'category', 'manufacturer_id', 'manufacturer_name_he', 'model', 'license_plate'})
+        self.assertEqual(self.call(lifecycle.get_vehicle, vehicle.vehicle_ref, user=self.peer), vehicle)
         self.assertEqual(self.call(lifecycle.get_vehicle, vehicle.vehicle_ref), vehicle)
         self.assertEqual(self.call(lifecycle.list_vehicles), [vehicle])
         self.assertEqual(self.call(lifecycle.list_vehicles, user=self.outsider), [])
-        self.assertEqual(self.query('SELECT family_id,created_by_user_id FROM vehicles'), [(self.family, self.member[1])])
+        self.assertEqual(self.query('SELECT family_id,created_by_user_id FROM vehicles'), [(self.family, self.creator[1])])
         # No schema uniqueness requirement on name: each call is a new vehicle.
         self.assertNotEqual(self.vehicle().vehicle_ref, vehicle.vehicle_ref)
 
@@ -93,6 +100,27 @@ class LifecyclePostgresTests(unittest.TestCase):
                     self.call(operation, ref, *args, user=self.outsider)
                 results.append((caught.exception.code, caught.exception.status_code))
             self.assertEqual(results, [('VEHICLE_NOT_FOUND_OR_UNAVAILABLE', 404)] * 3)
+
+    def test_metadata_creation_replay_and_original_creator_authorization(self):
+        manufacturer = self.query("INSERT INTO vehicle_manufacturers(name_he) VALUES('Maker') RETURNING id")[0][0]
+        payload = dict(display_name=' New ', category='suv', manufacturer_id=manufacturer,
+                       model=' Model ', license_plate=' 12-ABC ')
+        key = uuid4()
+        with self.connection() as conn:
+            first = lifecycle.create_vehicle(conn, self.current, payload, request_id=key)
+        self.assertEqual((first.model, first.license_plate, first.manufacturer_name_he),
+                         (' Model ', ' 12-ABC ', 'Maker'))
+        self.query('UPDATE vehicle_manufacturers SET is_active=false WHERE id=%s', (manufacturer,))
+        with self.connection() as conn:
+            self.assertEqual(lifecycle.create_vehicle(conn, self.current, payload, request_id=key), first)
+        with self.connection() as conn, self.assertRaises(VehicleIdentityError) as caught:
+            lifecycle.create_vehicle(conn, self.current, payload, request_id=uuid4())
+        self.assertEqual(caught.exception.code, 'MANUFACTURER_NOT_AVAILABLE')
+        self.query("UPDATE users SET family_role='parent' WHERE id=%s", (self.peer.user_id,))
+        with self.assertRaises(VehicleIdentityError) as caught:
+            self.vehicle(user=self.peer)
+        self.assertEqual(caught.exception.code, 'VEHICLE_CREATION_FORBIDDEN')
+        self.assertEqual(self.query('SELECT count(*) FROM vehicles'), [(1,)])
 
     def test_names_match_database_whitespace_rule(self):
         for name in ('', ' ', '\t', '\n\r', ' \t\n\v\f '):

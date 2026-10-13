@@ -7,9 +7,13 @@ from uuid import uuid4
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from identity import CurrentUser
-from vehicle_identity import VehicleView, VehicleIdentityError
+from vehicle_identity import VehicleDetailsView as VehicleView, VehicleIdentityError
 import vehicle_api as api
 from tests import test_vehicle_lifecycle as fixtures
+
+VEHICLE_FIELDS = {'vehicle_ref', 'display_name', 'retired_at', 'created_at', 'category',
+                  'manufacturer_id', 'manufacturer_name_he', 'model', 'license_plate'}
+CREATED = datetime(2026, 10, 13, tzinfo=timezone.utc)
 
 
 class VehicleApiTests(unittest.TestCase):
@@ -28,10 +32,12 @@ class VehicleApiTests(unittest.TestCase):
     def test_creation_passes_only_current_user_name_and_stable_key(self):
         ref, key = uuid4(), uuid4()
         with patch.object(api.lifecycle, 'create_vehicle', return_value=VehicleView(
-                vehicle_ref=ref, display_name='Hyundai', retired_at=None)) as create:
+                vehicle_ref=ref, display_name='Hyundai', retired_at=None, created_at=CREATED)) as create:
             response = self.client.post('/api/vehicles', json={'display_name': 'Hyundai', 'request_id': str(key)})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(set(response.json()), {'vehicle_ref', 'display_name', 'retired_at'})
+        self.assertEqual(set(response.json()), VEHICLE_FIELDS)
+        for field in ('category', 'manufacturer_id', 'manufacturer_name_he', 'model', 'license_plate'):
+            self.assertIsNone(response.json()[field])
         self.assertEqual(response.headers['cache-control'], 'no-store')
         self.assertEqual(create.call_args.args[1:], (self.user, {'display_name': 'Hyundai'}))
         self.assertEqual(create.call_args.kwargs, {'request_id': key})
@@ -61,7 +67,7 @@ class VehicleApiTests(unittest.TestCase):
         self.assertEqual(self.client.post('/api/vehicles', json={}).status_code, 401)
 
     def test_current_status_preserves_independent_session_times_and_public_fields(self):
-        vehicles = [VehicleView(vehicle_ref=uuid4(), display_name=name, retired_at=None)
+        vehicles = [VehicleView(vehicle_ref=uuid4(), display_name=name, retired_at=None, created_at=CREATED)
                     for name in ('Available', 'First', 'Second')]
         times = [datetime(2026, 10, 12, 10, tzinfo=timezone.utc),
                  datetime(2026, 10, 12, 14, tzinfo=timezone(timedelta(hours=3)))]
@@ -97,8 +103,7 @@ class VehicleApiTests(unittest.TestCase):
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.json(), response.json()[1])
         for item, row in zip(response.json(), rows):
-            self.assertEqual(set(item), {'vehicle_ref', 'display_name', 'retired_at',
-                                         'current_driver', 'in_use', 'started_at'})
+            self.assertEqual(set(item), VEHICLE_FIELDS | {'current_driver', 'in_use', 'started_at'})
             if row.started_at is not None:
                 parsed = datetime.fromisoformat(item['started_at'].replace('Z', '+00:00'))
                 self.assertEqual(parsed, row.started_at)
@@ -150,4 +155,4 @@ class VehicleApiPostgresTests(unittest.TestCase):
         self.assertTrue(row.in_use)
         self.assertIsNotNone(row.current_driver)
         self.assertEqual(row.started_at, stored_start)
-        self.assertEqual(set(row.model_dump()), {'vehicle_ref', 'display_name', 'retired_at', 'current_driver', 'in_use', 'started_at'})
+        self.assertEqual(set(row.model_dump()), VEHICLE_FIELDS | {'current_driver', 'in_use', 'started_at'})

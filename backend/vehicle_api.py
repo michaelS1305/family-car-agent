@@ -2,11 +2,11 @@
 from uuid import UUID
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, ConfigDict, StrictStr, UUID4
+from pydantic import UUID4
 from psycopg.errors import LockNotAvailable, QueryCanceled
 from auth_service import get_current_user
 from identity import CurrentUser
-from vehicle_identity import VehicleView, VehicleIdentityError
+from vehicle_identity import VehicleDetailsView, VehicleIdentityError
 from vehicle_admission import _bounded_connection
 from vehicle_work import AdmissionDeadlineExceeded
 import vehicle_lifecycle as lifecycle
@@ -19,19 +19,17 @@ def vehicle_pool():
     return pool
 
 
-class CreateVehicleRequest(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    display_name: StrictStr
+class CreateVehicleRequest(lifecycle.VehicleCreationMetadata):
     request_id: UUID4
 
 
-class VehicleStatusView(VehicleView):
+class VehicleStatusView(VehicleDetailsView):
     current_driver: str | None
     in_use: bool
     started_at: datetime | None
 
 
-def _read(conn, current_user, vehicle_ref=None):
+def _read(conn, current_user, vehicle_ref=None, *, include_retired=False):
     # Revalidate membership and read status in the same family-serialized unit.
     with _bounded_connection(conn) as bounded, lifecycle._scope(bounded, current_user):
         vehicles = (lifecycle.list_vehicles(bounded, current_user) if vehicle_ref is None
@@ -39,6 +37,7 @@ def _read(conn, current_user, vehicle_ref=None):
         if vehicle_ref is not None and vehicles[0].retired_at is not None:
             raise VehicleIdentityError('VEHICLE_NOT_FOUND_OR_UNAVAILABLE', 'Vehicle unavailable')
         active = [vehicle for vehicle in vehicles if vehicle.retired_at is None]
+        selected = vehicles if include_retired else active
         rows = bounded.execute(
             'SELECT v.vehicle_ref,u.name,s.started_at FROM vehicles v '
             'JOIN vehicle_driver_sessions s ON s.vehicle_id=v.id AND s.ended_at IS NULL '
@@ -47,7 +46,7 @@ def _read(conn, current_user, vehicle_ref=None):
         sessions = {ref: (name, started_at) for ref, name, started_at in rows}
         return [VehicleStatusView(**v.model_dump(), current_driver=sessions.get(v.vehicle_ref, (None, None))[0],
                                   in_use=v.vehicle_ref in sessions,
-                                  started_at=sessions.get(v.vehicle_ref, (None, None))[1]) for v in active]
+                                  started_at=sessions.get(v.vehicle_ref, (None, None))[1]) for v in selected]
 
 
 def _call(operation):
@@ -62,11 +61,11 @@ def _call(operation):
 
 @router.get('', response_model=list[VehicleStatusView])
 def list_family_vehicles(response: Response, current_user: CurrentUser = Depends(get_current_user),
-                         pool=Depends(vehicle_pool)):
+                         pool=Depends(vehicle_pool), include_retired: bool = False):
     response.headers['Cache-Control'] = 'no-store'
     def run():
         with pool.connection() as conn:
-            return _read(conn, current_user)
+            return _read(conn, current_user, include_retired=include_retired)
     return _call(run)
 
 
@@ -80,12 +79,12 @@ def vehicle_detail(vehicle_ref: UUID, response: Response,
     return _call(run)
 
 
-@router.post('', response_model=VehicleView)
+@router.post('', response_model=VehicleDetailsView)
 def add_vehicle(request: CreateVehicleRequest, response: Response,
                 current_user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):
     response.headers['Cache-Control'] = 'no-store'
     def run():
         with pool.connection() as conn:
-            return lifecycle.create_vehicle(conn, current_user, {'display_name': request.display_name},
+            return lifecycle.create_vehicle(conn, current_user, request.model_dump(exclude={'request_id'}, exclude_none=True),
                                             request_id=request.request_id)
     return _call(run)

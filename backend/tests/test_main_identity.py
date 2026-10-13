@@ -290,6 +290,7 @@ def load_main_module(environment=None):
             sys.modules,
             {
                 "account_deletion_api": stub_module("account_deletion_api", router=Mock(), deletion_lifespan=Mock()),
+                "vehicle_reference_api": stub_module("vehicle_reference_api", router=Mock()),
                 "dotenv": dotenv_stub,
                 "fastapi": fastapi_stub,
                 "fastapi.middleware.cors": cors_stub,

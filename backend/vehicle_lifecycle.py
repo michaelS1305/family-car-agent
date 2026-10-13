@@ -12,19 +12,42 @@ Device platform is registration-time metadata, not an editable identity field;
 last_seen_at, sequence and revocation are server-managed, not generic updates.
 """
 from contextlib import contextmanager
+import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 from deletion_gate import require_auth
 from vehicle_admission import CAR_TRANSITION_LOCK_NAMESPACE, _bounded_connection
-from vehicle_identity import DeviceView, VehicleView, VehicleIdentityError, _ref
+from vehicle_identity import DeviceView, VehicleDetailsView, VehicleIdentityError, _ref
 import vehicle_creation_policy as policy
 
 
 class VehicleMetadata(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     display_name: StrictStr
+
+
+class VehicleCreationMetadata(VehicleMetadata):
+    category: Literal['hatchback', 'sedan', 'crossover', 'minivan', 'suv'] | None = None
+    manufacturer_id: int | None = Field(default=None, strict=True, ge=1, le=2147483647)
+    model: StrictStr | None = None
+    license_plate: StrictStr | None = None
+
+    @model_validator(mode='after')
+    def complete_metadata(self):
+        values = (self.category, self.manufacturer_id, self.model, self.license_plate)
+        if any(value is not None for value in values) and any(value is None for value in values):
+            raise ValueError('Vehicle metadata must be all present or all absent/null')
+        return self
+
+    def fingerprint(self):
+        if self.category is None:
+            return policy.fingerprint(self.display_name)
+        # Domain-separated, unambiguous encoding; never change the legacy digest.
+        payload = [self.display_name, self.category, self.manufacturer_id, self.model, self.license_plate]
+        return policy.fingerprint('vehicle-metadata-v1:' + json.dumps(
+            payload, ensure_ascii=False, separators=(',', ':')))
 
 
 class DeviceRegistration(BaseModel):
@@ -49,8 +72,24 @@ def _scope(conn, current_user):
         yield
 
 
+_VEHICLE_DETAILS = (
+    'SELECT v.id,v.vehicle_ref,v.display_name,v.retired_at,v.created_at,'
+    'v.category,v.manufacturer_id,m.name_he,v.model,v.license_plate '
+    'FROM vehicles v LEFT JOIN vehicle_manufacturers m ON m.id=v.manufacturer_id '
+)
+
+
 def _vehicle_view(row):
-    return VehicleView(vehicle_ref=row[1], display_name=row[2], retired_at=row[3])
+    return VehicleDetailsView(vehicle_ref=row[1], display_name=row[2], retired_at=row[3],
+                              created_at=row[4], category=row[5], manufacturer_id=row[6],
+                              manufacturer_name_he=row[7], model=row[8], license_plate=row[9])
+
+
+def _vehicle_details(conn, current_user, vehicle_id):
+    # Called only after scoped resolution/mutation under the existing family lock.
+    return _vehicle_view(conn.execute(
+        _VEHICLE_DETAILS + 'WHERE v.family_id=%s AND v.id=%s',
+        (current_user.family_id, vehicle_id)).fetchone())
 
 
 @contextmanager
@@ -100,21 +139,22 @@ def list_vehicles(conn, current_user):
     """All family vehicles, including retired history; public-safe views only."""
     with _scope(conn, current_user):
         return [_vehicle_view(row) for row in conn.execute(
-            'SELECT id,vehicle_ref,display_name,retired_at FROM vehicles WHERE family_id=%s ORDER BY id',
+            _VEHICLE_DETAILS + 'WHERE v.family_id=%s ORDER BY v.created_at ASC,v.id ASC',
             (current_user.family_id,),
         ).fetchall()]
 
 
 def get_vehicle(conn, current_user, vehicle_ref):
     with _scope(conn, current_user):
-        return _vehicle_view(_vehicle(conn, current_user, vehicle_ref))
+        return _vehicle_details(conn, current_user, _vehicle(conn, current_user, vehicle_ref)[0])
 
 
-def create_vehicle(conn, current_user, request: VehicleMetadata, *, request_id=None):
+def create_vehicle(conn, current_user, request: VehicleCreationMetadata, *, request_id=None):
     key = policy.request_key(request_id)
+    request = VehicleCreationMetadata.model_validate(request)
     with _creation_scope(conn, current_user) as conn:
-        name = _name(conn, request)
-        digest = policy.fingerprint(name)
+        name = _name(conn, {'display_name': request.display_name})
+        digest = request.fingerprint()
         previous = conn.execute(
             'SELECT id,vehicle_ref,display_name,retired_at,creation_fingerprint,created_by_user_id '
             'FROM vehicles WHERE family_id=%s AND creation_request_id=%s',
@@ -122,18 +162,36 @@ def create_vehicle(conn, current_user, request: VehicleMetadata, *, request_id=N
         if previous:
             if bytes(previous[4]) != digest or previous[5] != current_user.user_id:
                 policy.conflict()
-            return _vehicle_view(previous)
+            # Replay is not a new creation. Preserve pre-transition member replays,
+            # retired results and retries after manufacturer deactivation.
+            return _vehicle_details(conn, current_user, previous[0])
+        creator = conn.execute('SELECT created_by_user_id FROM families WHERE id=%s',
+                               (current_user.family_id,)).fetchone()
+        if not creator or creator[0] != current_user.user_id:
+            raise VehicleIdentityError('VEHICLE_CREATION_FORBIDDEN', 'Only the family creator can create vehicles', 403)
+        if request.category is not None:
+            for field, value in (('MODEL', request.model), ('LICENSE_PLATE', request.license_plate)):
+                if not conn.execute("SELECT %s::text !~ '^[[:space:]]*$'", (value,)).fetchone()[0]:
+                    raise VehicleIdentityError('INVALID_VEHICLE_' + field, 'Vehicle field must not be blank', 422)
+            # SHARE also prevents is_active changing between validation and insert.
+            manufacturer = conn.execute(
+                'SELECT id FROM vehicle_manufacturers WHERE id=%s AND is_active FOR SHARE',
+                (request.manufacturer_id,)).fetchone()
+            if not manufacturer:
+                raise VehicleIdentityError('MANUFACTURER_NOT_AVAILABLE', 'Manufacturer unavailable', 422)
         rows = conn.execute('SELECT retired_at FROM vehicles WHERE family_id=%s LIMIT %s',
                             (current_user.family_id, policy.VEHICLES_LIFETIME)).fetchall()
         policy.limit(len(rows) >= policy.VEHICLES_LIFETIME, 'VEHICLE_LIFETIME_LIMIT')
         policy.limit(sum(row[0] is None for row in rows) >= policy.VEHICLES_ACTIVE, 'VEHICLE_ACTIVE_LIMIT')
         row = conn.execute(
-            'INSERT INTO vehicles(family_id,created_by_user_id,display_name,creation_request_id,creation_fingerprint) '
-            'VALUES(%s,%s,%s,%s,%s) '
+            'INSERT INTO vehicles(family_id,created_by_user_id,display_name,creation_request_id,creation_fingerprint,'
+            'category,manufacturer_id,model,license_plate) '
+            'VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) '
             'RETURNING id,vehicle_ref,display_name,retired_at',
-            (current_user.family_id, current_user.user_id, name, key, digest),
+            (current_user.family_id, current_user.user_id, name, key, digest,
+             request.category, request.manufacturer_id, request.model, request.license_plate),
         ).fetchone()
-        return _vehicle_view(row)
+        return _vehicle_details(conn, current_user, row[0])
 
 
 def update_vehicle(conn, current_user, vehicle_ref, request: VehicleMetadata):
@@ -145,7 +203,7 @@ def update_vehicle(conn, current_user, vehicle_ref, request: VehicleMetadata):
             'UPDATE vehicles SET display_name=%s WHERE id=%s RETURNING id,vehicle_ref,display_name,retired_at',
             (name, row[0]),
         ).fetchone()
-        return _vehicle_view(updated)
+        return _vehicle_details(conn, current_user, updated[0])
 
 
 def retire_vehicle(conn, current_user, vehicle_ref):
@@ -164,7 +222,7 @@ def retire_vehicle(conn, current_user, vehicle_ref):
                 'UPDATE vehicles SET retired_at=clock_timestamp() WHERE id=%s '
                 'RETURNING id,vehicle_ref,display_name,retired_at', (row[0],),
             ).fetchone()
-        return _vehicle_view(row)
+        return _vehicle_details(conn, current_user, row[0])
 
 
 def list_devices(conn, current_user):
