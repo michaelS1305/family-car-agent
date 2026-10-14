@@ -15,7 +15,8 @@ internal data class VehicleDetailsState(
     val dialog: VehicleDialog? = null, val busy: Boolean = false, val operationError: String? = null,
     val draft: VehicleDraft = VehicleDraft(), val catalog: List<Manufacturer> = emptyList(),
     val catalogLoaded: Boolean = false, val catalogLoading: Boolean = false, val catalogError: Boolean = false,
-    val description: String = "", val date: LocalDate = LocalDate.now()
+    val description: String = "", val date: LocalDate = LocalDate.now(),
+    val maintenanceRef: String? = null, val confirmDelete: Boolean = false
 ) {
     val canManage get() = admin && detail != null && !detail.vehicle.readOnly && !loading && !error
     val matches get() = catalog.filter { it.name.contains(draft.manufacturerQuery, true) }
@@ -74,10 +75,22 @@ internal class VehicleDetailsViewModel(private val api: VehicleDetailsGateway, p
         val v = state.detail!!.vehicle
         val maker = v.manufacturerId?.let { id -> v.manufacturerName?.let { Manufacturer(id, it) } }
         state = state.copy(dialog = dialog, operationError = null, description = "", date = LocalDate.now(),
+            maintenanceRef = null, confirmDelete = false,
             draft = VehicleDraft(v.name, v.category, maker, maker?.name.orEmpty(), v.model.orEmpty(), v.plate.orEmpty()))
         if (dialog == VehicleDialog.EDIT) loadCatalog()
     }
-    fun close() { if (!state.busy) state = state.copy(dialog = null, operationError = null) }
+    fun openMaintenance(item: VehicleMaintenance) {
+        if (!state.canManage || state.busy || identity() != owner || item !in state.maintenance) return
+        open(VehicleDialog.MAINTENANCE)
+        state = state.copy(maintenanceRef = item.ref, description = item.description, date = item.date)
+    }
+    fun requestDelete() {
+        if (state.canManage && !state.busy && identity() == owner &&
+            state.dialog == VehicleDialog.MAINTENANCE && state.maintenanceRef != null)
+            state = state.copy(confirmDelete = true, operationError = null)
+    }
+    fun cancelDelete() { if (!state.busy) state = state.copy(confirmDelete = false) }
+    fun close() { if (!state.busy) state = state.copy(dialog = null, operationError = null, confirmDelete = false) }
     fun edit(draft: VehicleDraft) { if (!state.busy) state = state.copy(draft = draft, operationError = null) }
     fun query(query: String) = edit(state.draft.copy(manufacturerQuery = query, manufacturer = null))
     fun choose(maker: Manufacturer) { if (maker in state.catalog) edit(state.draft.copy(manufacturer = maker, manufacturerQuery = maker.name)) }
@@ -105,7 +118,9 @@ internal class VehicleDetailsViewModel(private val api: VehicleDetailsGateway, p
         if (dialog == VehicleDialog.EDIT && (!draft.valid || draft.manufacturer !in state.catalog)) return
         val description = state.description
         val date = state.date
-        if (dialog == VehicleDialog.MAINTENANCE && description.isBlank()) return
+        val item = state.maintenanceRef
+        val deleting = dialog == VehicleDialog.MAINTENANCE && state.confirmDelete && item != null
+        if (dialog == VehicleDialog.MAINTENANCE && !deleting && description.isBlank()) return
         val version = generation
         state = state.copy(busy = true, operationError = null)
         launch {
@@ -113,11 +128,15 @@ internal class VehicleDetailsViewModel(private val api: VehicleDetailsGateway, p
                 when (dialog) {
                     VehicleDialog.EDIT -> api.edit(who.owner, ref, draft)
                     VehicleDialog.RETIRE -> api.retire(who.owner, ref)
-                    VehicleDialog.MAINTENANCE -> api.addMaintenance(who.owner, ref, description, date)
+                    VehicleDialog.MAINTENANCE -> when {
+                        deleting -> api.deleteMaintenance(who.owner, ref, checkNotNull(item))
+                        item != null -> api.updateMaintenance(who.owner, ref, item, description, date)
+                        else -> api.addMaintenance(who.owner, ref, description, date)
+                    }
                 }
                 if (!valid(who, version)) return@launch
                 maintenanceRevision++
-                state = state.copy(busy = false, dialog = null, maintenanceLoading = false)
+                state = state.copy(busy = false, dialog = null, maintenanceLoading = false, confirmDelete = false)
                 refresh(); refreshMaintenance()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
@@ -125,6 +144,7 @@ internal class VehicleDetailsViewModel(private val api: VehicleDetailsGateway, p
                     state = state.copy(busy = false, operationError = when {
                         e is HttpFailure && e.status == 403 -> "אין הרשאה לביצוע הפעולה"
                         dialog == VehicleDialog.RETIRE && e is HttpFailure && e.status == 409 -> "לא ניתן להוציא את הרכב משימוש כעת. ייתכן שהוא בשימוש."
+                        dialog == VehicleDialog.MAINTENANCE && item != null -> "לא ניתן לאשר שהשינוי נשמר. בדקו את רשימת הטיפולים לפני ניסיון נוסף."
                         dialog == VehicleDialog.MAINTENANCE -> "לא ניתן לאשר שהטיפול נוסף. לפני ניסיון נוסף בדקו את רשימת הטיפולים."
                         else -> "הפעולה לא הושלמה. נסו שוב."
                     })

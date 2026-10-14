@@ -11,6 +11,7 @@ import org.json.JSONArray
 
 internal enum class CompanionHealth { READY, SETUP, ACTION, UNKNOWN, RETIRED }
 internal enum class DeviceHealth { REGISTERED, MISSING, INVALID, UNKNOWN }
+internal fun companionStatusText(loading: Boolean, resolved: String) = if (loading) "בודק…" else resolved
 internal data class CompanionPresentation(
     val health: CompanionHealth = CompanionHealth.UNKNOWN,
     val device: DeviceHealth = DeviceHealth.UNKNOWN,
@@ -20,7 +21,7 @@ internal data class CompanionPresentation(
 ) {
     val summary get() = when (health) {
         CompanionHealth.READY -> "פעיל"
-        CompanionHealth.SETUP -> "לא הוגדר"
+        CompanionHealth.SETUP -> "לא מוגדר"
         CompanionHealth.ACTION -> "נדרשת פעולה"
         CompanionHealth.UNKNOWN -> "לא ניתן לאמת כרגע"
         CompanionHealth.RETIRED -> "לא פעיל"
@@ -43,6 +44,7 @@ internal fun companionPresentation(device: DeviceHealth, local: Boolean, binding
         else -> CompanionHealth.READY
     }
     val detection = when {
+        device == DeviceHealth.MISSING || !local -> CompanionHealth.SETUP
         !locationReady -> CompanionHealth.SETUP
         !homeReady -> CompanionHealth.UNKNOWN
         device == DeviceHealth.REGISTERED && bluetooth == CompanionHealth.READY && observationVerified -> CompanionHealth.READY

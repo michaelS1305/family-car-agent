@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
     private var targetName by mutableStateOf("")
     private var targetRetired by mutableStateOf(false)
     private var targetVerified by mutableStateOf(false)
+    private var verificationLoading by mutableStateOf(true)
     private var presentation by mutableStateOf(CompanionPresentation())
     private var productMessage by mutableStateOf<String?>(null)
     private var picker by mutableStateOf<List<BluetoothDevice>?>(null)
@@ -62,6 +63,7 @@ class MainActivity : ComponentActivity() {
         target = intent.getStringExtra(VEHICLE_TARGET)?.let { value -> runCatching { UUID.fromString(value).toString() }.getOrNull() }
         targetOwner = app.store.activeOwner()
         targetName = ""; targetRetired = false; targetVerified = false
+        verificationLoading = true
         presentation = CompanionPresentation(); productMessage = null; picker = null
     }
     override fun onNewIntent(intent: Intent) {
@@ -87,7 +89,7 @@ class MainActivity : ComponentActivity() {
                 productContent = true
                 setContent {
                     MaterialTheme {
-                        CompanionScreen(targetName, presentation, busy, targetVerified, targetRetired, productMessage,
+                        CompanionScreen(targetName, presentation, busy, targetVerified, targetRetired, productMessage, verificationLoading,
                             back = { finish() }, refresh = { app.store.activeOwner()?.let { owner -> task { load(owner) } } },
                             register = { app.store.activeOwner()?.let { owner -> task {
                                 if (!targetVerified || targetRetired) return@task
@@ -175,7 +177,7 @@ class MainActivity : ComponentActivity() {
                 busy = false
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 if (version != productGeneration) app.store.activeOwner()?.let { owner -> task { load(owner) } }
-                else if (target != null) { productMessage = message; draw() }
+                else if (target != null) { verificationLoading = false; productMessage = message.takeUnless { it == "בוצע" }; draw() }
                 else { draw(); status.text = message }
             }
         }
@@ -197,7 +199,7 @@ class MainActivity : ComponentActivity() {
         val vehicle = target
         val version = productGeneration
         if (vehicle != null) {
-            runOnUiThread { if (version == productGeneration) { targetVerified = false; presentation = CompanionPresentation() } }
+            runOnUiThread { if (version == productGeneration) { verificationLoading = true; targetVerified = false; presentation = CompanionPresentation() } }
             val detail = JSONObject(app.api.call(owner, "/api/vehicles/$vehicle"))
             val retired = !detail.isNull("retired_at")
             val before = if (retired) CompanionPresentation(CompanionHealth.RETIRED) else readCompanionPresentation(app, owner, vehicle)

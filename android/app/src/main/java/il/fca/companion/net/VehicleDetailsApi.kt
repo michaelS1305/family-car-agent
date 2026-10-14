@@ -20,6 +20,8 @@ interface VehicleDetailsGateway {
     suspend fun edit(owner: String, ref: String, draft: VehicleDraft)
     suspend fun retire(owner: String, ref: String)
     suspend fun addMaintenance(owner: String, ref: String, description: String, date: LocalDate)
+    suspend fun updateMaintenance(owner: String, ref: String, item: String, description: String, date: LocalDate)
+    suspend fun deleteMaintenance(owner: String, ref: String, item: String)
 }
 class VehicleDetailsApi(private val api: FcaApi) : VehicleDetailsGateway {
     private val vehicles = VehiclesApi(api)
@@ -45,6 +47,17 @@ class VehicleDetailsApi(private val api: FcaApi) : VehicleDetailsGateway {
         withContext(Dispatchers.IO) {
             api.call(owner, path(ref) + "/maintenance", "POST",
                 JSONObject().put("description", description).put("scheduled_date", date.toString()))
+        }
+    }
+    override suspend fun updateMaintenance(owner: String, ref: String, item: String, description: String, date: LocalDate) {
+        withContext(Dispatchers.IO) {
+            api.call(owner, path(ref) + "/maintenance/${UUID.fromString(item)}", "PUT",
+                JSONObject().put("description", description).put("scheduled_date", date.toString()))
+        }
+    }
+    override suspend fun deleteMaintenance(owner: String, ref: String, item: String) {
+        withContext(Dispatchers.IO) {
+            api.call(owner, path(ref) + "/maintenance/${UUID.fromString(item)}", "DELETE")
         }
     }
     companion object {

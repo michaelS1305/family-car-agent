@@ -31,6 +31,7 @@ class VehicleDetailsTest {
         var failure: Exception? = null
         val calls = mutableListOf<Pair<String, String>>()
         var edits = 0; var retires = 0; var additions = 0
+        var maintenanceEdits = 0; var deletions = 0
         override suspend fun detail(owner: String, ref: String): VehicleDetail {
             calls += owner to ref; return detailAction?.invoke() ?: row
         }
@@ -48,6 +49,16 @@ class VehicleDetailsTest {
         override suspend fun addMaintenance(owner: String, ref: String, description: String, date: LocalDate) {
             failure?.let { throw it }; additions++
             rows = rows + VehicleMaintenance(UUID(0, additions.toLong()).toString(), description, date)
+        }
+        override suspend fun updateMaintenance(owner: String, ref: String, item: String, description: String, date: LocalDate) {
+            calls += owner to ref
+            failure?.let { throw it }; maintenanceEdits++
+            rows = rows.map { if (it.ref == item) it.copy(description = description, date = date) else it }
+        }
+        override suspend fun deleteMaintenance(owner: String, ref: String, item: String) {
+            calls += owner to ref
+            failure?.let { throw it }; deletions++
+            rows = rows.filterNot { it.ref == item }
         }
     }
     private suspend fun settle() { repeat(12) { yield() } }
@@ -121,6 +132,63 @@ class VehicleDetailsTest {
             assertEquals(ref, m.state.detail!!.vehicle.ref); assertTrue(m.state.detail!!.vehicle.readOnly); assertFalse(m.state.canManage)
         } finally { m.stop() }
     }
+    @Test fun maintenanceEditDeleteConfirmationFailuresAndRefresh() = runBlocking {
+        val item = VehicleMaintenance(UUID(0, 8).toString(), "מקורי", LocalDate.of(2020, 1, 1))
+        val g = Gateway().apply { rows = listOf(item) }; val m = model(g, this)
+        try {
+            m.start(); settle(); m.openMaintenance(item)
+            assertEquals(item.ref, m.state.maintenanceRef); assertEquals(item.date, m.state.date)
+            m.maintenanceDraft("עודכן", item.date.minusDays(1))
+            g.failure = HttpFailure(403); m.submit(); settle()
+            assertEquals("עודכן", m.state.description); assertEquals(listOf(item), m.state.maintenance)
+            assertNotNull(m.state.operationError)
+            g.failure = null; m.submit(); settle()
+            assertNull(m.state.dialog); assertEquals(1, g.maintenanceEdits)
+            assertEquals("עודכן", m.state.maintenance.single().description)
+            m.openMaintenance(m.state.maintenance.single()); m.requestDelete()
+            assertTrue(m.state.confirmDelete); assertEquals(0, g.deletions)
+            m.cancelDelete(); assertFalse(m.state.confirmDelete); assertEquals(0, g.deletions)
+            m.requestDelete(); g.failure = HttpFailure(409); m.submit(); settle()
+            assertTrue(m.state.confirmDelete); assertNotNull(m.state.operationError)
+            assertEquals(1, m.state.maintenance.size)
+            g.failure = null; m.submit(); settle()
+            assertNull(m.state.dialog); assertFalse(m.state.confirmDelete)
+            assertTrue(m.state.maintenance.isEmpty()); assertEquals(1, g.deletions)
+            assertTrue(g.calls.all { it == "owner" to ref })
+        } finally { m.stop() }
+    }
+    @Test fun maintenanceEditDeleteGuardMemberRetiredAndChangedOwner() = runBlocking {
+        val item = VehicleMaintenance(UUID(0, 8).toString(), "טיפול", LocalDate.now())
+        for ((admin, retired) in listOf(false to false, true to true)) {
+            val g = Gateway().apply { this.admin = admin; row = row.copy(vehicle = vehicle(retired)); rows = listOf(item) }
+            val m = model(g, this)
+            try {
+                m.start(); settle(); m.openMaintenance(item); m.requestDelete(); m.submit(); settle()
+                assertNull(m.state.dialog); assertEquals(0, g.maintenanceEdits); assertEquals(0, g.deletions)
+            } finally { m.stop() }
+        }
+        var who = VehiclesIdentity("owner", 1)
+        val g = Gateway().apply { rows = listOf(item) }; val m = model(g, this) { who }
+        try {
+            m.start(); settle(); m.openMaintenance(item); m.requestDelete()
+            who = VehiclesIdentity("other", 2); m.submit(); settle()
+            assertEquals(0, g.deletions)
+        } finally { m.stop() }
+    }
+    @Test fun verificationMasksEveryStatusUntilCompletedAndIconsNeverMirror() {
+        for (value in listOf("מחובר", "פעיל", "לא מוגדר", "לא ניתן לאמת כרגע", "נדרש חיבור מחדש")) {
+            assertEquals("בודק…", companionStatusText(true, value))
+            assertEquals(value, companionStatusText(false, value))
+        }
+        for (name in listOf("success_icon", "bluetooth_icon")) {
+            val xml = File("src/main/res/drawable/$name.xml").readText()
+            assertTrue(xml.contains("android:autoMirrored=\"false\""))
+        }
+        val source = File("src/main/java/il/fca/companion/ui/CompanionScreen.kt").readText()
+        assertEquals(4, Regex("companionStatusText\\(").findAll(source).count())
+        assertTrue(source.contains("בחרו את חיבור ה-Bluetooth של הרכב שלכם שכבר צומד לטלפון."))
+        assertTrue(source.contains("takeUnless { it == \"בוצע\" }"))
+    }
     @Test fun oldOwnerResponseCannotApply() = runBlocking {
         val g = Gateway(); val gate = CompletableDeferred<Unit>()
         var who: VehiclesIdentity? = VehiclesIdentity("owner", 1)
@@ -140,6 +208,8 @@ class VehicleDetailsTest {
         assertEquals("Hyundai Audio", snapshot().friendlyName)
         assertEquals(CompanionHealth.SETUP, snapshot(device = DeviceHealth.MISSING).health)
         assertEquals(CompanionHealth.SETUP, snapshot(local = false).health)
+        assertEquals(CompanionHealth.SETUP, snapshot(local = false).detection)
+        assertEquals(CompanionHealth.SETUP, snapshot(device = DeviceHealth.MISSING).detection)
         assertEquals(CompanionHealth.UNKNOWN, snapshot(device = DeviceHealth.UNKNOWN).health)
         assertEquals(CompanionHealth.UNKNOWN, snapshot(binding = null).health)
         assertEquals(CompanionHealth.ACTION, snapshot(system = false).health)
@@ -157,7 +227,7 @@ class VehicleDetailsTest {
         listOf("current_driver", "started_at", "device_ref", "companionId").forEach { assertFalse(ui.contains(it)) }
         val companion = File("src/main/java/il/fca/companion/ui/CompanionScreen.kt").readText()
         listOf("address", "device_ref", "companionId", "UUID").forEach { assertFalse(companion.contains(it)) }
-        assertTrue(companion.contains("RadioButton(choice.selected"))
+        assertTrue(Regex("RadioButton\\(\\s*choice.selected").containsMatchIn(companion))
         val main = File("src/main/java/il/fca/companion/MainActivity.kt").readText()
         assertTrue(main.contains("override fun onNewIntent"))
         assertTrue(main.contains("else choosePaired(owner, vehicle)"))

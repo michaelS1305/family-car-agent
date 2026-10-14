@@ -107,10 +107,28 @@ internal fun VehicleDetailsScreen(model: VehicleDetailsViewModel, companion: Com
                     Column(Modifier.widthIn(max = 620.dp).fillMaxWidth().weight(1f)
                         .verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(v.name, fontSize = 26.sp, color = VehicleInk, fontWeight = FontWeight.Bold)
-                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                            Image(painterResource(vehicleIllustration(v.category)), null,
-                                Modifier.fillMaxWidth(.8f).height(145.dp).alpha(if (v.readOnly) .55f else 1f), contentScale = ContentScale.Fit)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(0.dp)
+                        ) {
+                            Text(
+                                v.name,
+                                fontSize = 30.sp,
+                                color = VehicleInk,
+                                fontWeight = FontWeight.Bold
+                            )
+
+                            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                                Image(
+                                    painterResource(vehicleIllustration(v.category)),
+                                    null,
+                                    Modifier
+                                        .fillMaxWidth(.9f)
+                                        .height(200.dp)
+                                        .alpha(if (v.readOnly) .55f else 1f),
+                                    contentScale = ContentScale.Fit
+                                )
+                            }
                         }
                         val statusColor = if (v.readOnly) Color(0xFF7A8795) else if (detail.inUse) Color(0xFF9B631A) else Color(0xFF168153)
                         Text(detail.status, Modifier.fillMaxWidth().background(statusColor.copy(alpha = .10f), RoundedCornerShape(16.dp))
@@ -124,11 +142,10 @@ internal fun VehicleDetailsScreen(model: VehicleDetailsViewModel, companion: Com
                                     if (!v.readOnly) companion.friendlyName?.let { Text(it, color = VehicleInk, fontSize = 13.sp) }
                                 }
                                 if (!v.readOnly) IconButton(openCompanion) {
-                                    Image(painterResource(R.drawable.ic_chevron_back), "פתיחת חיבור וזיהוי אוטומטי", Modifier.size(22.dp))
+                                    Image(painterResource(R.drawable.ic_chevron_right), "פתיחת חיבור וזיהוי אוטומטי", Modifier.size(22.dp))
                                 }
                             }
                             if (v.readOnly) Text("הגדרות הקישור אינן פעילות לרכב זה", fontSize = 13.sp, color = Color.Gray)
-                            else if (companion.health == CompanionHealth.UNKNOWN) TextButton(refreshCompanion) { Text("רענון") }
                         }
                         VehiclePanel {
                             SectionHeading("טיפולים", if (s.canManage) R.drawable.ic_add else null) { model.open(VehicleDialog.MAINTENANCE) }
@@ -137,7 +154,8 @@ internal fun VehicleDetailsScreen(model: VehicleDetailsViewModel, companion: Com
                                 s.maintenanceError -> { Text("לא ניתן לטעון טיפולים"); TextButton(model::refreshMaintenance) { Text("נסה שוב") } }
                                 s.maintenance.isEmpty() -> Text("אין טיפולים להצגה", color = Color(0xFF788699))
                                 else -> s.maintenance.forEach { item ->
-                                    Row(Modifier.fillMaxWidth().border(1.dp, VehicleBorder, RoundedCornerShape(14.dp)).padding(12.dp),
+                                    Row(Modifier.fillMaxWidth().border(1.dp, VehicleBorder, RoundedCornerShape(14.dp))
+                                        .clickable(enabled = s.canManage && !s.busy) { model.openMaintenance(item) }.padding(12.dp),
                                         verticalAlignment = Alignment.CenterVertically) {
                                         Image(painterResource(R.drawable.maintenance_icon), null, Modifier.size(28.dp))
                                         Column(Modifier.padding(start = 10.dp)) {
@@ -164,8 +182,8 @@ internal fun VehicleDetailsScreen(model: VehicleDetailsViewModel, companion: Com
                         if (s.canManage) OutlinedButton({ model.open(VehicleDialog.RETIRE) }, Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFBD2626)),
                             border = BorderStroke(1.dp, Color(0xFFEBCACA))) {
-                            Image(painterResource(R.drawable.trash_icon), null, Modifier.size(24.dp))
-                            Text("הוצאת הרכב משימוש", Modifier.padding(8.dp))
+                            Image(painterResource(R.drawable.trash_icon), null, Modifier.size(40.dp))
+                            Text("הוצאת הרכב משימוש", Modifier.padding(horizontal = 2.dp, vertical = 2.dp))
                         }
                         if (v.readOnly) VehiclePanel {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -199,7 +217,7 @@ private fun VehicleDetailsDialog(model: VehicleDetailsViewModel) {
         containerColor = Color(0xFFF9FAFA)) {
         Column(Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            val title = when (dialog) { VehicleDialog.EDIT -> "עריכת פרטי רכב"; VehicleDialog.MAINTENANCE -> "הוספת טיפול"; VehicleDialog.RETIRE -> "להוציא את הרכב משימוש?" }
+            val title = when (dialog) { VehicleDialog.EDIT -> "עריכת פרטי רכב"; VehicleDialog.MAINTENANCE -> if (s.maintenanceRef == null) "הוספת טיפול" else "עריכת טיפול"; VehicleDialog.RETIRE -> "להוציא את הרכב משימוש?" }
             Text(title, fontSize = 23.sp, fontWeight = FontWeight.Bold, color = VehicleInk)
             when (dialog) {
                 VehicleDialog.RETIRE -> {
@@ -228,12 +246,25 @@ private fun VehicleDetailsDialog(model: VehicleDetailsViewModel) {
             Button(model::submit, enabled = valid && !s.busy, modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = if (dialog == VehicleDialog.RETIRE) Color(0xFFBD2626) else VehicleInk)) {
                 Text(if (s.busy) "ממתינים לאישור…" else when (dialog) {
-                    VehicleDialog.EDIT -> "שמירה"; VehicleDialog.MAINTENANCE -> "הוספת טיפול"; VehicleDialog.RETIRE -> "הוצאה משימוש"
+                    VehicleDialog.EDIT -> "שמירה"; VehicleDialog.MAINTENANCE -> if (s.maintenanceRef == null) "הוספת טיפול" else "שמירה"; VehicleDialog.RETIRE -> "הוצאה משימוש"
                 })
+            }
+            if (dialog == VehicleDialog.MAINTENANCE && s.maintenanceRef != null) {
+                TextButton(model::requestDelete, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
+                    Text("מחיקת טיפול", color = MaterialTheme.colorScheme.error)
+                }
             }
             TextButton(model::close, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) { Text("ביטול") }
         }
     }
+    if (s.confirmDelete) AlertDialog(onDismissRequest = model::cancelDelete,
+        title = { Text("למחוק את הטיפול?") },
+        text = { Column {
+            Text("הטיפול יימחק מהרכב. לא ניתן לבטל את המחיקה.")
+            s.operationError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        } },
+        confirmButton = { TextButton(model::submit, enabled = !s.busy) { Text("מחיקה", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(model::cancelDelete, enabled = !s.busy) { Text("ביטול") } })
 }
 
 @Composable
