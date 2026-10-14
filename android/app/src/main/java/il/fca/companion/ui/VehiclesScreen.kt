@@ -17,9 +17,13 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,6 +53,10 @@ internal fun VehiclesScreen(model: VehiclesViewModel, familyId: Long?, back: () 
     }
     val state = model.state
     val navigateBack = { if (!model.back()) back() }
+    if (state.page == VehiclesPage.PLACEHOLDER && state.selected != null) {
+        VehicleDetailsRoute(state.selected.ref, model::currentIdentity, navigateBack)
+        return
+    }
     BackHandler { navigateBack() }
     Column(Modifier.fillMaxSize().background(Color(0xFFF6F7F7)).navigationBarsPadding(),
         horizontalAlignment = Alignment.CenterHorizontally) {
@@ -56,13 +64,7 @@ internal fun VehiclesScreen(model: VehiclesViewModel, familyId: Long?, back: () 
             VehiclesHeader(if (state.page == VehiclesPage.ADD) "הוספת רכב" else "רכבים", navigateBack)
             when (state.page) {
                 VehiclesPage.ADD -> AddVehicleScreen(model)
-                VehiclesPage.PLACEHOLDER -> Column(Modifier.fillMaxWidth().padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally) {
-                    state.selected?.let {
-                        Image(painterResource(vehicleIllustration(it.category)), null, Modifier.size(120.dp))
-                        Text(it.name, color = VehicleInk, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
+                VehiclesPage.PLACEHOLDER -> Unit // VehicleDetailsRoute owns the selected-vehicle flow above.
                 VehiclesPage.LIST -> when {
                     state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                     state.loadError -> Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -75,13 +77,25 @@ internal fun VehiclesScreen(model: VehiclesViewModel, familyId: Long?, back: () 
                         Spacer(Modifier.height(24.dp))
                         Text("אין עדיין רכבים", color = VehicleInk, fontSize = 26.sp, fontWeight = FontWeight.Bold)
                         if (state.canCreate) {
-                            Spacer(Modifier.height(32.dp))
+                            Spacer(Modifier.height(16.dp))
+                            Text("הוסיפו את הרכב הראשון של המשפחה\nכדי להתחיל לנהל אותו כאן",
+                                color = Color(0xFF788699), fontSize = 18.sp, lineHeight = 26.sp,
+                                textAlign = TextAlign.Center)
+                            Spacer(Modifier.height(28.dp))
                             OutlinedButton(onClick = model::add, modifier = Modifier.fillMaxWidth().height(56.dp),
                                 shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, VehicleInk)) {
                                 Text("הוספת רכב", color = VehicleInk, fontSize = 20.sp)
                                 Spacer(Modifier.width(12.dp))
                                 Image(painterResource(R.drawable.ic_add), null, Modifier.size(24.dp))
                             }
+                            Spacer(Modifier.height(14.dp))
+                            Text("זמין למנהל המשפחה בלבד", color = Color(0xFF788699),
+                                fontSize = 14.sp, textAlign = TextAlign.Center)
+                        } else {
+                            Spacer(Modifier.height(16.dp))
+                            Text("כרגע אין רכבים במשפחה\nרק מנהל המשפחה יכול להוסיף רכבים",
+                                color = Color(0xFF788699), fontSize = 18.sp, lineHeight = 26.sp,
+                                textAlign = TextAlign.Center)
                         }
                     }
                     else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
@@ -117,15 +131,24 @@ internal fun VehiclesScreen(model: VehiclesViewModel, familyId: Long?, back: () 
 internal fun VehiclesHeader(title: String, back: () -> Unit) {
     Box(Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 16.dp)) {
         Image(painterResource(R.drawable.fca_header_wordmark), "Family Car Agent",
-            Modifier.align(Alignment.Center).fillMaxWidth(.63f).height(58.dp), contentScale = ContentScale.Fit)
+            Modifier.align(Alignment.Center).fillMaxWidth(.63f).height(58.dp).graphicsLayer {
+                compositingStrategy = CompositingStrategy.Offscreen
+                blendMode = BlendMode.Multiply
+            }, contentScale = ContentScale.Fit)
         IconButton(onClick = back, modifier = Modifier.align(AbsoluteAlignment.CenterRight)
             .size(46.dp).background(Color.White.copy(alpha = .85f), CircleShape)) {
             Image(painterResource(R.drawable.ic_chevron_back), "חזרה", Modifier.size(22.dp))
         }
     }
-    Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 24.dp), horizontalArrangement = Arrangement.Center,
+    if (title == "רכבים") {
+        // The approved artwork includes the title; preserve its full canvas, as in History.
+        Box(Modifier.fillMaxWidth().height(108.dp), contentAlignment = Alignment.Center) {
+            Image(painterResource(R.drawable.vehicles_icon), "רכבים",
+                Modifier.requiredSize(200.dp).offset(y = (-15).dp), contentScale = ContentScale.Fit)
+        }
+    } else Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 24.dp), horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically) {
-        Image(painterResource(R.drawable.vehicles_icon), null, Modifier.size(30.dp))
+        Image(painterResource(R.drawable.single_car_icon), null, Modifier.size(40.dp))
         Spacer(Modifier.width(12.dp))
         Text(title, color = VehicleInk, fontWeight = FontWeight.Bold, fontSize = 27.sp)
     }

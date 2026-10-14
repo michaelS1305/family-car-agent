@@ -32,6 +32,7 @@ internal class VehiclesViewModel(private val api: VehiclesGateway, private val i
     private var root: Job? = null
     private var submissionJob: Job? = null
     private fun valid(owner: VehiclesIdentity, version: Long) = active == owner && identity() == owner && epoch == version
+    internal fun currentIdentity(): VehiclesIdentity? = identity()?.takeIf { it == active }
     private fun launch(block: suspend CoroutineScope.() -> Unit) =
         CoroutineScope(scope.coroutineContext + checkNotNull(root)).launch(block = block)
     fun start() {

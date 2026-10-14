@@ -13,11 +13,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import il.fca.companion.R
 import il.fca.companion.net.*
+
+internal fun showManufacturerSuggestions(query: String, selected: Manufacturer?): Boolean =
+    query.isNotBlank() && selected == null
 
 @Composable
 internal fun AddVehicleScreen(model: VehiclesViewModel) {
@@ -26,21 +30,22 @@ internal fun AddVehicleScreen(model: VehiclesViewModel) {
     val editable = state.pending == null && !state.submitting
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        VehicleField("שם הרכב", draft.name, "לדוגמה: יונדאי, הרכב של אבא", R.drawable.single_car_icon, editable) {
+        VehicleField("שם הרכב", draft.name, "לדוגמה: הרכב של אבא", R.drawable.single_car_icon, editable) {
             model.edit(draft.copy(name = it))
         }
         Text("סוג רכב", color = VehicleInk)
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 VehicleCategory.entries.forEach { category ->
                     val selected = draft.category == category
-                    Column(Modifier.width(72.dp).height(86.dp).clip(RoundedCornerShape(18.dp))
+                    Column(Modifier.weight(1f).height(86.dp).clip(RoundedCornerShape(18.dp))
                         .background(if (selected) Color(0xFFE6EDF4) else Color.White.copy(alpha = .6f))
                         .border(if (selected) 2.dp else 1.dp, if (selected) VehicleInk else VehicleBorder, RoundedCornerShape(18.dp))
                         .selectable(selected, enabled = editable, role = Role.RadioButton) { model.edit(draft.copy(category = category)) }
-                        .padding(4.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        .padding(2.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                         Image(painterResource(vehicleIllustration(category)), null, Modifier.fillMaxWidth().height(44.dp))
-                        Text(category.label, color = VehicleInk, fontSize = 11.sp, maxLines = 1)
+                        Text(category.label, color = VehicleInk, fontSize = 5.sp, lineHeight = 7.sp,
+                            maxLines = 2, textAlign = TextAlign.Center)
                     }
                 }
             }
@@ -53,7 +58,7 @@ internal fun AddVehicleScreen(model: VehiclesViewModel) {
                 Text("לא ניתן לטעון יצרנים", color = VehicleInk)
                 TextButton(onClick = model::loadManufacturers) { Text("נסה שוב") }
             }
-            state.catalogLoaded && draft.manufacturer == null -> {
+            state.catalogLoaded && showManufacturerSuggestions(draft.manufacturerQuery, draft.manufacturer) -> {
                 if (state.matchingManufacturers.isEmpty()) Text("לא נמצאו יצרנים", color = Color(0xFF788699))
                 else Column(Modifier.fillMaxWidth().heightIn(max = 144.dp).verticalScroll(rememberScrollState())
                     .border(1.dp, VehicleBorder, RoundedCornerShape(16.dp))) {

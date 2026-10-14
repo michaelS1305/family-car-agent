@@ -186,4 +186,50 @@ class VehiclesTest {
         assertTrue(shell.contains("VehiclesScreen(vehicles, familyId, state::back)"))
         assertTrue(shell.contains("state.category != DashboardCategory.VEHICLES"))
     }
+    @Test fun emptyStateUsesHistoryHeaderTreatmentAndAdminOnlyCopy() {
+        val ui = File("src/main/java/il/fca/companion/ui/VehiclesScreen.kt").readText()
+        val header = ui.substringAfter("internal fun VehiclesHeader").substringBefore("private fun VehicleCard")
+        assertTrue(header.contains("compositingStrategy = CompositingStrategy.Offscreen"))
+        assertTrue(header.contains("blendMode = BlendMode.Multiply"))
+        assertTrue(header.contains("AbsoluteAlignment.CenterRight"))
+        val title = header.substringAfter("if (title == \"רכבים\")").substringBefore("} else Row")
+        assertTrue(title.contains("R.drawable.vehicles_icon"))
+        assertTrue(title.contains("requiredSize(200.dp)"))
+        assertFalse(title.contains("Text("))
+        val empty = ui.substringAfter("state.loaded && state.rows.isEmpty()").substringBefore("else -> LazyColumn")
+        assertTrue(empty.contains("R.drawable.no_cars_icon"))
+        assertTrue(empty.substringBefore("if (state.canCreate)").contains("אין עדיין רכבים"))
+        val admin = empty.substringAfter("if (state.canCreate)").substringBefore("} else {")
+        assertTrue(admin.contains("הוסיפו את הרכב הראשון של המשפחה\\nכדי להתחיל לנהל אותו כאן"))
+        assertTrue(admin.contains("זמין למנהל המשפחה בלבד"))
+        assertTrue(admin.contains("OutlinedButton(onClick = model::add"))
+    }
+    @Test fun vehiclesPolishPreservesAdminAndUsesNonScrollableFiveOptionRow() {
+        val ui = File("src/main/java/il/fca/companion/ui/VehiclesScreen.kt").readText()
+        val empty = ui.substringAfter("state.loaded && state.rows.isEmpty()").substringBefore("else -> LazyColumn")
+        val nonAdmin = empty.substringAfter("} else {")
+        assertTrue(nonAdmin.contains("כרגע אין רכבים במשפחה\\nרק מנהל המשפחה יכול להוסיף רכבים"))
+        assertFalse(nonAdmin.contains("Button(")); assertFalse(nonAdmin.contains("model::add"))
+        val addTitle = ui.substringAfter("} else Row").substringBefore("private fun VehicleCard")
+        assertTrue(addTitle.contains("R.drawable.single_car_icon"))
+        val add = File("src/main/java/il/fca/companion/ui/AddVehicleScreen.kt").readText()
+        val categories = add.substringAfter("Text(\"סוג רכב\"").substringBefore("VehicleField(\"יצרן\"")
+        assertTrue(categories.contains("VehicleCategory.entries.forEach"))
+        assertTrue(categories.contains("Modifier.weight(1f)"))
+        assertFalse(categories.contains("horizontalScroll"))
+        assertEquals(5, VehicleCategory.entries.size)
+        assertTrue(add.contains("showManufacturerSuggestions(draft.manufacturerQuery, draft.manufacturer)"))
+    }
+    @Test fun manufacturerSuggestionsRequireTypingAndHideAfterSelectionOrClearing() = runBlocking {
+        val api = Gateway(); val model = vm(api, this)
+        fun visible() = showManufacturerSuggestions(model.state.draft.manufacturerQuery, model.state.draft.manufacturer)
+        try {
+            model.start(); settle(); model.add(); settle(); assertFalse(visible())
+            model.queryManufacturer("יו"); assertTrue(visible()); assertEquals(listOf(maker), model.state.matchingManufacturers)
+            model.chooseManufacturer(maker); assertFalse(visible()); assertEquals(maker, model.state.draft.manufacturer)
+            model.queryManufacturer("missing"); assertTrue(visible()); assertTrue(model.state.matchingManufacturers.isEmpty())
+            model.queryManufacturer(""); assertFalse(visible())
+            model.queryManufacturer("  "); assertFalse(visible()); assertEquals(1, api.catalogs)
+        } finally { model.stop() }
+    }
 }
