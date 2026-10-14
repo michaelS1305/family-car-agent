@@ -1,6 +1,7 @@
 """Real PostgreSQL reservation selection, atomic conflicts and fenced Chat replay."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from pathlib import Path
 import os
 import threading
 import unittest
@@ -47,6 +48,10 @@ class MultiCarReservationPostgresTests(unittest.TestCase):
 
     def setUp(self):
         fixtures.AccountDeletionPostgresTests.setUp(self)
+        metadata = (Path(__file__).resolve().parents[2] / 'supabase/manual_migrations/2026101301_vehicle_metadata_and_manufacturers.sql').read_text(encoding='utf-8')
+        for start in ('CREATE TABLE public.vehicle_manufacturers (', 'ALTER TABLE public.vehicles\n'):
+            statement = start + metadata.split(start, 1)[1].split(';', 1)[0] + ';'
+            self.query(statement.replace('public.', self.schema + '.'))
         self.query('''ALTER TABLE reservations ADD COLUMN id serial PRIMARY KEY,
             ADD COLUMN reservation_ref uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE,
             ADD COLUMN vehicle_id integer REFERENCES vehicles ON DELETE RESTRICT,
@@ -107,8 +112,10 @@ class MultiCarReservationPostgresTests(unittest.TestCase):
         specific = self.create(vehicle_ref=vehicle)
         # Retire it so a new omitted selection becomes general.
         self.retire(vehicle)
-        self.assertEqual(self.create()['code'], 'RESERVATION_CONFLICT')
-        self.assertEqual(self.update(specific['reservation_ref'])['vehicle_ref'], str(vehicle))
+        self.assertTrue(self.create()['success'])
+        self.assertEqual(self.update(specific['reservation_ref'])['code'], 'RESERVATION_NOT_FOUND_OR_UNAVAILABLE')
+        self.assertEqual(self.query('SELECT status FROM reservations WHERE reservation_ref=%s',
+                                    (specific['reservation_ref'],)), [('cancelled',)])
 
     def test_different_vehicles_overlap_same_vehicle_does_not_and_general_update(self):
         a, b = self.vehicle(), self.vehicle()
@@ -213,7 +220,7 @@ class MultiCarReservationPostgresTests(unittest.TestCase):
         self.assertEqual(future.result(8)['code'], 'VEHICLE_NOT_FOUND_OR_UNAVAILABLE')
         self.assertEqual(self.update(original['reservation_ref'])['vehicle_ref'], str(a))
 
-    def test_create_wins_before_retirement_reservation_is_preserved(self):
+    def test_create_wins_before_retirement_reservation_is_cancelled(self):
         a = self.vehicle()
         with ThreadPoolExecutor(1) as executor, self.connection() as conn:
             with conn.transaction():
@@ -221,7 +228,9 @@ class MultiCarReservationPostgresTests(unittest.TestCase):
                 booked = self.database._create_reservation_on_connection(conn, self.creator[1], self.START, self.END, self.family, vehicle_ref=a)
                 future = executor.submit(self.retire, a)
         self.assertIsNotNone(future.result(8).retired_at)
-        self.assertEqual(self.update(booked['reservation_ref'])['vehicle_ref'], str(a))
+        self.assertEqual(self.update(booked['reservation_ref'])['code'], 'RESERVATION_NOT_FOUND_OR_UNAVAILABLE')
+        self.assertEqual(self.query('SELECT status FROM reservations WHERE reservation_ref=%s',
+                                    (booked['reservation_ref'],)), [('cancelled',)])
 
     def chat_action(self, arguments, action='create_reservation', request=None):
         if request is None:

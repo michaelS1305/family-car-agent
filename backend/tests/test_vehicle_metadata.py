@@ -229,7 +229,8 @@ class VehicleMetadataTests(unittest.TestCase):
         self.assertEqual(default[0]['current_driver'], 'Driver')
         self.assertIsNotNone(default[0]['started_at'])
         path = '/api/vehicles/' + str(cars[1].vehicle_ref)
-        self.assertEqual(self.client.get(path).status_code, 404)
+        self.assertEqual(self.client.get(path).status_code, 200)
+        self.assertEqual(self.client.get(path).json(), all_rows[0])
         self.user = self.other
         self.assertEqual(self.client.get('/api/vehicles/' + str(cars[0].vehicle_ref)).status_code, 404)
         self.assertEqual(self.client.get('/api/vehicles/' + str(uuid4())).status_code, 404)

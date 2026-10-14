@@ -52,6 +52,9 @@ class LifecyclePostgresTests(unittest.TestCase):
         for start in ('CREATE TABLE public.vehicle_manufacturers (', 'ALTER TABLE public.vehicles\n'):
             statement = start + metadata.split(start, 1)[1].split(';', 1)[0] + ';'
             self.query(statement.replace('public.', self.schema + '.'))
+        # The shared account-deletion fixture has only reservation ownership.
+        self.query("ALTER TABLE reservations ADD COLUMN status text NOT NULL DEFAULT 'active', "
+                   "ADD COLUMN end_time text, ADD COLUMN vehicle_id integer REFERENCES vehicles(id)")
         self.member = self.person(self.family)
         self.foreign = self.person()
         other_family = self.query("INSERT INTO families(name,family_code,created_by_user_id) VALUES('Other','xyz123',%s) RETURNING id", (self.foreign[1],))[0][0]
@@ -130,21 +133,30 @@ class LifecyclePostgresTests(unittest.TestCase):
         name = ' רכב חדש '
         vehicle = self.call(lifecycle.create_vehicle, {'display_name': name})
         self.assertEqual(vehicle.display_name, name)
-        updated = self.call(lifecycle.update_vehicle, vehicle.vehicle_ref, {'display_name': 'New'}, user=self.peer)
+        payload = dict(display_name='New', category='sedan', manufacturer_id=1, model='Model', license_plate='ABC')
+        self.query("INSERT INTO vehicle_manufacturers(id,name_he) VALUES(1,'Maker')")
+        with self.assertRaises(VehicleIdentityError) as denied:
+            self.call(lifecycle.update_vehicle, vehicle.vehicle_ref, payload, user=self.peer)
+        self.assertEqual(denied.exception.status_code, 403)
+        updated = self.call(lifecycle.update_vehicle, vehicle.vehicle_ref, payload)
         self.assertEqual(updated.vehicle_ref, vehicle.vehicle_ref)
         self.assertEqual(updated.display_name, 'New')
 
     def test_retire_is_idempotent_and_update_cannot_reactivate(self):
         vehicle = self.vehicle()
         before = self.query('SELECT clock_timestamp()')[0][0]
-        retired = self.call(lifecycle.retire_vehicle, vehicle.vehicle_ref, user=self.peer)
+        with self.assertRaises(VehicleIdentityError) as denied:
+            self.call(lifecycle.retire_vehicle, vehicle.vehicle_ref, user=self.peer)
+        self.assertEqual(denied.exception.status_code, 403)
+        retired = self.call(lifecycle.retire_vehicle, vehicle.vehicle_ref)
         self.assertGreaterEqual(retired.retired_at, before)
         self.assertEqual(self.call(lifecycle.retire_vehicle, vehicle.vehicle_ref), retired)
         self.assertEqual(self.call(lifecycle.list_vehicles), [retired])
-        renamed = self.call(lifecycle.update_vehicle, vehicle.vehicle_ref, {'display_name': 'History'})
-        self.assertEqual(renamed.retired_at, retired.retired_at)
+        with self.assertRaises(VehicleIdentityError) as denied:
+            self.call(lifecycle.update_vehicle, vehicle.vehicle_ref, {'display_name': 'History'})
+        self.assertEqual(denied.exception.code, 'VEHICLE_RETIRED')
         with self.assertRaises(ValidationError):
-            self.call(lifecycle.update_vehicle, vehicle.vehicle_ref, {'display_name': 'Hack', 'retired_at': None})
+            lifecycle.VehicleUpdateMetadata.model_validate({'display_name': 'Hack', 'retired_at': None})
         device = self.device()
         result = self.call(admission.admit_native_event, self.event(vehicle, device))
         self.assertEqual((result.kind, result.admission_outcome), ('terminal', 'vehicle_retired'))

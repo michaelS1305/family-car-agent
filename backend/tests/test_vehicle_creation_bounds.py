@@ -61,7 +61,9 @@ class CreationPostgresTests(unittest.TestCase):
         self.assertEqual(self.create(key), first)
         self.expect('CREATION_IDEMPOTENCY_CONFLICT', lambda: self.create(key, 'Different'))
         self.expect('CREATION_IDEMPOTENCY_CONFLICT', lambda: self.create(key, user=self.peer))
-        self.call(lifecycle.update_vehicle, first.vehicle_ref, {'display_name': 'Renamed'})
+        self.query("INSERT INTO vehicle_manufacturers(id,name_he) VALUES(1,'Maker')")
+        self.call(lifecycle.update_vehicle, first.vehicle_ref, dict(
+            display_name='Renamed', category='sedan', manufacturer_id=1, model='Model', license_plate='ABC'))
         retired = self.call(lifecycle.retire_vehicle, first.vehicle_ref)
         self.assertEqual(self.create(key), retired)
         self.create()

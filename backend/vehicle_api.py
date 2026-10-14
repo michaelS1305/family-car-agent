@@ -10,6 +10,7 @@ from vehicle_identity import VehicleDetailsView, VehicleIdentityError
 from vehicle_admission import _bounded_connection
 from vehicle_work import AdmissionDeadlineExceeded
 import vehicle_lifecycle as lifecycle
+import vehicle_maintenance as maintenance
 
 router = APIRouter(prefix='/api/vehicles', tags=['vehicles'])
 
@@ -34,10 +35,8 @@ def _read(conn, current_user, vehicle_ref=None, *, include_retired=False):
     with _bounded_connection(conn) as bounded, lifecycle._scope(bounded, current_user):
         vehicles = (lifecycle.list_vehicles(bounded, current_user) if vehicle_ref is None
                     else [lifecycle.get_vehicle(bounded, current_user, vehicle_ref)])
-        if vehicle_ref is not None and vehicles[0].retired_at is not None:
-            raise VehicleIdentityError('VEHICLE_NOT_FOUND_OR_UNAVAILABLE', 'Vehicle unavailable')
         active = [vehicle for vehicle in vehicles if vehicle.retired_at is None]
-        selected = vehicles if include_retired else active
+        selected = vehicles if include_retired or vehicle_ref is not None else active
         rows = bounded.execute(
             'SELECT v.vehicle_ref,u.name,s.started_at FROM vehicles v '
             'JOIN vehicle_driver_sessions s ON s.vehicle_id=v.id AND s.ended_at IS NULL '
@@ -87,4 +86,44 @@ def add_vehicle(request: CreateVehicleRequest, response: Response,
         with pool.connection() as conn:
             return lifecycle.create_vehicle(conn, current_user, request.model_dump(exclude={'request_id'}, exclude_none=True),
                                             request_id=request.request_id)
+    return _call(run)
+
+
+@router.put('/{vehicle_ref}', response_model=VehicleDetailsView)
+def edit_vehicle(vehicle_ref: UUID, request: lifecycle.VehicleUpdateMetadata, response: Response,
+                 current_user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):
+    response.headers['Cache-Control'] = 'no-store'
+    def run():
+        with pool.connection() as conn:
+            return lifecycle.update_vehicle(conn, current_user, vehicle_ref, request)
+    return _call(run)
+
+
+@router.post('/{vehicle_ref}/retire', response_model=VehicleDetailsView)
+def retire_vehicle(vehicle_ref: UUID, response: Response,
+                   current_user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):
+    response.headers['Cache-Control'] = 'no-store'
+    def run():
+        with pool.connection() as conn:
+            return lifecycle.retire_vehicle(conn, current_user, vehicle_ref)
+    return _call(run)
+
+
+@router.get('/{vehicle_ref}/maintenance', response_model=list[maintenance.MaintenanceView])
+def list_maintenance(vehicle_ref: UUID, response: Response,
+                     current_user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):
+    response.headers['Cache-Control'] = 'no-store'
+    def run():
+        with pool.connection() as conn:
+            return maintenance.list_items(conn, current_user, vehicle_ref)
+    return _call(run)
+
+
+@router.post('/{vehicle_ref}/maintenance', response_model=maintenance.MaintenanceView)
+def add_maintenance(vehicle_ref: UUID, request: maintenance.MaintenanceRequest, response: Response,
+                    current_user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):
+    response.headers['Cache-Control'] = 'no-store'
+    def run():
+        with pool.connection() as conn:
+            return maintenance.create_item(conn, current_user, vehicle_ref, request)
     return _call(run)

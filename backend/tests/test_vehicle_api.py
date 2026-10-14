@@ -138,8 +138,9 @@ class VehicleApiPostgresTests(unittest.TestCase):
         self.call(api.lifecycle.retire_vehicle, first.vehicle_ref)
         with self.connection() as conn:
             self.assertEqual([v.vehicle_ref for v in api._read(conn, self.current)], [second.vehicle_ref])
-            with self.assertRaises(VehicleIdentityError):
-                api._read(conn, self.current, first.vehicle_ref)
+            retired = api._read(conn, self.current, first.vehicle_ref)[0]
+            self.assertIsNotNone(retired.retired_at)
+            self.assertFalse(retired.in_use)
 
     def test_status_uses_real_sessions_and_exposes_no_internal_ids(self):
         import vehicle_admission

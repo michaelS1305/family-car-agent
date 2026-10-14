@@ -21,6 +21,7 @@ from deletion_gate import require_auth
 from vehicle_admission import CAR_TRANSITION_LOCK_NAMESPACE, _bounded_connection
 from vehicle_identity import DeviceView, VehicleDetailsView, VehicleIdentityError, _ref
 import vehicle_creation_policy as policy
+from reservation_rules import local_now as reservation_now
 
 
 class VehicleMetadata(BaseModel):
@@ -53,6 +54,25 @@ class VehicleCreationMetadata(VehicleMetadata):
 class DeviceRegistration(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     platform: Literal['android', 'ios']
+
+
+class VehicleUpdateMetadata(VehicleMetadata):
+    category: Literal['hatchback', 'sedan', 'crossover', 'minivan', 'suv']
+    manufacturer_id: int = Field(strict=True, ge=1, le=2147483647)
+    model: StrictStr
+    license_plate: StrictStr
+
+
+def _require_creator(conn, current_user):
+    creator = conn.execute('SELECT created_by_user_id FROM families WHERE id=%s',
+                           (current_user.family_id,)).fetchone()
+    if not creator or creator[0] != current_user.user_id:
+        raise VehicleIdentityError('VEHICLE_MANAGEMENT_FORBIDDEN', 'Only the family creator can manage vehicles', 403)
+
+
+def _require_active(row):
+    if row[3] is not None:
+        raise VehicleIdentityError('VEHICLE_RETIRED', 'Vehicle is retired', 409)
 
 
 @contextmanager
@@ -194,26 +214,39 @@ def create_vehicle(conn, current_user, request: VehicleCreationMetadata, *, requ
         return _vehicle_details(conn, current_user, row[0])
 
 
-def update_vehicle(conn, current_user, vehicle_ref, request: VehicleMetadata):
-    """Rename only; retired history may be renamed, never reactivated."""
-    with _scope(conn, current_user):
+def update_vehicle(conn, current_user, vehicle_ref, request: VehicleUpdateMetadata):
+    """Full metadata replacement; creator-only and never reactivates a vehicle."""
+    with _creation_scope(conn, current_user) as conn:
         row = _vehicle(conn, current_user, vehicle_ref)
-        name = _name(conn, request)
+        _require_creator(conn, current_user)
+        _require_active(row)
+        request = VehicleUpdateMetadata.model_validate(request)
+        name = _name(conn, {'display_name': request.display_name})
+        for field, value in (('MODEL', request.model), ('LICENSE_PLATE', request.license_plate)):
+            if not conn.execute("SELECT %s::text !~ '^[[:space:]]*$'", (value,)).fetchone()[0]:
+                raise VehicleIdentityError('INVALID_VEHICLE_' + field, 'Vehicle field must not be blank', 422)
+        if not conn.execute('SELECT id FROM vehicle_manufacturers WHERE id=%s AND is_active FOR SHARE',
+                            (request.manufacturer_id,)).fetchone():
+            raise VehicleIdentityError('MANUFACTURER_NOT_AVAILABLE', 'Manufacturer unavailable', 422)
         updated = conn.execute(
-            'UPDATE vehicles SET display_name=%s WHERE id=%s RETURNING id,vehicle_ref,display_name,retired_at',
-            (name, row[0]),
+            'UPDATE vehicles SET display_name=%s,category=%s,manufacturer_id=%s,model=%s,license_plate=%s '
+            'WHERE id=%s RETURNING id,vehicle_ref,display_name,retired_at',
+            (name, request.category, request.manufacturer_id, request.model, request.license_plate, row[0]),
         ).fetchone()
         return _vehicle_details(conn, current_user, updated[0])
 
 
 def retire_vehicle(conn, current_user, vehicle_ref):
-    """Idempotent soft retirement; preserves original timestamp and all history.
+    """Atomic retirement and cancellation of active, not-yet-ended reservations.
 
-    Reservations are deliberately untouched. Slice 5B must define booking and
-    existing-reservation policy for retired vehicles before public activation.
+    The shared family car lock serializes this with reservation create/update,
+    event admission and deletion. Reservation dates use Jerusalem wall time.
     """
-    with _scope(conn, current_user):
+    with _creation_scope(conn, current_user) as conn:
         row = _vehicle(conn, current_user, vehicle_ref)
+        _require_creator(conn, current_user)
+        if row[3] is not None:
+            return _vehicle_details(conn, current_user, row[0])
         if conn.execute('SELECT 1 FROM vehicle_driver_sessions WHERE vehicle_id=%s AND ended_at IS NULL LIMIT 1',
                         (row[0],)).fetchone():
             raise VehicleIdentityError('VEHICLE_IN_USE', 'Vehicle is currently in use', 409)
@@ -222,6 +255,9 @@ def retire_vehicle(conn, current_user, vehicle_ref):
                 'UPDATE vehicles SET retired_at=clock_timestamp() WHERE id=%s '
                 'RETURNING id,vehicle_ref,display_name,retired_at', (row[0],),
             ).fetchone()
+            conn.execute(
+                "UPDATE reservations SET status='cancelled' WHERE vehicle_id=%s AND status='active' "
+                'AND end_time::timestamp > %s::timestamp', (row[0], reservation_now()))
         return _vehicle_details(conn, current_user, row[0])
 
 
