@@ -127,3 +127,25 @@ def add_maintenance(vehicle_ref: UUID, request: maintenance.MaintenanceRequest, 
         with pool.connection() as conn:
             return maintenance.create_item(conn, current_user, vehicle_ref, request)
     return _call(run)
+
+
+@router.put('/{vehicle_ref}/maintenance/{maintenance_ref}', response_model=maintenance.MaintenanceView)
+def edit_maintenance(vehicle_ref: UUID, maintenance_ref: UUID, request: maintenance.MaintenanceRequest,
+                     response: Response, current_user: CurrentUser = Depends(get_current_user),
+                     pool=Depends(vehicle_pool)):
+    response.headers['Cache-Control'] = 'no-store'
+    def run():
+        with pool.connection() as conn:
+            return maintenance.update_item(conn, current_user, vehicle_ref, maintenance_ref, request)
+    return _call(run)
+
+
+@router.delete('/{vehicle_ref}/maintenance/{maintenance_ref}', status_code=204)
+def delete_maintenance(vehicle_ref: UUID, maintenance_ref: UUID, response: Response,
+                       current_user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):
+    response.headers['Cache-Control'] = 'no-store'
+    def run():
+        with pool.connection() as conn:
+            maintenance.delete_item(conn, current_user, vehicle_ref, maintenance_ref)
+    _call(run)
+    return Response(status_code=204, headers={'Cache-Control': 'no-store'})

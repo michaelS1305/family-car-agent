@@ -60,6 +60,23 @@ class ManagementConnection(MemoryConnection):
             vehicle, description, scheduled, creator = params
             one = (uuid4(), description, scheduled, self.clock)
             self.maintenance.append((vehicle, len(self.maintenance) + 1, one, creator))
+        elif sql.startswith('UPDATE vehicle_maintenance SET description='):
+            assert sql == ('UPDATE vehicle_maintenance SET description=%s,scheduled_date=%s '
+                           'WHERE vehicle_id=%s AND maintenance_ref=%s '
+                           'RETURNING maintenance_ref,description,scheduled_date,created_at'), sql
+            description, scheduled, vehicle, ref = params
+            for i, r in enumerate(self.maintenance):
+                if r[0] == vehicle and r[2][0] == ref:
+                    one = (ref, description, scheduled, r[2][3])
+                    self.maintenance[i] = (r[0], r[1], one, r[3])
+                    break
+        elif sql.startswith('DELETE FROM vehicle_maintenance '):
+            assert sql == 'DELETE FROM vehicle_maintenance WHERE vehicle_id=%s AND maintenance_ref=%s RETURNING maintenance_ref', sql
+            for i, r in enumerate(self.maintenance):
+                if r[0] == params[0] and r[2][0] == params[1]:
+                    one = (r[2][0],)
+                    self.maintenance.pop(i)
+                    break
         elif sql.startswith('SELECT maintenance_ref,description,scheduled_date,created_at FROM vehicle_maintenance '):
             assert sql.endswith('WHERE vehicle_id=%s ORDER BY scheduled_date ASC,id ASC'), sql
             many = [r[2] for r in sorted(self.maintenance, key=lambda r: (r[2][2], r[1])) if r[0] == params[0]]
@@ -225,6 +242,59 @@ class VehicleManagementTests(unittest.TestCase):
                         {**valid, 'vehicle_id': 99}, {**valid, 'completed': True}):
             self.assertEqual(self.client.post(self.path + '/maintenance', json=payload).status_code, 422)
         self.assertEqual(self.conn.maintenance, [])
+
+    def maintenance_item(self):
+        body = {'description': 'Oil', 'scheduled_date': '2020-01-01'}
+        item = self.client.post(self.path + '/maintenance', json=body).json()
+        return self.path + '/maintenance/' + item['maintenance_ref'], item
+
+    def test_maintenance_edit_delete_public_identity_and_order(self):
+        path, original = self.maintenance_item()
+        updated = self.client.put(path, json={'description': 'Service', 'scheduled_date': '2019-01-01'})
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.headers['cache-control'], 'no-store')
+        self.assertEqual(updated.json(), {**original, 'description': 'Service', 'scheduled_date': '2019-01-01'})
+        self.assertEqual(self.client.get(self.path + '/maintenance').json(), [updated.json()])
+        deleted = self.client.delete(path)
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(deleted.content, b'')
+        self.assertEqual(self.client.get(self.path + '/maintenance').json(), [])
+        self.assertEqual(self.client.delete(path).status_code, 404)
+
+    def test_maintenance_mutation_authorization_retired_and_scope(self):
+        path, item = self.maintenance_item()
+        body = {'description': 'Updated', 'scheduled_date': '2026-01-01'}
+        for user, expected in ((self.peer, 403), (self.other, 404)):
+            self.user = user
+            self.assertEqual(self.client.put(path, json=body).status_code, expected)
+            self.assertEqual(self.client.delete(path).status_code, expected)
+        self.user = self.owner
+        second = lifecycle.create_vehicle(self.conn, self.owner, {**self.payload, 'display_name': 'Other'}, request_id=uuid4())
+        wrong = '/api/vehicles/' + str(second.vehicle_ref) + '/maintenance/' + item['maintenance_ref']
+        for p in (wrong, self.path + '/maintenance/' + str(uuid4())):
+            self.assertEqual(self.client.put(p, json=body).status_code, 404)
+            self.assertEqual(self.client.delete(p).status_code, 404)
+        self.conn.creators[11] = None
+        self.assertEqual(self.client.put(path, json=body).status_code, 403)
+        self.assertEqual(self.client.delete(path).status_code, 403)
+        self.conn.creators[11] = self.owner.user_id
+        self.client.post(self.path + '/retire')
+        self.assertEqual(self.client.put(path, json=body).status_code, 409)
+        self.assertEqual(self.client.delete(path).status_code, 409)
+        self.assertEqual(self.client.get(self.path + '/maintenance').json(), [item])
+
+    def test_maintenance_edit_invalid_and_unauthenticated(self):
+        path, item = self.maintenance_item()
+        for body in ({}, {'description': ' ', 'scheduled_date': '2026-01-01'},
+                     {'description': 'x', 'scheduled_date': '2026-01-01T00:00:00'},
+                     {'description': 'x', 'scheduled_date': '2026-01-01', 'vehicle_id': 5}):
+            self.assertEqual(self.client.put(path, json=body).status_code, 422)
+        self.assertEqual(self.client.get(self.path + '/maintenance').json(), [item])
+        def denied():
+            raise HTTPException(401)
+        self.app.dependency_overrides[api.get_current_user] = denied
+        self.assertEqual(self.client.put(path, json={'description': 'x', 'scheduled_date': '2026-01-01'}).status_code, 401)
+        self.assertEqual(self.client.delete(path).status_code, 401)
 
     def test_auth_required(self):
         def denied():

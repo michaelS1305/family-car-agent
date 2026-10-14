@@ -59,3 +59,33 @@ def create_item(conn, current_user, vehicle_ref, request):
             'INSERT INTO vehicle_maintenance(vehicle_id,description,scheduled_date,created_by_user_id) '
             'VALUES(%s,%s,%s,%s) RETURNING maintenance_ref,description,scheduled_date,created_at',
             (vehicle[0], request.description, request.scheduled_date, current_user.user_id)).fetchone())
+
+
+def update_item(conn, current_user, vehicle_ref, maintenance_ref, request):
+    with lifecycle._creation_scope(conn, current_user) as conn:
+        vehicle = lifecycle._vehicle(conn, current_user, vehicle_ref)
+        lifecycle._require_creator(conn, current_user)
+        lifecycle._require_active(vehicle)
+        request = MaintenanceRequest.model_validate(request)
+        if not conn.execute("SELECT %s::text !~ '^[[:space:]]*$'", (request.description,)).fetchone()[0]:
+            raise VehicleIdentityError('INVALID_MAINTENANCE_DESCRIPTION', 'Description must not be blank', 422)
+        row = conn.execute(
+            'UPDATE vehicle_maintenance SET description=%s,scheduled_date=%s '
+            'WHERE vehicle_id=%s AND maintenance_ref=%s '
+            'RETURNING maintenance_ref,description,scheduled_date,created_at',
+            (request.description, request.scheduled_date, vehicle[0], maintenance_ref)).fetchone()
+        if row is None:
+            raise VehicleIdentityError('MAINTENANCE_NOT_FOUND', 'Maintenance item not found', 404)
+        return _view(row)
+
+
+def delete_item(conn, current_user, vehicle_ref, maintenance_ref):
+    with lifecycle._creation_scope(conn, current_user) as conn:
+        vehicle = lifecycle._vehicle(conn, current_user, vehicle_ref)
+        lifecycle._require_creator(conn, current_user)
+        lifecycle._require_active(vehicle)
+        row = conn.execute(
+            'DELETE FROM vehicle_maintenance WHERE vehicle_id=%s AND maintenance_ref=%s RETURNING maintenance_ref',
+            (vehicle[0], maintenance_ref)).fetchone()
+        if row is None:
+            raise VehicleIdentityError('MAINTENANCE_NOT_FOUND', 'Maintenance item not found', 404)
