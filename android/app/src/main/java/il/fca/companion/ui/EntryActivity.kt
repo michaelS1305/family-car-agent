@@ -14,6 +14,7 @@ import il.fca.companion.delivery.DeliveryWorker
 import il.fca.companion.net.ChatApi
 import il.fca.companion.net.HistoryApi
 import il.fca.companion.net.VehiclesApi
+import il.fca.companion.net.FamilyApi
 import il.fca.companion.net.RealtimeBroadcast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -104,6 +105,7 @@ class EntryActivity : ComponentActivity() {
     private lateinit var chat: ChatViewModel
     private lateinit var history: HistoryViewModel
     private lateinit var vehicles: VehiclesViewModel
+    private lateinit var family: FamilyViewModel
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel = ViewModelProvider(this)[EntryViewModel::class.java]
@@ -137,11 +139,21 @@ class EntryActivity : ComponentActivity() {
                         VehiclesIdentity(owner, family) else null
                 }) as T
         })[VehiclesViewModel::class.java]
+        family = ViewModelProvider(this, object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
+                FamilyViewModel(FamilyApi(app.api), {
+                    val owner = app.store.activeOwner()?.takeIf { it == app.auth.owner() }
+                    val familyId = entryModel.authenticatedFamilyId
+                    if (owner != null && familyId != null && entryModel.screen == EntryScreen.AUTHENTICATED_APP)
+                        FamilyIdentity(owner, familyId) else null
+                }) as T
+        })[FamilyViewModel::class.java]
         chat.activateOwner()
         if (intent.data != null) callback(intent)
         else if (savedInstanceState == null || viewModel.model.screen == EntryScreen.INTRO) viewModel.openExistingSession()
         setContent {
-            EntryUi(viewModel.model, chat, history, vehicles,
+            EntryUi(viewModel.model, chat, history, vehicles, family,
                 login = { viewModel.beginLogin { startActivity(Intent(Intent.ACTION_VIEW, it)) } },
                 next = viewModel::next, back = viewModel::back, changeAddress = viewModel::changeAddress,
                 retryBootstrap = viewModel::openExistingSession, enteredApp = viewModel::enteredApp,

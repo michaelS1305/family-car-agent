@@ -4,6 +4,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import il.fca.companion.net.OnboardingFailure
+import il.fca.companion.net.AddressVerification
+import il.fca.companion.net.ResolvedAddress
 import org.json.JSONObject
 
 enum class EntryScreen { INTRO, LOGIN, ONBOARDING, SUCCESS, BOOTSTRAP, AUTHENTICATED_APP }
@@ -34,7 +36,7 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
     var consent by mutableStateOf(false)
     var resolvedAddress by mutableStateOf(""); private set
     var createdCode by mutableStateOf(""); private set
-    private var resolution: JSONObject? = null
+    private var resolution: ResolvedAddress? = null
     private var completed = false
     val totalSteps get() = if (route == LoginRoute.CREATE_FAMILY) 4 else 5
 
@@ -139,17 +141,16 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
             when (step) {
                 1 -> step = 2
                 2 -> {
-                    val result = gateway.request("/api/onboarding/create-family/address", "POST",
-                        JSONObject().put("home_address", address))
-                    check(result.getString("resolution_token").isNotBlank())
-                    result.getString("normalized_address"); result.getDouble("latitude"); result.getDouble("longitude")
-                    resolvedAddress = result.getString("display_address"); resolution = result; step = 3
+                    val result = AddressVerification.resolve(address, creatingFamily = true) { path, body ->
+                        gateway.request(path, "POST", body)
+                    }
+                    resolvedAddress = result.display; resolution = result; step = 3
                 }
                 3 -> step = 4
                 4 -> {
                     gateway.request("/api/onboarding/create-family", "POST", JSONObject()
                         .put("family_name", familyName).put("user_name", userName)
-                        .put("address_resolution_token", checkNotNull(resolution).getString("resolution_token")))
+                        .put("address_resolution_token", checkNotNull(resolution).token))
                     completed = true; finishAccount()
                 }
             }

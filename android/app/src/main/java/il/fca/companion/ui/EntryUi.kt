@@ -34,7 +34,7 @@ private const val ADDRESS_HELP = "יש להזין את הכתובת כפי שה�
 internal const val DRIVING_CONSENT = "אני עומד/ת בדרישות החוק החלות על נהג פעיל ברכב זה. בישראל, ההנחה למוצר היא גיל מינימלי של 16 שנים ו־9 חודשים לרישיון B. אם אני קטין/ה, השימוש הוא באחריות ובאישור הורה או אפוטרופוס. ידוע לי שהאפליקציה אינה בודקת תוקף רישיון או כשירות חוקית לנהיגה."
 
 @Composable
-internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: HistoryViewModel, vehicles: VehiclesViewModel,
+internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: HistoryViewModel, vehicles: VehiclesViewModel, family: FamilyViewModel,
             login: () -> Unit, next: () -> Unit,
             back: () -> Unit, changeAddress: () -> Unit, retryBootstrap: () -> Unit, enteredApp: () -> Unit,
             logout: () -> Unit) {
@@ -50,7 +50,7 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                     LaunchedEffect(chat.ownerGeneration) { chat.enter() }
                     key(chat.ownerGeneration) {
                         AuthenticatedAppShell(chat, model.authenticatedName, logout, model.busy, model.error,
-                            history, model.authenticatedFamilyId, vehicles)
+                            history, model.authenticatedFamilyId, vehicles, family)
                     }
                 } else if (model.screen == EntryScreen.BOOTSTRAP) {
                     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
