@@ -291,6 +291,8 @@ def load_main_module(environment=None):
             {
                 "account_deletion_api": stub_module("account_deletion_api", router=Mock(), deletion_lifespan=Mock()),
                 "vehicle_reference_api": stub_module("vehicle_reference_api", router=Mock()),
+                "vehicle_api": stub_module("vehicle_api", router=Mock()),
+                "device_api": stub_module("device_api", router=Mock()),
                 "dotenv": dotenv_stub,
                 "fastapi": fastapi_stub,
                 "fastapi.middleware.cors": cors_stub,
@@ -569,8 +571,19 @@ class ReservationCenterRouteTests(unittest.TestCase):
         parameters = inspect.signature(main.get_reservations).parameters
 
         self.assertIs(parameters["current_user"].default.dependency, auth_stub.get_current_user)
-        reservation_stub.list_reservations.assert_called_once_with(current_user, "future", "all")
+        reservation_stub.list_reservations.assert_called_once_with(current_user, "future", "all",
+            range_start=None, range_end=None, vehicle_ref=None, member_ref=None)
         self.assertEqual(result, [])
+
+    def test_reservation_route_preserves_omitted_time_and_public_filters(self):
+        current_user = CurrentUser(user_id=17, name='User', family_id=42)
+        main.get_reservations(current_user=current_user)
+        self.assertIsNone(reservation_stub.list_reservations.call_args.args[1])
+        main.get_reservations(current_user=current_user, range_start='start', range_end='end',
+                              vehicle_ref='vehicle', member_ref='member')
+        self.assertEqual(reservation_stub.list_reservations.call_args.kwargs,
+                         dict(range_start='start', range_end='end', vehicle_ref='vehicle', member_ref='member'))
+        self.assertNotIn('family_id', inspect.signature(main.get_reservations).parameters)
 
     def test_create_cannot_receive_browser_identity(self):
         current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)

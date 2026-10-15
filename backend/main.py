@@ -304,12 +304,17 @@ def unregister_push(
 
 @app.get("/api/reservations", response_model=list[ReservationResponse], status_code=200)
 def get_reservations(
-    time: str = "future",
+    time: str | None = None,
     scope: str = "all",
     current_user: CurrentUser = Depends(get_current_user),
+    range_start: str | None = None,
+    range_end: str | None = None,
+    vehicle_ref: str | None = None,
+    member_ref: str | None = None,
 ):
     try:
-        return list_reservations(current_user, time, scope)
+        return list_reservations(current_user, time, scope, range_start=range_start,
+                                 range_end=range_end, vehicle_ref=vehicle_ref, member_ref=member_ref)
     except ReservationCenterError as error:
         _raise_reservation_center_error(error)
 

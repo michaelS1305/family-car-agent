@@ -44,6 +44,10 @@ class ReservationServiceTests(unittest.TestCase):
             ("מיכאל", "2026-09-08T10:00:00", "2026-09-08T11:00:00", True, '00000000-0000-0000-0000-000000000001', None, None),
             ("נועה", "2026-09-09T10:00:00", "2026-09-09T11:00:00", False, '00000000-0000-0000-0000-000000000002', None, None),
         ]
+        database_stub.list_family_reservations.return_value = [
+            (*row, '00000000-0000-0000-0000-000000000003', None)
+            for row in database_stub.list_family_reservations.return_value
+        ]
         database_stub.create_current_user_reservation.return_value = {"success": True}
         database_stub.update_current_user_reservation.return_value = {
             "success": True, "start_time": "2026-09-08T12:00:00", "end_time": "2026-09-08T13:00:00"
@@ -191,6 +195,82 @@ class ReservationServiceTests(unittest.TestCase):
             '2026-09-08T12:00:00', '2026-09-08T13:00:00', reservation_ref=ref, vehicle_ref=None)
         self.assertEqual(database_stub.update_current_user_reservation.call_args.kwargs,
                          {'reservation_ref': ref, 'vehicle_ref': None})
+
+    def test_bounded_normalization_and_combined_filters(self):
+        ref = '00000000-0000-0000-0000-000000000003'
+        result = service.list_reservations(self.user(), range_start='2026-09-01T21:00:00Z',
+            range_end='2026-09-03T00:00:00+03:00', vehicle_ref=ref, member_ref=ref)
+        self.assertEqual(database_stub.list_family_reservations.call_args.kwargs, {
+            'range_start': '2026-09-02T00:00:00', 'range_end': '2026-09-03T00:00:00',
+            'vehicle_ref': ref, 'member_ref': ref})
+        self.assertEqual(result[0]['member_ref'], ref)
+        self.assertIsNone(result[0]['vehicle_category'])
+
+    def test_invalid_bounded_filters_and_ranges(self):
+        bounds = dict(range_start='2026-09-01T00:00:00', range_end='2026-09-02T00:00:00')
+        cases = [
+            ({'range_start': bounds['range_start']}, 'RANGE'),
+            ({'range_end': bounds['range_end']}, 'RANGE'),
+            ({**bounds, 'range_start': ''}, 'RANGE'),
+            ({**bounds, 'range_end': 'bad'}, 'RANGE'),
+            ({**bounds, 'range_end': bounds['range_start']}, 'RANGE'),
+            ({**bounds, 'range_end': '2026-08-31T00:00:00'}, 'RANGE'),
+            ({**bounds, 'range_end': '2026-10-13T00:00:01'}, 'RANGE'),
+            ({**bounds, 'time_filter': 'future'}, 'FILTER'),
+            ({**bounds, 'scope': ''}, 'FILTER'),
+            ({'time_filter': ''}, 'FILTER'),
+            ({'vehicle_ref': 'bad'}, 'FILTER'),
+            ({'member_ref': ''}, 'FILTER'),
+            ({**bounds, 'vehicle_ref': ''}, 'FILTER'),
+            ({**bounds, 'member_ref': 'bad'}, 'FILTER'),
+            ({**bounds, 'member_ref': '00000000-0000-0000-0000-000000000003', 'scope': 'mine'}, 'FILTER'),
+        ]
+        for kwargs, suffix in cases:
+            with self.subTest(kwargs=kwargs), self.assertRaises(service.ReservationCenterError) as caught:
+                service.list_reservations(self.user(), **kwargs)
+            self.assertEqual(caught.exception.code, 'INVALID_RESERVATION_' + suffix)
+            self.assertEqual(caught.exception.status_code, 422)
+        database_stub.list_family_reservations.assert_not_called()
+
+    def test_42_local_days_across_dst_and_mine(self):
+        service.list_reservations(self.user(), scope='mine',
+            range_start='2026-10-01T00:00:00+03:00', range_end='2026-11-12T00:00:00+02:00')
+        self.assertEqual(database_stub.list_family_reservations.call_args.args[3], 'mine')
+        self.assertEqual(database_stub.list_family_reservations.call_args.kwargs,
+                         {'range_start': '2026-10-01T00:00:00', 'range_end': '2026-11-12T00:00:00'})
+
+    def test_unavailable_filter_is_safe_404_and_empty_results_are_not_errors(self):
+        database_stub.list_family_reservations.return_value = None
+        with self.assertRaises(service.ReservationCenterError) as caught:
+            service.list_reservations(self.user(), range_start='2026-09-01', range_end='2026-09-02',
+                                     vehicle_ref='00000000-0000-0000-0000-000000000003')
+        self.assertEqual(caught.exception.code, 'RESERVATION_FILTER_NOT_FOUND_OR_UNAVAILABLE')
+        self.assertEqual(caught.exception.status_code, 404)
+        self.assertNotIn('00000000', caught.exception.message)
+        database_stub.list_family_reservations.return_value = []
+        self.assertEqual(service.list_reservations(self.user()), [])
+
+    def test_create_and_edit_forward_public_enrichment(self):
+        metadata = dict(member_ref='00000000-0000-0000-0000-000000000003', vehicle_category='sedan')
+        database_stub.create_current_user_reservation.return_value.update(metadata)
+        database_stub.update_current_user_reservation.return_value.update(metadata)
+        created = service.create_reservation_for_current_user(self.user(), '2026-09-08T10:00:00', '2026-09-08T11:00:00')
+        edited = service.update_reservation_for_current_user(self.user(), None, None,
+            '2026-09-08T12:00:00', '2026-09-08T13:00:00', reservation_ref='opaque')
+        for result in (created, edited):
+            for key, value in metadata.items():
+                self.assertEqual(result[key], value)
+
+    def test_list_metadata_preserves_general_and_legacy_vehicle_nulls(self):
+        ref = '00000000-0000-0000-0000-000000000003'
+        for vehicle_ref, name, category in ((None, None, None), (ref, 'Car', None), (ref, 'Retired car', 'suv')):
+            database_stub.list_family_reservations.return_value = [
+                ('User', '2026-09-01T00:00:00', '2026-09-02T00:00:00', False,
+                 ref, vehicle_ref, name, ref, category)]
+            result = service.list_reservations(self.user())[0]
+            self.assertEqual((result['vehicle_ref'], result['vehicle_display_name'], result['vehicle_category']),
+                             (vehicle_ref, name, category))
+            self.assertEqual(result['member_ref'], ref)
 
 
 if __name__ == "__main__":

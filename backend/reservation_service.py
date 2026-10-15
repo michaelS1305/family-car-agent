@@ -1,3 +1,6 @@
+from datetime import datetime, timedelta
+from uuid import UUID
+
 from reservation_rules import (
     canonical_time as _canonical_time,
     local_now as _local_now,
@@ -48,28 +51,55 @@ def _safe_reservation(row):
         "reservation_ref": str(row[4]),
         "vehicle_ref": str(row[5]) if row[5] else None,
         "vehicle_display_name": row[6],
+        "member_ref": str(row[7]),
+        "vehicle_category": row[8],
     }
 
 
-def list_reservations(current_user, time_filter="future", scope="all"):
+def list_reservations(current_user, time_filter=None, scope="all", *,
+                      range_start=None, range_end=None, vehicle_ref=None, member_ref=None):
     _require_family(current_user)
-    if time_filter not in {"future", "past"} or scope not in {"all", "mine"}:
+    bounded = range_start is not None or range_end is not None
+    if (scope not in {"all", "mine"}
+            or time_filter not in {None, "future", "past"}
+            or (bounded and time_filter is not None)
+            or (not bounded and (vehicle_ref is not None or member_ref is not None))
+            or (member_ref is not None and scope == "mine")):
         raise ReservationCenterError(
             "INVALID_RESERVATION_FILTER",
             "מסנן ההזמנות אינו תקין.",
             422,
         )
+    filters = {}
+    if bounded:
+        try:
+            start, end = _canonical_time(range_start), _canonical_time(range_end)
+            duration = datetime.fromisoformat(end) - datetime.fromisoformat(start)
+            if not timedelta(0) < duration <= timedelta(days=42):
+                raise ValueError
+        except (ReservationValidationError, ValueError):
+            raise ReservationCenterError('INVALID_RESERVATION_RANGE', 'טווח ההזמנות אינו תקין.', 422) from None
+        filters = {'range_start': start, 'range_end': end}
+        for key, value in (('vehicle_ref', vehicle_ref), ('member_ref', member_ref)):
+            if value is not None:
+                try:
+                    filters[key] = str(UUID(value))
+                except (ValueError, TypeError, AttributeError):
+                    raise ReservationCenterError('INVALID_RESERVATION_FILTER', 'מסנן ההזמנות אינו תקין.', 422) from None
     boundary = _canonical_time(_local_now())
-    return [
-        _safe_reservation(row)
-        for row in list_family_reservations(
-            current_user.family_id,
-            current_user.user_id,
-            time_filter,
-            scope,
-            boundary,
-        )
-    ]
+    rows = list_family_reservations(
+        current_user.family_id,
+        current_user.user_id,
+        time_filter or "future",
+        scope,
+        boundary,
+        **filters,
+    )
+    # None means a scoped public filter could not be resolved; [] is a valid empty range.
+    if rows is None:
+        raise ReservationCenterError('RESERVATION_FILTER_NOT_FOUND_OR_UNAVAILABLE',
+                                     'מסנן ההזמנות אינו זמין.', 404)
+    return [_safe_reservation(row) for row in rows]
 
 
 def create_reservation_for_current_user(current_user, start_time, end_time, *, vehicle_ref=VEHICLE_UNSET):
@@ -88,7 +118,7 @@ def create_reservation_for_current_user(current_user, start_time, end_time, *, v
         "start_time": start,
         "end_time": end,
         "is_mine": True,
-        **{key: result.get(key) for key in ('reservation_ref', 'vehicle_ref', 'vehicle_display_name')},
+        **{key: result.get(key) for key in ('reservation_ref', 'vehicle_ref', 'vehicle_display_name', 'member_ref', 'vehicle_category')},
     }
 
 
@@ -119,7 +149,7 @@ def update_reservation_for_current_user(
         "start_time": result["start_time"],
         "end_time": result["end_time"],
         "is_mine": True,
-        **{key: result.get(key) for key in ('reservation_ref', 'vehicle_ref', 'vehicle_display_name')},
+        **{key: result.get(key) for key in ('reservation_ref', 'vehicle_ref', 'vehicle_display_name', 'member_ref', 'vehicle_category')},
     }
 
 

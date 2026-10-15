@@ -922,14 +922,38 @@ def list_family_reservations(
     time_filter,
     scope,
     boundary_time,
+    *, range_start=None, range_end=None, vehicle_ref=None, member_ref=None,
 ):
     time_operator = ">" if time_filter == "future" else "<="
     scope_sql = "AND r.user_id = %s" if scope == "mine" else ""
-    parameters = [current_user_id, family_id, boundary_time]
+    bounded = range_start is not None and range_end is not None
+    time_sql = ("r.start_time::timestamp < %s::timestamp AND r.end_time::timestamp > %s::timestamp"
+                if bounded else f"r.end_time::timestamp {time_operator} %s::timestamp")
+    parameters = [current_user_id, family_id]
+    parameters.extend([range_end, range_start] if bounded else [boundary_time])
     if scope == "mine":
         parameters.append(current_user_id)
 
     with pool.connection() as conn:
+        filter_sql = []
+        if vehicle_ref is not None:
+            vehicle = conn.execute(
+                'SELECT id FROM vehicles WHERE family_id=%s AND vehicle_ref=%s',
+                (family_id, vehicle_ref),
+            ).fetchone()
+            if vehicle is None:
+                return None
+            filter_sql.append('AND r.vehicle_id=%s AND v.family_id=%s')
+            parameters.extend([vehicle[0], family_id])
+        if member_ref is not None:
+            member = conn.execute(
+                'SELECT id FROM users WHERE family_id=%s AND member_public_id=%s',
+                (family_id, member_ref),
+            ).fetchone()
+            if member is None:
+                return None
+            filter_sql.append('AND r.user_id=%s')
+            parameters.append(member[0])
         return conn.execute(
             f"""
             SELECT
@@ -937,18 +961,36 @@ def list_family_reservations(
                 r.start_time,
                 r.end_time,
                 r.user_id = %s AS is_mine,
-                r.reservation_ref, v.vehicle_ref, v.display_name
+                r.reservation_ref, v.vehicle_ref, v.display_name,
+                u.member_public_id, v.category
             FROM reservations AS r
             JOIN users AS u ON u.id = r.user_id
             LEFT JOIN vehicles v ON v.id=r.vehicle_id
             WHERE u.family_id = %s
               AND r.status = 'active'
-              AND r.end_time::timestamp {time_operator} %s::timestamp
+              AND {time_sql}
               {scope_sql}
-            ORDER BY r.start_time::timestamp ASC
+              {' '.join(filter_sql)}
+            ORDER BY r.start_time::timestamp ASC{', r.reservation_ref ASC' if bounded else ''}
             """,
             tuple(parameters),
         ).fetchall()
+
+
+def _enrich_reservation_response(conn, result, user_id, family_id):
+    """Read public response metadata in the same transaction as the mutation."""
+    if result.get('success'):
+        row = conn.execute(
+            '''SELECT u.member_public_id, v.category
+               FROM reservations r JOIN users u ON u.id=r.user_id
+               LEFT JOIN vehicles v ON v.id=r.vehicle_id
+               WHERE r.reservation_ref=%s AND r.user_id=%s AND u.family_id=%s''',
+            (result['reservation_ref'], user_id, family_id),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError('Reservation response identity unavailable')
+        result = {**result, 'member_ref': str(row[0]), 'vehicle_category': row[1]}
+    return result
 
 
 def create_current_user_reservation(user_id, family_id, start_time, end_time, *, vehicle_ref=VEHICLE_UNSET):
@@ -956,7 +998,7 @@ def create_current_user_reservation(user_id, family_id, start_time, end_time, *,
         require_user(conn, user_id)
         with conn.transaction():
             _lock_reservation_family(conn, family_id)
-            return _create_reservation_on_connection(
+            result = _create_reservation_on_connection(
                 conn,
                 user_id,
                 start_time,
@@ -964,6 +1006,7 @@ def create_current_user_reservation(user_id, family_id, start_time, end_time, *,
                 expected_family_id=family_id,
                 vehicle_ref=vehicle_ref,
             )
+            return _enrich_reservation_response(conn, result, user_id, family_id)
 
 
 def update_current_user_reservation(
@@ -984,7 +1027,7 @@ def update_current_user_reservation(
                                                        original_start_time, original_end_time)
             if error:
                 return error
-            return _update_reservation_on_connection(
+            result = _update_reservation_on_connection(
                 conn,
                 reservation_id,
                 user_id,
@@ -993,6 +1036,7 @@ def update_current_user_reservation(
                 end_time,
                 vehicle_ref=vehicle_ref,
             )
+            return _enrich_reservation_response(conn, result, user_id, family_id)
 
 
 def cancel_current_user_reservation(

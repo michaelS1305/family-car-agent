@@ -179,6 +179,8 @@ class ReservationResponse(BaseModel):
     reservation_ref: UUID | None = None
     vehicle_ref: UUID | None = None
     vehicle_display_name: str | None = None
+    member_ref: UUID
+    vehicle_category: Literal['hatchback', 'sedan', 'crossover', 'minivan', 'suv'] | None = None
 
 
 class ReservationIntervalRequest(BaseModel):

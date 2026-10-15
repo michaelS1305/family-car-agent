@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 from pydantic import ValidationError
-from models import ReservationIntervalRequest, ReservationUpdateRequest, ReservationCancelRequest
+from models import ReservationIntervalRequest, ReservationUpdateRequest, ReservationCancelRequest, ReservationResponse
 
 import deletion_gate
 from identity import CurrentUser
@@ -18,6 +18,21 @@ from tests.test_chat_service import load_chat_service
 
 
 class ReservationContractTests(unittest.TestCase):
+    def test_enriched_response_has_only_public_identity_and_canonical_category(self):
+        base = dict(owner_name='User', start_time='2030-01-01T10:00:00',
+                    end_time='2030-01-01T11:00:00', is_mine=True, member_ref=uuid4())
+        for category in (None, 'hatchback', 'sedan', 'crossover', 'minivan', 'suv'):
+            response = ReservationResponse(**base, vehicle_category=category).model_dump(mode='json')
+            self.assertEqual(response['member_ref'], str(base['member_ref']))
+            self.assertEqual(response['vehicle_category'], category)
+            self.assertNotIn('user_id', response)
+            self.assertIsNone(response['vehicle_ref'])
+            self.assertIsNone(response['vehicle_display_name'])
+        with self.assertRaises(ValidationError):
+            ReservationResponse(**base, vehicle_category='guessed')
+        with self.assertRaises(ValidationError):
+            ReservationResponse(**{**base, 'member_ref': None})
+
     def test_public_payloads_reject_internal_authority(self):
         for key in ('family_id', 'vehicle_id', 'reservation_id', 'user_id', 'auth_user_id'):
             with self.assertRaises(ValidationError):
@@ -139,6 +154,61 @@ class MultiCarReservationPostgresTests(unittest.TestCase):
             '2030-01-11T09:00:00Z', '2030-01-11T10:00:00Z', vehicle_ref=a)
         self.assertTrue(first['success'] and second['success'])
         self.assertEqual((second['start_time'], second['end_time']), ('2030-01-11T11:00:00', '2030-01-11T12:00:00'))
+
+    def test_bounded_overlap_edges_midnight_and_tie_order(self):
+        from psycopg.errors import InvalidDatetimeFormat
+        refs = []
+        for start, end in (
+            ('2030-01-10T23:00:00', '2030-01-11T01:00:00'),
+            ('2030-01-11T23:00:00', '2030-01-12T01:00:00'),
+            ('2030-01-10T23:00:00', '2030-01-12T01:00:00'),
+            ('2030-01-10T23:00:00', '2030-01-11T00:00:00'),
+            ('2030-01-12T00:00:00', '2030-01-12T01:00:00'),
+        ):
+            refs.append(self.query('''INSERT INTO reservations(user_id,start_time,end_time,status)
+                VALUES(%s,%s,%s,'active') RETURNING reservation_ref''',
+                (self.creator[1], start, end))[0][0])
+        rows = self.database.list_family_reservations(self.family, self.creator[1], 'future', 'all', '',
+            range_start='2030-01-11T00:00:00', range_end='2030-01-12T00:00:00')
+        self.assertEqual({row[4] for row in rows}, set(refs[:3]))
+        self.assertEqual([row[4] for row in rows], sorted([refs[0], refs[2]]) + [refs[1]])
+        self.query("UPDATE reservations SET start_time='invalid' WHERE reservation_ref=%s", (refs[0],))
+        with self.assertRaises(InvalidDatetimeFormat):
+            self.database.list_family_reservations(self.family, self.creator[1], 'future', 'all', '',
+                range_start='2030-01-11T00:00:00', range_end='2030-01-12T00:00:00')
+
+    def test_bounded_filters_enrichment_and_unavailable_refs(self):
+        general = self.create()
+        self.assertIsNotNone(general['member_ref'])
+        self.assertIsNone(general['vehicle_category'])
+        self.cancel(general['reservation_ref'])
+        vehicle = self.vehicle()
+        self.query("UPDATE vehicles SET category='sedan' WHERE vehicle_ref=%s", (vehicle,))
+        booked = self.create(vehicle_ref=vehicle)
+        edited = self.update(booked['reservation_ref'])
+        self.assertEqual(edited['member_ref'], booked['member_ref'])
+        self.assertEqual(edited['vehicle_category'], 'sedan')
+        # Retired metadata remains available to the read contract.
+        self.query('UPDATE vehicles SET retired_at=now() WHERE vehicle_ref=%s', (vehicle,))
+        bounds = dict(range_start='2030-01-11T00:00:00', range_end='2030-01-12T00:00:00')
+        rows = self.database.list_family_reservations(self.family, self.creator[1], 'future', 'all', '',
+            **bounds, vehicle_ref=vehicle, member_ref=booked['member_ref'])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((str(rows[0][7]), rows[0][8]), (booked['member_ref'], 'sedan'))
+        member = self.query('SELECT member_public_id FROM users WHERE id=%s', (self.member[1],))[0][0]
+        self.assertEqual(self.database.list_family_reservations(self.family, self.creator[1], 'future', 'all', '',
+            **bounds, vehicle_ref=vehicle, member_ref=member), [])
+        self.assertEqual(self.database.list_family_reservations(self.family, self.member[1], 'future', 'mine', '', **bounds), [])
+        other = self.person()
+        foreign_member = self.query('SELECT member_public_id FROM users WHERE id=%s', (other[1],))[0][0]
+        for ref in (foreign_member, uuid4()):
+            self.assertIsNone(self.database.list_family_reservations(self.family, self.creator[1], 'future', 'all', '',
+                **bounds, member_ref=ref))
+        foreign_family = self.query("INSERT INTO families(name,family_code,created_by_user_id) VALUES('Other','xyz789',%s) RETURNING id", (other[1],))[0][0]
+        foreign_vehicle = self.vehicle(foreign_family)
+        for ref in (foreign_vehicle, uuid4()):
+            self.assertIsNone(self.database.list_family_reservations(self.family, self.creator[1], 'future', 'all', '',
+                **bounds, vehicle_ref=ref))
 
     def test_refs_ownership_and_legacy_ambiguity(self):
         a, b = self.vehicle(), self.vehicle()
