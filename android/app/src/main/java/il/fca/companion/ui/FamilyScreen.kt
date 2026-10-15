@@ -141,11 +141,7 @@ internal fun FamilyScreen(
 
                                 // Deliberately inert V1 placeholder:
                                 // no invitation or feedback action.
-                                FamilyIconAction(
-                                    R.drawable.ic_add,
-                                    "הוספה",
-                                    {}
-                                )
+                                FamilyIconAction(R.drawable.ic_add, "הוספה", {})
                             }
 
                             profile.members.forEach { member ->
