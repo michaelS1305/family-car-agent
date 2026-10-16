@@ -46,6 +46,11 @@ internal fun FamilyScreen(
 
     val state = model.visibleState
 
+    if (blockingInitialLoadError(state.loading, state.loadError, state.profile != null)) {
+        FcaErrorScreen("לא ניתן לטעון את פרטי המשפחה", model::retry, "חזרה לדשבורד", back)
+        return
+    }
+
     CompositionLocalProvider(
         LocalLayoutDirection provides LayoutDirection.Rtl
     ) {

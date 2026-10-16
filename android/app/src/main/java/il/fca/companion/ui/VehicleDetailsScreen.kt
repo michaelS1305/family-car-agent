@@ -91,6 +91,10 @@ internal fun VehicleDetailsScreen(model: VehicleDetailsViewModel, companion: Com
     back: () -> Unit, openCompanion: () -> Unit, refreshCompanion: () -> Unit) {
     val s = model.state
     BackHandler { if (s.dialog != null) model.close() else back() }
+    if (blockingInitialLoadError(s.loading, s.error, s.detail != null)) {
+        FcaErrorScreen("לא ניתן לטעון את פרטי הרכב", model::refresh, "חזרה לרכבים", back)
+        return
+    }
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Column(Modifier.fillMaxSize().background(Color(0xFFF6F7F7)).navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally) {

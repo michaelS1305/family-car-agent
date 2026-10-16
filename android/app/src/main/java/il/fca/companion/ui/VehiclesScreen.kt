@@ -58,6 +58,10 @@ internal fun VehiclesScreen(model: VehiclesViewModel, familyId: Long?, back: () 
         return
     }
     BackHandler { navigateBack() }
+    if (state.page == VehiclesPage.LIST && blockingInitialLoadError(state.loading, state.loadError, state.loaded)) {
+        FcaErrorScreen("לא ניתן לטעון את הרכבים", model::refresh, "חזרה לדשבורד", navigateBack)
+        return
+    }
     Column(Modifier.fillMaxSize().background(Color(0xFFF6F7F7)).navigationBarsPadding(),
         horizontalAlignment = Alignment.CenterHorizontally) {
         Column(Modifier.widthIn(max = 620.dp).fillMaxSize()) {

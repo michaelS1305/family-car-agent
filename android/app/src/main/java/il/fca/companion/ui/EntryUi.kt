@@ -58,12 +58,8 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                             history, model.authenticatedFamilyId, vehicles, family, booking)
                     }
                 } else if (model.screen == EntryScreen.BOOTSTRAP) {
-                    Column(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
-                        verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (!model.busy) {
-                            Text("יש בעיה, נסה שוב", color = Secondary)
-                            TextButton(onClick = retryBootstrap) { Text("נסה שוב") }
-                        }
+                    if (!model.busy) {
+                        FcaErrorScreen("יש בעיה, נסה שוב", retry = retryBootstrap)
                     }
                 } else if (model.screen == EntryScreen.INTRO) {
                     Column(Modifier.fillMaxSize().safeDrawingPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
