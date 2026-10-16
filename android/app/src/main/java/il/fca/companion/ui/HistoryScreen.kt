@@ -40,8 +40,6 @@ private val HistoryInk = Color(0xFF23364E)
 private val HistorySecondary = Color(0xFF788699)
 private val HistoryOutline = Color(0xFFE3E7EC)
 
-internal const val HISTORY_ILLUSTRATION_SLOT_DP = 40
-
 internal fun historyInitials(name: String): String {
     val first = name.trim().split(Regex("\\s+"), limit = 2).firstOrNull().orEmpty()
     return first.codePoints().limit(2).toArray().let { String(it, 0, it.size) }
@@ -313,18 +311,17 @@ private fun HistoryBack(
 
 @Composable
 private fun HistoryCard(
-    tint: Color = Color.White.copy(alpha = 0.88f),
+    tint: Color = Color.White.copy(alpha = 0.82f),
     content: @Composable () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(18.dp),
         color = tint,
         border = BorderStroke(
             1.dp,
-            HistoryOutline
+            VehicleBorder
         ),
-        shadowElevation = 1.dp,
         content = content
     )
 }
@@ -335,100 +332,42 @@ private fun CurrentCapsule(
     zone: ZoneId,
     retry: () -> Unit
 ) {
-    HistoryCard(
-        if (current.allAvailable) {
-            Color(0xFFF1FAF5)
-        } else {
-            Color.White.copy(alpha = 0.88f)
-        }
-    ) {
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             when {
-                current.status == CurrentUseStatus.LOADING -> {
-                    Text(
-                        "טוען מצב רכבים…",
-                        color = HistorySecondary
-                    )
-                }
-
+                current.status == CurrentUseStatus.LOADING ->
+                    Text("טוען מצב רכבים…", color = HistorySecondary)
                 current.status == CurrentUseStatus.UNAVAILABLE -> {
-                    Text(
-                        "מצב הרכבים אינו זמין כרגע",
-                        color = HistorySecondary
-                    )
-
-                    TextButton(
-                        onClick = retry
-                    ) {
-                        Text("נסה שוב")
+                    Text("מצב הרכבים אינו זמין כרגע", color = HistorySecondary)
+                    TextButton(onClick = retry) { Text("נסה שוב") }
+                }
+                current.allAvailable -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(Modifier.size(8.dp).background(Color(0xFF279759), CircleShape))
+                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("כל הרכבים פנויים", color = Color(0xFF315D65), fontWeight = FontWeight.SemiBold)
+                        Text("אין רכבים בשימוש כרגע", color = HistorySecondary, fontSize = 13.sp)
                     }
                 }
-
-                current.allAvailable -> {
+                else -> current.occupied.forEach { vehicle ->
                     Row(
+                        Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Box(
-                            Modifier
-                                .size(10.dp)
-                                .background(
-                                    Color(0xFF279759),
-                                    CircleShape
-                                )
-                        )
-
-                        Column {
-                            Text(
-                                "כל הרכבים פנויים",
-                                color = Color(0xFF315D65),
-                                fontWeight = FontWeight.SemiBold
-                            )
-
-                            Text(
-                                "אין רכבים בשימוש כרגע",
-                                color = HistorySecondary,
-                                fontSize = 13.sp
-                            )
-                        }
-                    }
-                }
-
-                else -> {
-                    current.occupied.forEach { vehicle ->
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            IllustrationSlot()
-
-                            InitialsAvatar(
-                                vehicle.driver.orEmpty()
-                            )
-
-                            Column(
-                                Modifier.weight(1f)
-                            ) {
-                                Text(
-                                    "${vehicle.name} — ${vehicle.driver.orEmpty()}",
-                                    color = HistoryInk,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-
-                                Text(
-                                    "בשימוש מ־${clock(checkNotNull(vehicle.startedAt), zone)}",
-                                    color = HistorySecondary,
-                                    fontSize = 13.sp
-                                )
-                            }
+                        HistoryVehicleIllustration(Modifier.width(66.dp).height(44.dp))
+                        UserAvatar(name = vehicle.driver.orEmpty(), size = 34.dp)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text("${vehicle.name} — ${vehicle.driver.orEmpty()}",
+                                color = HistoryInk, fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("בשימוש מ־${clock(checkNotNull(vehicle.startedAt), zone)}",
+                                color = HistorySecondary, fontSize = 12.sp)
                         }
                     }
                 }
@@ -437,38 +376,20 @@ private fun CurrentCapsule(
     }
 }
 
+// History's current DTOs have no category. Use the existing neutral mapping, never guess
+// from names or borrow another screen's potentially stale family catalog.
 @Composable
-private fun IllustrationSlot() {
-    Spacer(Modifier.size(HISTORY_ILLUSTRATION_SLOT_DP.dp))
+private fun HistoryVehicleIllustration(modifier: Modifier) {
+    Image(painterResource(vehicleIllustration(null)), null, modifier, contentScale = ContentScale.Fit)
 }
 
-@Composable
-private fun InitialsAvatar(
-    name: String
-) {
-    val colors = listOf(
-        Color(0xFFE7EFFC),
-        Color(0xFFE8E8FC),
-        Color(0xFFF8E4F3),
-        Color(0xFFE2F1E8)
-    )
-
-    Box(
-        Modifier
-            .size(30.dp)
-            .background(
-                colors[Math.floorMod(name.hashCode(), colors.size)],
-                CircleShape
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            historyInitials(name),
-            fontSize = 12.sp,
-            color = HistoryInk,
-            fontWeight = FontWeight.Medium
-        )
-    }
+internal fun historyUsageTimeLines(row: HistoryUsage, zone: ZoneId): List<String> {
+    val start = row.startedAt.atZone(zone)
+    val end = row.endedAt.atZone(zone)
+    if (start.toLocalDate() == end.toLocalDate())
+        return listOf("${clock(row.startedAt, zone)}–${clock(row.endedAt, zone)}")
+    val format = DateTimeFormatter.ofPattern("dd/MM · HH:mm")
+    return listOf(start.format(format), end.format(format))
 }
 
 private fun clock(
@@ -486,64 +407,37 @@ private fun UsageRow(
     zone: ZoneId
 ) {
     HistoryCard {
-        CompositionLocalProvider(
-            LocalLayoutDirection provides LayoutDirection.Ltr
-        ) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 76.dp)
-                    .padding(
-                        horizontal = 10.dp,
-                        vertical = 12.dp
-                    ),
+                Modifier.fillMaxWidth().heightIn(min = 104.dp).padding(horizontal = 10.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Text(
-                    "${clock(row.startedAt, zone)}–${clock(row.endedAt, zone)}",
-                    fontSize = 12.sp,
-                    color = HistorySecondary,
-                    maxLines = 1
-                )
-
-                CompositionLocalProvider(
-                    LocalLayoutDirection provides LayoutDirection.Rtl
-                ) {
-                    Column(
-                        Modifier.weight(1f),
-                        horizontalAlignment = Alignment.End
-                    ) {
-                        Text(
-                            "${row.vehicleName} — ${row.name}",
-                            Modifier.fillMaxWidth(),
-                            color = HistoryInk,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.Right
-                        )
-
-                        Text(
-                            DateTimeFormatter
-                                .ofPattern(
-                                    "d MMMM yyyy",
-                                    Locale.forLanguageTag("he")
-                                )
-                                .withZone(zone)
-                                .format(row.startedAt),
-                            Modifier.fillMaxWidth(),
-                            fontSize = 12.sp,
-                            color = HistorySecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.Right
-                        )
+                Box(Modifier.width(76.dp).height(78.dp), contentAlignment = Alignment.Center) {
+                    // Temporary decorative artwork only; this does not assert a vehicle category.
+                    Image(painterResource(R.drawable.vehicle_sedan), null,
+                        Modifier.align(Alignment.Center).width(76.dp).height(48.dp), contentScale = ContentScale.Fit)
+                    Text(row.vehicleName, Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                        color = Color(0xFF738197), fontSize = 10.sp, lineHeight = 12.sp,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                }
+                UserAvatar(name = row.name, size = 34.dp)
+                Column(Modifier.weight(1f).offset(y = 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(row.name, color = HistoryInk, fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.forLanguageTag("he"))
+                        .withZone(zone).format(row.startedAt),
+                        color = HistorySecondary, fontSize = 10.sp, lineHeight = 12.sp,
+                        maxLines = 1, softWrap = false)
+                }
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    Column(horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        historyUsageTimeLines(row, zone).forEach { line ->
+                            Text(line, color = HistoryInk, fontSize = 9.sp, lineHeight = 12.sp,
+                                maxLines = 1, softWrap = false)
+                        }
                     }
                 }
-
-                InitialsAvatar(row.name)
-                IllustrationSlot()
             }
         }
     }

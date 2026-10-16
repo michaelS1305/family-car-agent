@@ -107,7 +107,13 @@ internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: Strin
                 .fillMaxWidth()
         ) {
 
-            ChatScreen(chat.state, chat::sendMessage, chat::retryPendingRequest, chat::loadHistory)
+            ChatScreen(
+                state = chat.state,
+                send = chat::sendMessage,
+                retry = chat::retryPendingRequest,
+                reloadHistory = chat::loadHistory,
+                userName = authenticatedName
+            )
 
             androidx.compose.animation.AnimatedVisibility(
                 visible = state.mode == AppMode.DASHBOARD,

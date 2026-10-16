@@ -211,23 +211,44 @@ class HistoryTest {
         val members = JSONObject().put("members", JSONArray().put(JSONObject().put("member_ref", ref(200)).put("name", "מרק")))
         assertEquals(ref(200), HistoryApi.parseMembers(members.toString()).single().ref)
     }
-    @Test fun reservedSlotAndPaginationThresholdAndExistingBack() {
-        assertEquals(40, HISTORY_ILLUSTRATION_SLOT_DP)
+    @Test fun paginationThresholdAndExistingBack() {
         assertFalse(historyNearEnd(ref(1), (1..5).map(::row)))
         assertTrue(historyNearEnd(ref(3), (1..5).map(::row)))
         val shell = AppShellState(); shell.select(AppMode.DASHBOARD); shell.openCategory(DashboardCategory.HISTORY)
         shell.back(); assertNull(shell.category); assertEquals(AppMode.DASHBOARD, shell.mode)
     }
-    @Test fun exactAssetsBlankSlotAndHistoryOnlySliderGate() {
+    @Test fun exactAssetsNeutralIllustrationSharedAvatarAndHistoryOnlySliderGate() {
         val ui = File("src/main/java/il/fca/companion/ui/HistoryScreen.kt").readText()
         for (asset in listOf("fca_header_wordmark", "history_icon", "ic_chevron_back", "ic_filter", "car_icon", "user_icon", "ic_calender"))
             assertTrue(ui.contains("R.drawable.$asset"))
-        assertFalse(ui.contains("R.drawable.vehicle_"))
-        assertTrue(ui.contains("Spacer(Modifier.size(HISTORY_ILLUSTRATION_SLOT_DP.dp))"))
+        assertTrue(ui.contains("R.drawable.vehicle_sedan"))
+        assertFalse(ui.contains("shadowElevation"))
+        assertTrue(ui.contains("heightIn(min = 104.dp)"))
+        assertTrue(ui.contains("ofPattern(\"dd/MM/yyyy\""))
+        assertTrue(ui.contains("painterResource(vehicleIllustration(null))"))
+        assertTrue(ui.contains("UserAvatar(name = row.name"))
+        assertTrue(ui.contains("UserAvatar(name = vehicle.driver.orEmpty()"))
+        assertFalse(ui.substringAfter("private fun CurrentCapsule(").substringBefore("private fun HistoryVehicleIllustration").contains("HistoryCard("))
+        assertTrue(ui.contains("טוען מצב רכבים…"))
+        assertTrue(ui.contains("כל הרכבים פנויים"))
+        assertTrue(ui.contains("אין רכבים בשימוש כרגע"))
+        assertTrue(ui.contains("TextButton(onClick = retry)"))
+        assertTrue(ui.contains("current.occupied.forEach"))
         assertTrue(ui.contains("items(state.rows, key = { it.sessionRef })"))
         val shell = File("src/main/java/il/fca/companion/ui/AuthenticatedAppShell.kt").readText()
         assertTrue(shell.contains("if (!imeVisible && state.category != DashboardCategory.HISTORY && state.category != DashboardCategory.VEHICLES && state.category != DashboardCategory.FAMILY && state.category != DashboardCategory.BOOKING_CENTER)"))
         assertTrue(shell.contains("HistoryScreen(history, familyId, state::back)"))
+    }
+    @Test fun usageTimePresentationPreservesLocalZoneAndExplicitMultiDayEndpoints() {
+        val zone = java.time.ZoneId.of("Asia/Jerusalem")
+        assertEquals(listOf("13:00–13:01"), historyUsageTimeLines(row(1), zone))
+        val overnight = row(1).copy(startedAt = Instant.parse("2026-10-12T20:30:00Z"),
+            endedAt = Instant.parse("2026-10-12T22:15:00Z"))
+        assertEquals(listOf("12/10 · 23:30", "13/10 · 01:15"), historyUsageTimeLines(overnight, zone))
+        val newYear = row(1).copy(startedAt = Instant.parse("2026-12-31T21:30:00Z"),
+            endedAt = Instant.parse("2026-12-31T22:15:00Z"))
+        assertEquals(listOf("31/12 · 23:30", "01/01 · 00:15"), historyUsageTimeLines(newYear, zone))
+        assertEquals(listOf("10:00–10:01"), historyUsageTimeLines(row(1), java.time.ZoneOffset.UTC))
     }
     @Test fun staleVehicleReplyAfterFamilyChangeCannotApply() = runBlocking {
         val old = CompletableDeferred<List<FamilyVehicle>>()

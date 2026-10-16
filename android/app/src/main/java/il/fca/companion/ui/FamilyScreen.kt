@@ -1,3 +1,4 @@
+
 package il.fca.companion.ui
 
 import android.content.ClipData
@@ -24,22 +25,8 @@ import il.fca.companion.R
 import il.fca.companion.net.*
 import kotlinx.coroutines.delay
 
-internal fun familyInitials(name: String): String {
-    val words = name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-
-    val points =
-        if (words.size > 1) {
-            words.take(2).map { it.codePointAt(0) }.toIntArray()
-        } else {
-            words.firstOrNull()
-                ?.codePoints()
-                ?.limit(2)
-                ?.toArray()
-                ?: intArrayOf()
-        }
-
-    return String(points, 0, points.size)
-}
+// Kept for compatibility with any existing usages.
+internal fun familyInitials(name: String): String = avatarInitials(name)
 
 @Composable
 internal fun FamilyScreen(
@@ -141,7 +128,11 @@ internal fun FamilyScreen(
 
                                 // Deliberately inert V1 placeholder:
                                 // no invitation or feedback action.
-                                FamilyIconAction(R.drawable.ic_add, "הוספה", {})
+                                FamilyIconAction(
+                                    R.drawable.ic_add,
+                                    "הוספה",
+                                    {}
+                                )
                             }
 
                             profile.members.forEach { member ->
@@ -190,7 +181,7 @@ internal fun FamilyScreen(
 
                         if (state.codeError) {
                             Text(
-                                "לא ניתן לאשר יצירת קוד חדש. נסו שוב.",
+                                "הקוד הישן יפסיק לעבוד. ליצור קוד חדש?",
                                 color = MaterialTheme.colorScheme.error
                             )
                         }
@@ -281,22 +272,10 @@ private fun FamilyMemberCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(9.dp)
         ) {
-            Box(
-                Modifier
-                    .size(44.dp)
-                    .background(
-                        Color(0xFFE5EFF9),
-                        CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    familyInitials(member.name),
-                    color = VehicleInk,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 17.sp
-                )
-            }
+            UserAvatar(
+                name = member.name,
+                size = 44.dp
+            )
 
             Column(
                 Modifier.weight(1f)

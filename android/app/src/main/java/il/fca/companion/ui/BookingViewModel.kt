@@ -1,3 +1,4 @@
+
 package il.fca.companion.ui
 
 import androidx.compose.runtime.getValue
@@ -29,17 +30,17 @@ internal fun bookingDateLabel(date: LocalDate) =
 
 internal data class BookingIdentity(val owner: String, val family: Long)
 internal data class BookingData(val requested: BookingRange? = null, val loaded: BookingRange? = null,
-    val rows: List<BookingReservation> = emptyList(), val loading: Boolean = false,
-    val refreshing: Boolean = false, val error: Boolean = false, val query: BookingQuery? = null)
+                                val rows: List<BookingReservation> = emptyList(), val loading: Boolean = false,
+                                val refreshing: Boolean = false, val error: Boolean = false, val query: BookingQuery? = null)
 
 internal class BookingViewModel(private val gateway: BookingGateway,
-    private val currentIdentity: () -> BookingIdentity?, private val testScope: CoroutineScope? = null,
-    private val vehicleLoad: suspend (String) -> List<ManagedVehicle> = { error("Vehicles unavailable") },
-    private val now: () -> LocalDateTime = { LocalDateTime.now(ZoneId.of("Asia/Jerusalem")) },
-    private val memberLoad: suspend (String) -> List<FamilyMember> = { error("Members unavailable") },
-    private val today: () -> LocalDate = {
-    LocalDate.now(ZoneId.of("Asia/Jerusalem"))
-}) : ViewModel() {
+                                private val currentIdentity: () -> BookingIdentity?, private val testScope: CoroutineScope? = null,
+                                private val vehicleLoad: suspend (String) -> List<ManagedVehicle> = { error("Vehicles unavailable") },
+                                private val now: () -> LocalDateTime = { LocalDateTime.now(ZoneId.of("Asia/Jerusalem")) },
+                                private val memberLoad: suspend (String) -> List<FamilyMember> = { error("Members unavailable") },
+                                private val today: () -> LocalDate = {
+                                    LocalDate.now(ZoneId.of("Asia/Jerusalem"))
+                                }) : ViewModel() {
     var selectedDate by mutableStateOf(today())
         private set
     var visibleMonth by mutableStateOf(YearMonth.from(selectedDate))
@@ -68,7 +69,7 @@ internal class BookingViewModel(private val gateway: BookingGateway,
     val visiblePending get() = if (active != null && active == currentIdentity()) pending else null
     val query get() = BookingQuery(bookingRange(visibleMonth), visibleFilters.applied)
     val canAcknowledge get() = visiblePending?.readQuery == query && visiblePending?.inspected == true &&
-        !visibleAction.submitting && !visibleData.loading && !visibleData.refreshing && !visibleData.error
+            !visibleAction.submitting && !visibleData.loading && !visibleData.refreshing && !visibleData.error
     val visibleAction get() = if (active != null && active == currentIdentity()) action else BookingAction()
     private val scope get() = testScope ?: viewModelScope
     val visibleData: BookingData get() {
@@ -142,7 +143,7 @@ internal class BookingViewModel(private val gateway: BookingGateway,
         }
         val retain = data.loaded == range && data.query == key
         data = if (retain) data.copy(requested = range, refreshing = true, loading = false, error = false)
-            else BookingData(requested = range, loading = true, query = key)
+        else BookingData(requested = range, loading = true, query = key)
         request = scope.launch {
             try {
                 val rows = gateway.reservations(who.owner, key)
@@ -158,7 +159,7 @@ internal class BookingViewModel(private val gateway: BookingGateway,
     }
     private fun current(who: BookingIdentity, version: Long, key: BookingQuery) =
         visible && active == who && currentIdentity() == who && generation == version &&
-            data.query == key && query == key
+                data.query == key && query == key
     override fun onCleared() { invalidate(); resetAction(); clearFiltersAndPending() }
 
     private fun clearFiltersAndPending() {
@@ -206,6 +207,7 @@ internal class BookingViewModel(private val gateway: BookingGateway,
             }
         }
     }
+
     fun acknowledgeUncertain() {
         reconcileIdentity()
         if (!visible || !canAcknowledge) return
@@ -232,11 +234,21 @@ internal class BookingViewModel(private val gateway: BookingGateway,
         action = BookingAction(draft = BookingDraft(startDate = date, endDate = date))
         loadVehicles()
     }
+
+    // Toggle Edit/Cancel selection when tapping the same toolbar action twice.
     fun selectMode(mode: BookingSelection) {
         if (!ready()) return
-        resetAction(); action = BookingAction(selection = mode)
+
+        if (action.selection == mode) {
+            resetAction()
+            return
+        }
+
+        resetAction()
+        action = BookingAction(selection = mode)
         sheetExpanded = true
     }
+
     fun eligible(row: BookingReservation) = active == currentIdentity() && bookingEligible(row, now())
     fun startLocked() = visibleAction.draft?.original?.let { it.start < now() } == true
     fun choose(ref: String) {
@@ -267,6 +279,7 @@ internal class BookingViewModel(private val gateway: BookingGateway,
         if (sheetExpanded) { sheetExpanded = false; return true }
         return false
     }
+
     fun editDate(start: Boolean, date: LocalDate) {
         if (!ready() || (start && startLocked())) return
         val draft = action.draft ?: return
@@ -311,6 +324,7 @@ internal class BookingViewModel(private val gateway: BookingGateway,
             }
         }
     }
+
     fun submit() {
         if (!ready()) return
         val who = active ?: return
@@ -345,14 +359,14 @@ internal class BookingViewModel(private val gateway: BookingGateway,
         mutation = scope.launch {
             try {
                 val saved = if (draft == null) { gateway.cancel(who.owner, checkNotNull(target).ref); null }
-                    else if (target == null) gateway.create(who.owner, draft.change())
-                    else gateway.update(who.owner, target.ref, draft.change())
+                else if (target == null) gateway.create(who.owner, draft.change())
+                else gateway.update(who.owner, target.ref, draft.change())
                 if (!actionCurrent(who, version)) return@launch
                 pending = null
                 invalidate(); data = BookingData()
                 val outside = saved != null && pageOf(YearMonth.from(saved.start)) !in 0 until pageCount
                 action = BookingAction(notice = if (outside) "ההזמנה נשמרה. תאריך ההתחלה מחוץ לטווח לוח השנה."
-                    else if (saved == null) "ההזמנה בוטלה." else "ההזמנה נשמרה.")
+                else if (saved == null) "ההזמנה בוטלה." else "ההזמנה נשמרה.")
                 if (saved != null && !outside) {
                     selectedDate = saved.start.toLocalDate(); visibleMonth = YearMonth.from(selectedDate)
                 }
@@ -363,7 +377,7 @@ internal class BookingViewModel(private val gateway: BookingGateway,
             catch (e: Exception) {
                 if (!actionCurrent(who, version)) return@launch
                 val rejected = (e is BookingFailure && e.status in 400..499) ||
-                    (e is HttpFailure && e.status in 400..499)
+                        (e is HttpFailure && e.status in 400..499)
                 if (rejected) pending = null
                 else {
                     invalidate(); pending = pending?.copy(readQuery = null)
@@ -383,7 +397,7 @@ internal class BookingViewModel(private val gateway: BookingGateway,
         val date = pending?.start?.toLocalDate() ?: return
         val outside = pageOf(YearMonth.from(date)) !in 0 until pageCount
         val notice = "תוצאת הפעולה אינה ודאית. בדקו את ההזמנות לפני יצירה או שינוי נוסף." +
-            if (outside) " התאריך שנבחר מחוץ לטווח לוח השנה." else ""
+                if (outside) " התאריך שנבחר מחוץ לטווח לוח השנה." else ""
         resetAction(); action = BookingAction(reconciling = true, notice = notice)
         sheetExpanded = true
         if (!outside) { selectedDate = date; visibleMonth = YearMonth.from(date) }

@@ -1,3 +1,4 @@
+
 package il.fca.companion.ui
 
 import android.graphics.RenderEffect
@@ -28,6 +29,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.LayoutDirection
@@ -55,6 +57,7 @@ internal fun ChatScreen(
     send: (String) -> Boolean,
     retry: () -> Boolean,
     reloadHistory: () -> Unit,
+    userName: String,
 ) {
     val ink = Color(0xFF243341)
     val density = LocalDensity.current
@@ -71,7 +74,10 @@ internal fun ChatScreen(
             }
             return RenderEffect.createRuntimeShaderEffect(shader, "content")
         }
-        RenderEffect.createChainEffect(pass(0f, 1f), pass(1f, 0f)).asComposeRenderEffect()
+        RenderEffect.createChainEffect(
+            pass(0f, 1f),
+            pass(1f, 0f)
+        ).asComposeRenderEffect()
     }
 
     val messages = state.messages.map {
@@ -106,11 +112,9 @@ internal fun ChatScreen(
     Box(
         modifier = Modifier.fillMaxSize()
     ) {
-
         Column(
             modifier = Modifier.fillMaxSize()
         ) {
-
             // Conversation area.
             // The top space is inside the scrollable content rather than
             // being a separate header row, so messages can move behind the
@@ -158,7 +162,9 @@ internal fun ChatScreen(
                     )
                     .padding(horizontal = 16.dp)
                     .padding(
-                        top = WindowInsets.safeDrawing.asPaddingValues().calculateTopPadding() + 93.dp
+                        top = WindowInsets.safeDrawing
+                            .asPaddingValues()
+                            .calculateTopPadding() + 93.dp
                     ),
                 verticalArrangement =
                     if (messages.isEmpty()) {
@@ -167,7 +173,6 @@ internal fun ChatScreen(
                         Arrangement.spacedBy(12.dp)
                     }
             ) {
-
                 if (
                     state.historyLoading ||
                     !state.historyLoaded &&
@@ -198,7 +203,6 @@ internal fun ChatScreen(
                 }
 
                 messages.forEachIndexed { index, message ->
-
                     Column(
                         modifier = Modifier
                             .align(
@@ -209,10 +213,9 @@ internal fun ChatScreen(
                                 }
                             )
                             .widthIn(
-                                max = 300.dp
+                                max = 264.dp
                             )
                     ) {
-
                         Text(
                             text = message.text,
                             modifier = Modifier
@@ -228,7 +231,8 @@ internal fun ChatScreen(
                                     )
                                 )
                                 .padding(
-                                    14.dp
+                                    horizontal = 11.dp,
+                                    vertical = 9.dp
                                 ),
                             color =
                                 if (message.fromUser) {
@@ -236,7 +240,8 @@ internal fun ChatScreen(
                                 } else {
                                     ink
                                 },
-                            fontSize = 16.sp
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp
                         )
 
                         CompositionLocalProvider(
@@ -259,7 +264,6 @@ internal fun ChatScreen(
                                 verticalAlignment =
                                     Alignment.CenterVertically
                             ) {
-
                                 if (!message.fromUser) {
                                     Image(
                                         painter = painterResource(
@@ -277,6 +281,12 @@ internal fun ChatScreen(
                                                 Color.White,
                                                 CircleShape
                                             )
+                                    )
+                                } else {
+                                    UserAvatar(
+                                        name = userName,
+                                        size = 26.dp,
+                                        modifier = Modifier.padding(top = 4.dp)
                                     )
                                 }
 
@@ -314,7 +324,7 @@ internal fun ChatScreen(
                                 Alignment.End
                             )
                             .widthIn(
-                                max = 300.dp
+                                max = 264.dp
                             )
                             .background(
                                 Color(0xFFE9EEF0),
@@ -323,15 +333,15 @@ internal fun ChatScreen(
                                 )
                             )
                             .padding(
-                                14.dp
+                                horizontal = 11.dp,
+                                vertical = 9.dp
                             ),
                         color = ink,
-                        fontSize = 16.sp
+                        fontSize = 14.sp
                     )
                 }
 
                 state.error?.let { failure ->
-
                     Text(
                         text =
                             if (
@@ -371,7 +381,6 @@ internal fun ChatScreen(
 
                 // Suggestions
                 if (state.showSuggestions()) {
-
                     Column(
                         modifier = Modifier
                             .align(
@@ -388,18 +397,15 @@ internal fun ChatScreen(
                                 8.dp
                             )
                     ) {
-
                         listOf(
                             "מי משתמש ברכב כרגע?",
                             "אילו רכבים פנויים עכשיו?",
                             "אני צריך להזמין את הרכב"
                         ).forEach { suggestion ->
-
                             CompositionLocalProvider(
                                 LocalLayoutDirection provides
                                         LayoutDirection.Rtl
                             ) {
-
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -435,7 +441,6 @@ internal fun ChatScreen(
                                     verticalAlignment =
                                         Alignment.CenterVertically
                                 ) {
-
                                     Text(
                                         text = "‹",
                                         color = ink,
@@ -478,7 +483,6 @@ internal fun ChatScreen(
                 verticalAlignment =
                     Alignment.CenterVertically
             ) {
-
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -509,7 +513,6 @@ internal fun ChatScreen(
                     contentAlignment =
                         Alignment.CenterStart
                 ) {
-
                     BasicTextField(
                         value = draft,
                         onValueChange = {
@@ -528,9 +531,7 @@ internal fun ChatScreen(
                             SolidColor(ink),
                         decorationBox = {
                                 innerTextField ->
-
                             Box {
-
                                 if (draft.isEmpty()) {
                                     Text(
                                         text =
@@ -606,7 +607,11 @@ internal fun ChatScreen(
                     Alignment.TopCenter
                 )
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(
+                        WindowInsetsSides.Top
+                    )
+                )
                 .padding(
                     horizontal = 16.dp,
                     vertical = 4.dp
@@ -614,7 +619,6 @@ internal fun ChatScreen(
             contentAlignment =
                 Alignment.Center
         ) {
-
             Image(
                 painter = painterResource(
                     R.drawable.fca_header_wordmark

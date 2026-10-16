@@ -13,11 +13,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import il.fca.companion.R
 import il.fca.companion.net.BookingReservation
@@ -26,6 +28,7 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -171,7 +174,7 @@ internal fun BookingScreen(
                     scaffoldState = scaffold,
                     sheetPeekHeight = peek,
                     sheetSwipeEnabled = !blocked,
-                    sheetContainerColor = Color(0xFFF6F7F7),
+                    sheetContainerColor = Color(0xFFECEFF1),
                     sheetShape = RoundedCornerShape(
                         topStart = 26.dp,
                         topEnd = 26.dp
@@ -200,7 +203,6 @@ internal fun BookingScreen(
                         )
                     }
                 ) { padding ->
-
                     Column(
                         modifier = Modifier
                             .widthIn(max = 620.dp)
@@ -341,7 +343,6 @@ internal fun BookingScreen(
                                     bookingMonthDays(month)
                                         .chunked(7)
                                         .forEach { week ->
-
                                             // RTL Row: Sunday on the right.
                                             Row(
                                                 modifier = Modifier.fillMaxWidth()
@@ -516,99 +517,180 @@ internal fun BookingReservationRow(
     row: BookingReservation,
     select: (() -> Unit)? = null
 ) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(
-                Color.White.copy(alpha = .72f),
-                RoundedCornerShape(18.dp)
-            )
-            .border(
-                1.dp,
-                if (select == null) VehicleBorder else VehicleInk,
-                RoundedCornerShape(18.dp)
-            )
-            .then(
-                if (select != null) {
-                    Modifier.clickable(onClick = select)
-                } else {
-                    Modifier
-                }
-            )
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    val spansMultipleDays =
+        row.start.toLocalDate() != row.end.toLocalDate()
+
+    val dateTimeFormat = remember {
+        DateTimeFormatter.ofPattern("dd/MM · HH:mm")
+    }
+
+    CompositionLocalProvider(
+        LocalLayoutDirection provides LayoutDirection.Rtl
     ) {
-        Column(
-            Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 104.dp)
+                .background(
+                    Color.White.copy(alpha = .82f),
+                    RoundedCornerShape(18.dp)
+                )
+                .border(
+                    1.dp,
+                    if (select == null) VehicleBorder else VehicleInk,
+                    RoundedCornerShape(18.dp)
+                )
+                .then(
+                    if (select != null) {
+                        Modifier.clickable(onClick = select)
+                    } else {
+                        Modifier
+                    }
+                )
+                .padding(
+                    horizontal = 10.dp,
+                    vertical = 9.dp
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            Text(
-                row.ownerName,
-                color = VehicleInk,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 17.sp
-            )
-
-            Text(
-                if (row.vehicleRef == null) {
-                    "הזמנה כללית"
-                } else {
-                    row.vehicleName.orEmpty()
-                },
-                color = Color(0xFF738197),
-                fontSize = 14.sp
-            )
-
-            CompositionLocalProvider(
-                LocalLayoutDirection provides LayoutDirection.Ltr
+            // Right: vehicle image centered with avatar and owner name.
+            // Vehicle name stays below the illustration.
+            Box(
+                modifier = Modifier
+                    .width(76.dp)
+                    .height(78.dp),
+                contentAlignment = Alignment.Center
             ) {
+                Image(
+                    painter = painterResource(
+                        vehicleIllustration(row.category)
+                    ),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .width(76.dp)
+                        .height(48.dp),
+                    contentScale = ContentScale.Fit
+                )
+
                 Text(
-                    bookingTimeLabel(row),
-                    color = VehicleInk,
-                    fontSize = 13.sp
+                    text = if (row.vehicleRef == null) {
+                        "הזמנה כללית"
+                    } else {
+                        row.vehicleName.orEmpty()
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth(),
+                    color = Color(0xFF738197),
+                    fontSize = 10.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    lineHeight = 12.sp,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-        }
 
-        val colors = listOf(
-            Color(0xFFE7EFFC),
-            Color(0xFFE8E8FC),
-            Color(0xFFF8E4F3),
-            Color(0xFFE2F1E8)
+            UserAvatar(
+                name = row.ownerName,
+                size = 34.dp
+            )
+
+            Text(
+                text = row.ownerName,
+                modifier = Modifier.weight(1f),
+                color = VehicleInk,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            // Left: one line for same-day bookings,
+            // two explicit date/time lines for multi-day bookings.
+            Row(
+                modifier = Modifier.width(111.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                CompositionLocalProvider(
+                    LocalLayoutDirection provides LayoutDirection.Ltr
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                        horizontalAlignment = Alignment.Start
+                    ) {
+                        if (spansMultipleDays) {
+                            Text(
+                                text = row.start.format(dateTimeFormat),
+                                color = VehicleInk,
+                                fontSize = 9.sp,
+                                lineHeight = 12.sp,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+
+                            Text(
+                                text = row.end.format(dateTimeFormat),
+                                color = VehicleInk,
+                                fontSize = 9.sp,
+                                lineHeight = 12.sp,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        } else {
+                            Text(
+                                text = bookingTimeLabel(row),
+                                color = VehicleInk,
+                                fontSize = 9.sp,
+                                lineHeight = 12.sp,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
+
+                    BookingClockIcon()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookingClockIcon() {
+    val color = Color(0xFF637B97)
+
+    Canvas(
+        modifier = Modifier.size(16.dp)
+    ) {
+        val stroke = 1.6.dp.toPx()
+
+        drawCircle(
+            color = color,
+            style = Stroke(width = stroke)
         )
 
-        Box(
-            Modifier
-                .size(36.dp)
-                .background(
-                    colors[
-                        Math.floorMod(
-                            row.ownerName.hashCode(),
-                            colors.size
-                        )
-                    ],
-                    CircleShape
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                historyInitials(row.ownerName),
-                color = VehicleInk,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
-
-        Image(
-            painter = painterResource(
-                vehicleIllustration(row.category)
+        drawLine(
+            color = color,
+            start = center,
+            end = androidx.compose.ui.geometry.Offset(
+                center.x,
+                center.y - size.height * .27f
             ),
-            contentDescription = null,
-            modifier = Modifier
-                .width(72.dp)
-                .height(46.dp),
-            contentScale = ContentScale.Fit
+            strokeWidth = stroke
+        )
+
+        drawLine(
+            color = color,
+            start = center,
+            end = androidx.compose.ui.geometry.Offset(
+                center.x + size.width * .20f,
+                center.y + size.height * .10f
+            ),
+            strokeWidth = stroke
         )
     }
 }
