@@ -35,10 +35,14 @@ internal const val DRIVING_CONSENT = "אני עומד/ת בדרישות החוק
 
 @Composable
 internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: HistoryViewModel, vehicles: VehiclesViewModel, family: FamilyViewModel,
+            booking: BookingViewModel,
             login: () -> Unit, next: () -> Unit,
             back: () -> Unit, changeAddress: () -> Unit, retryBootstrap: () -> Unit, enteredApp: () -> Unit,
             logout: () -> Unit) {
     var legal by remember { mutableStateOf<LegalCopy?>(null) }
+    LaunchedEffect(chat.ownerGeneration, model.authenticatedFamilyId, model.screen) {
+        booking.activate(chat.ownerGeneration, model.authenticatedFamilyId)
+    }
     MaterialTheme(colorScheme = lightColorScheme(primary = Primary, onPrimary = Color.White,
         secondary = Secondary, background = Color.White, surface = Color.White, onSurface = Navy,
         onSurfaceVariant = Secondary, outline = Outline, surfaceTint = Color.Transparent)) {
@@ -50,7 +54,7 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                     LaunchedEffect(chat.ownerGeneration) { chat.enter() }
                     key(chat.ownerGeneration) {
                         AuthenticatedAppShell(chat, model.authenticatedName, logout, model.busy, model.error,
-                            history, model.authenticatedFamilyId, vehicles, family)
+                            history, model.authenticatedFamilyId, vehicles, family, booking)
                     }
                 } else if (model.screen == EntryScreen.BOOTSTRAP) {
                     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),

@@ -59,7 +59,8 @@ internal class AppShellState {
 @Composable
 internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: String,
                                    logout: () -> Unit, logoutBusy: Boolean, logoutError: String?,
-                                   history: HistoryViewModel, familyId: Long?, vehicles: VehiclesViewModel, family: FamilyViewModel) {
+                                   history: HistoryViewModel, familyId: Long?, vehicles: VehiclesViewModel, family: FamilyViewModel,
+                                   booking: BookingViewModel) {
 
     val state = remember {
         AppShellState()
@@ -143,6 +144,8 @@ internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: Strin
                         VehiclesScreen(vehicles, familyId, state::back)
                     } else if (category == DashboardCategory.FAMILY) {
                         FamilyScreen(family, familyId, state::back)
+                    } else if (category == DashboardCategory.BOOKING_CENTER) {
+                        BookingScreen(booking, state::back)
                     } else {
                         DashboardCategoryPlaceholder(category, state::back)
                     }
@@ -158,7 +161,7 @@ internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: Strin
          * When the keyboard is closed, navigationBarsPadding keeps
          * the slider above Android's system navigation area.
          */
-        if (!imeVisible && state.category != DashboardCategory.HISTORY && state.category != DashboardCategory.VEHICLES && state.category != DashboardCategory.FAMILY) {
+        if (!imeVisible && state.category != DashboardCategory.HISTORY && state.category != DashboardCategory.VEHICLES && state.category != DashboardCategory.FAMILY && state.category != DashboardCategory.BOOKING_CENTER) {
 
             Box(
                 modifier = Modifier
