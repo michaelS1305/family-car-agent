@@ -49,6 +49,11 @@ object Http {
         }
     }
 
+    internal fun bookingRequest(base: String, path: String, method: String, body: JSONObject, bearer: String): String {
+        require(BookingFailure.supports(path, method))
+        return execute(base, path, method, body, bearer, null, error = BookingFailure::read)
+    }
+
     private fun execute(base: String, path: String, method: String, body: JSONObject?,
                         bearer: String?, apiKey: String?,
                         readTimeoutMillis: Int = 15000,

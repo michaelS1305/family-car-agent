@@ -5,6 +5,12 @@ import il.fca.companion.auth.SessionStore
 import org.json.JSONObject
 
 class FcaApi(private val auth: SessionStore) {
+    internal fun booking(owner: String, path: String, method: String, body: JSONObject): String {
+        require(BookingFailure.supports(path, method))
+        return bookingAuthenticated { force ->
+            Http.bookingRequest(BuildConfig.FCA_BASE_URL, path, method, body, auth.access(owner, force))
+        }
+    }
     internal fun chat(owner: String, path: String, method: String, body: JSONObject?): String {
         fun attempt(force: Boolean): String {
             val token = try { auth.access(owner, force) }
