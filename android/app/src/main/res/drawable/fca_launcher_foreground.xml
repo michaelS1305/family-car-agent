@@ -1,0 +1,7 @@
+<!-- 42% square: even its corners fit inside the 66dp safe circle on a 108dp canvas. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/fca_logo_intro"
+    android:insetLeft="29%"
+    android:insetTop="29%"
+    android:insetRight="29%"
+    android:insetBottom="29%" />

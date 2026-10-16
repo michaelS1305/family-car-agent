@@ -50,6 +50,7 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
             BackHandler(model.screen == EntryScreen.LOGIN || model.screen == EntryScreen.ONBOARDING || model.busy) { back() }
             if (model.screen == EntryScreen.AUTHENTICATED_APP) LaunchedEffect(Unit) { enteredApp() }
             Surface(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize()) {
                 if (model.screen == EntryScreen.AUTHENTICATED_APP) {
                     LaunchedEffect(chat.ownerGeneration) { chat.enter() }
                     key(chat.ownerGeneration) {
@@ -59,8 +60,7 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                 } else if (model.screen == EntryScreen.BOOTSTRAP) {
                     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
                         verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (model.busy) CircularProgressIndicator()
-                        else {
+                        if (!model.busy) {
                             Text("יש בעיה, נסה שוב", color = Secondary)
                             TextButton(onClick = retryBootstrap) { Text("נסה שוב") }
                         }
@@ -165,6 +165,8 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                     }
                 }
             }
+                    FcaLoadingOverlay(bootstrapLoading(model.screen, model.busy))
+                }
             }
             legal?.let { document ->
                 AlertDialog(onDismissRequest = { legal = null }, title = { Text(document.title) },
