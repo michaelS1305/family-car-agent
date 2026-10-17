@@ -236,7 +236,7 @@ class HistoryTest {
         assertTrue(ui.contains("current.occupied.forEach"))
         assertTrue(ui.contains("items(state.rows, key = { it.sessionRef })"))
         val shell = File("src/main/java/il/fca/companion/ui/AuthenticatedAppShell.kt").readText()
-        assertTrue(shell.contains("if (!imeVisible && state.category != DashboardCategory.HISTORY && state.category != DashboardCategory.VEHICLES && state.category != DashboardCategory.FAMILY && state.category != DashboardCategory.BOOKING_CENTER)"))
+        assertTrue(shell.contains("if (!imeVisible && state.category != DashboardCategory.HISTORY && state.category != DashboardCategory.VEHICLES && state.category != DashboardCategory.FAMILY && state.category != DashboardCategory.BOOKING_CENTER && state.category != DashboardCategory.SETTINGS)"))
         assertTrue(shell.contains("HistoryScreen(history, familyId, state::back)"))
     }
     @Test fun usageTimePresentationPreservesLocalZoneAndExplicitMultiDayEndpoints() {

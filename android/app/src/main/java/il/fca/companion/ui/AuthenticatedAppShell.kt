@@ -36,6 +36,15 @@ internal enum class AppMode {
 }
 
 internal class AppShellState {
+    private var companionHint = false
+
+    fun openCompanionVehicles() {
+        if (mode != AppMode.DASHBOARD || category != DashboardCategory.SETTINGS) return
+        openCategory(DashboardCategory.VEHICLES)
+        companionHint = true
+    }
+
+    fun takeCompanionHint(): Boolean = companionHint.also { companionHint = false }
 
     var mode by mutableStateOf(AppMode.CHAT)
         private set
@@ -43,14 +52,17 @@ internal class AppShellState {
         private set
 
     fun select(value: AppMode) {
+        companionHint = false
         category = null
         mode = value
     }
     fun openCategory(value: DashboardCategory) {
+        companionHint = false
         if (mode == AppMode.DASHBOARD) category = value
     }
 
     fun back() {
+        companionHint = false
         if (category != null) category = null else mode = AppMode.CHAT
     }
 }
@@ -147,11 +159,26 @@ internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: Strin
                     } else if (category == DashboardCategory.HISTORY) {
                         HistoryScreen(history, familyId, state::back)
                     } else if (category == DashboardCategory.VEHICLES) {
+                        val showHint = remember { state.takeCompanionHint() }
+                        val snackbar = remember { androidx.compose.material3.SnackbarHostState() }
+                        LaunchedEffect(Unit) {
+                            if (showHint) snackbar.showSnackbar(COMPANION_VEHICLES_HINT,
+                                duration = androidx.compose.material3.SnackbarDuration.Short)
+                        }
                         VehiclesScreen(vehicles, familyId, state::back)
+                        CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Rtl) {
+                            androidx.compose.material3.SnackbarHost(snackbar,
+                                Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
+                        }
                     } else if (category == DashboardCategory.FAMILY) {
                         FamilyScreen(family, familyId, state::back)
                     } else if (category == DashboardCategory.BOOKING_CENTER) {
                         BookingScreen(booking, state::back)
+                    } else if (category == DashboardCategory.SETTINGS) {
+                        SettingsScreen(authenticatedName,
+                            openFamily = { state.openCategory(DashboardCategory.FAMILY) },
+                            openCompanion = state::openCompanionVehicles,
+                            back = state::back)
                     } else {
                         DashboardCategoryPlaceholder(category, state::back)
                     }
@@ -167,7 +194,7 @@ internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: Strin
          * When the keyboard is closed, navigationBarsPadding keeps
          * the slider above Android's system navigation area.
          */
-        if (!imeVisible && state.category != DashboardCategory.HISTORY && state.category != DashboardCategory.VEHICLES && state.category != DashboardCategory.FAMILY && state.category != DashboardCategory.BOOKING_CENTER) {
+        if (!imeVisible && state.category != DashboardCategory.HISTORY && state.category != DashboardCategory.VEHICLES && state.category != DashboardCategory.FAMILY && state.category != DashboardCategory.BOOKING_CENTER && state.category != DashboardCategory.SETTINGS) {
 
             Box(
                 modifier = Modifier
