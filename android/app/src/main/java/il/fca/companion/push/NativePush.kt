@@ -7,10 +7,12 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.annotation.SuppressLint
 import il.fca.companion.FcaApplication
 import il.fca.companion.R
 import il.fca.companion.ui.EntryActivity
 import org.json.JSONObject
+
 
 /** Default app process only; independent from Companion executors, tables and channels. */
 class NativePush(private val app: FcaApplication) {
@@ -56,20 +58,44 @@ class NativePush(private val app: FcaApplication) {
     private fun clearNotifications() {
         manager.activeNotifications.filter { it.tag?.startsWith(TAG) == true }.forEach { manager.cancel(it.tag, it.id) }
     }
+    @SuppressLint("NotificationPermission")
     private fun display(event: PushEvent): Boolean {
-        channel()
-        if (!pushNotificationsAllowed(app.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
-                manager.areNotificationsEnabled(), manager.getNotificationChannel(CHANNEL)?.importance))
+        if (app.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             return false
-        val intent = Intent(app, EntryActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        val tap = PendingIntent.getActivity(app, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        manager.notify(TAG + event.ref, 0, Notification.Builder(app, CHANNEL)
-            .setSmallIcon(R.drawable.single_car_icon).setContentTitle(app.getString(R.string.app_name))
-            .setContentText(event.text()).setContentIntent(tap).setAutoCancel(true).setOnlyAlertOnce(true)
-            .setVisibility(Notification.VISIBILITY_SECRET).setTimeoutAfter((event.expires - System.currentTimeMillis()).coerceAtLeast(1))
-            .build())
+        }
+
+        channel()
+        if (!pushNotificationsAllowed(
+                app.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
+                manager.areNotificationsEnabled(),
+                manager.getNotificationChannel(CHANNEL)?.importance
+            ))
+            return false
+
+        val intent = Intent(app, EntryActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+
+        val tap = PendingIntent.getActivity(
+            app, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        manager.notify(
+            TAG + event.ref, 0,
+            Notification.Builder(app, CHANNEL)
+                .setSmallIcon(R.drawable.single_car_icon)
+                .setContentTitle(app.getString(R.string.app_name))
+                .setContentText(event.text())
+                .setContentIntent(tap)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setVisibility(Notification.VISIBILITY_SECRET)
+                .setTimeoutAfter((event.expires - System.currentTimeMillis()).coerceAtLeast(1))
+                .build()
+        )
         return true
     }
+
     companion object {
         const val CHANNEL = "fca_native_vehicle_events"
         private const val TAG = "fca-native:"
