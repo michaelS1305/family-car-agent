@@ -110,7 +110,9 @@ internal class VehicleDetailsViewModel(private val api: VehicleDetailsGateway, p
             catch (_: Exception) { if (valid(who, version)) state = state.copy(catalogLoading = false, catalogError = true) }
         }
     }
-    fun submit() {
+    fun completeMaintenance() = submit(completing = true)
+    fun submit() = submit(completing = false)
+    private fun submit(completing: Boolean) {
         val who = owner ?: return
         val dialog = state.dialog ?: return
         if (!state.canManage || state.busy || identity() != who) return
@@ -119,6 +121,8 @@ internal class VehicleDetailsViewModel(private val api: VehicleDetailsGateway, p
         val description = state.description
         val date = state.date
         val item = state.maintenanceRef
+        if (completing && (dialog != VehicleDialog.MAINTENANCE || item == null ||
+                state.maintenance.none { it.ref == item && !it.completed })) return
         val deleting = dialog == VehicleDialog.MAINTENANCE && state.confirmDelete && item != null
         if (dialog == VehicleDialog.MAINTENANCE && !deleting && description.isBlank()) return
         val version = generation
@@ -129,6 +133,7 @@ internal class VehicleDetailsViewModel(private val api: VehicleDetailsGateway, p
                     VehicleDialog.EDIT -> api.edit(who.owner, ref, draft)
                     VehicleDialog.RETIRE -> api.retire(who.owner, ref)
                     VehicleDialog.MAINTENANCE -> when {
+                        completing -> api.completeMaintenance(who.owner, ref, checkNotNull(item))
                         deleting -> api.deleteMaintenance(who.owner, ref, checkNotNull(item))
                         item != null -> api.updateMaintenance(who.owner, ref, item, description, date)
                         else -> api.addMaintenance(who.owner, ref, description, date)

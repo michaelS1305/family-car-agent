@@ -62,6 +62,20 @@ class NativePushTest {
         assertEquals(setOf("installation_ref", "request_id", "platform", "token"), body.keys().asSequence().toSet())
         assertEquals("android", body.getString("platform"))
     }
+    @Test fun reminderRequiresAuthorizedScheduleAndKeepsShortExpiry() {
+        val f = Fixture()
+        for (type in listOf("reservation_reminder", "maintenance_reminder")) {
+            val body = f.event(type)
+            assertNull(PushEvent.parse(body, f.now))
+            body.put("scheduled_for", Instant.ofEpochMilli(f.now + 3_600_000).toString())
+            val parsed = PushEvent.parse(body, f.now)
+            assertNotNull(parsed)
+            assertTrue(parsed!!.text().contains("תזכורת"))
+            assertTrue(parsed.text().contains("היונדאי"))
+            body.put("scheduled_for", Instant.ofEpochMilli(f.now - 1).toString())
+            assertNull(PushEvent.parse(body, f.now))
+        }
+    }
     @Test fun opaqueProtocolRejectsExtraFieldsAndVersions() {
         assertTrue(refreshSignal(mapOf("kind" to "refresh", "version" to "1")))
         assertFalse(refreshSignal(mapOf("kind" to "refresh", "version" to "2")))

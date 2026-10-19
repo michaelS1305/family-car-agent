@@ -32,6 +32,7 @@ class VehicleDetailsTest {
         val calls = mutableListOf<Pair<String, String>>()
         var edits = 0; var retires = 0; var additions = 0
         var maintenanceEdits = 0; var deletions = 0
+        var completions = 0
         override suspend fun detail(owner: String, ref: String): VehicleDetail {
             calls += owner to ref; return detailAction?.invoke() ?: row
         }
@@ -60,6 +61,11 @@ class VehicleDetailsTest {
             failure?.let { throw it }; deletions++
             rows = rows.filterNot { it.ref == item }
         }
+        override suspend fun completeMaintenance(owner: String, ref: String, item: String) {
+            calls += owner to ref
+            failure?.let { throw it }; completions++
+            rows = rows.map { if (it.ref == item) it.copy(completed = true) else it }
+        }
     }
     private suspend fun settle() { repeat(12) { yield() } }
     private fun model(g: Gateway, scope: CoroutineScope, identity: () -> VehiclesIdentity? = { VehiclesIdentity("owner", 1) }) =
@@ -72,6 +78,25 @@ class VehicleDetailsTest {
         assertEquals(R.drawable.single_car_icon, vehicleIllustration(null))
         assertEquals("יונדאי", vehicle().manufacturerName)
         assertEquals("i20", vehicle().model); assertEquals("ABC-12", vehicle().plate)
+    }
+    @Test fun maintenanceCompletionWaitsForServerAndChecksIdentity() = runBlocking {
+        val item = VehicleMaintenance(UUID(0, 8).toString(), "טיפול", LocalDate.of(2030, 1, 1))
+        val g = Gateway().apply { rows = listOf(item) }
+        var identity: VehiclesIdentity? = VehiclesIdentity("owner", 1)
+        val m = model(g, this) { identity }
+        try {
+            m.start(); settle(); m.openMaintenance(item)
+            g.failure = IOException(); m.completeMaintenance(); settle()
+            assertEquals(0, g.completions); assertFalse(m.state.maintenance.single().completed)
+            assertNotNull(m.state.operationError)
+            identity = VehiclesIdentity("other", 2)
+            g.failure = null; m.completeMaintenance(); settle(); assertEquals(0, g.completions)
+            identity = VehiclesIdentity("owner", 1)
+            m.completeMaintenance(); settle()
+            assertEquals(1, g.completions); assertTrue(m.state.maintenance.single().completed)
+            m.openMaintenance(m.state.maintenance.single()); m.completeMaintenance(); settle()
+            assertEquals(1, g.completions)
+        } finally { m.stop() }
     }
     @Test fun roleAndRetiredGuardsApplyToAllManagementForms() = runBlocking {
         for ((admin, retired) in listOf(true to false, false to false, true to true)) {

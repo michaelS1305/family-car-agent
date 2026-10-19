@@ -14,6 +14,7 @@ from native_push_fcm import Result
 from native_push_outbox import enabled, wakeup
 from native_push_registration import ERASE
 from native_push_security import Config, ConfigurationError, token_context, nonce_context
+import native_push_reminders as reminders
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ def delivery_payload(pool, config, claim):
             "AND d.lease_until>clock_timestamp() AND e.status='pending' AND e.expires_at>clock_timestamp() "
             "AND i.status='active' AND i.generation=d.installation_generation AND i.user_id=d.recipient_user_id "
             "AND i.provider_project=%s AND u.family_id=e.family_id AND actor.family_id=e.family_id "
-            "AND u.id<>e.actor_user_id AND NOT EXISTS (SELECT 1 FROM account_deletion_jobs j "
+            "AND " + reminders.eligibility() + " AND NOT EXISTS (SELECT 1 FROM account_deletion_jobs j "
             "WHERE j.auth_user_id IN (u.auth_user_id,actor.auth_user_id))", (*claim,config.project)).fetchone()
         if not row:
             return None
@@ -83,7 +84,7 @@ def finish_delivery(pool, claim, result):
         _limits(conn)
         row = conn.execute("SELECT d.installation_ref,d.installation_generation,d.attempt_count,e.expires_at,"
             "i.generation,i.status,u.family_id,e.family_id,u.id,e.actor_user_id,"
-            "EXISTS(SELECT 1 FROM users actor JOIN auth.users a ON a.id=actor.auth_user_id "
+            + reminders.eligibility() + ",EXISTS(SELECT 1 FROM users actor JOIN auth.users a ON a.id=actor.auth_user_id "
             "JOIN auth.users recipient ON recipient.id=u.auth_user_id "
             "WHERE actor.id=e.actor_user_id AND actor.family_id=e.family_id AND NOT EXISTS "
             "(SELECT 1 FROM account_deletion_jobs j WHERE j.auth_user_id IN (u.auth_user_id,actor.auth_user_id))) "
@@ -97,7 +98,7 @@ def finish_delivery(pool, claim, result):
         code = result.code
         if row[1] != row[4] or row[5] != 'active':
             code = 'generation_changed'
-        elif row[6] != row[7] or row[8] == row[9] or not row[10]:
+        elif row[6] != row[7] or not row[10] or not row[11]:
             code = 'identity_unavailable'
         elif row[3] <= now:
             code = 'expired'
@@ -190,6 +191,12 @@ def challenge_pass(pool, config, provider):
 
 
 def run_once(pool, config, provider):
+    try:
+        reminders.schedule(pool, config.project)
+    except Exception:
+        # Independent transaction: no business write or existing vehicle outbox
+        # is rolled back. Next durable poll can retry; never log source contents.
+        log.error('native_push_reminder_schedule_failed')
     challenge_pass(pool,config,provider)
     claim = claim_delivery(pool,config.project)
     if claim:

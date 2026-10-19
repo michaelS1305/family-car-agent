@@ -164,6 +164,7 @@ internal fun VehicleDetailsScreen(model: VehicleDetailsViewModel, companion: Com
                                         Image(painterResource(R.drawable.maintenance_icon), null, Modifier.size(28.dp))
                                         Column(Modifier.padding(start = 10.dp)) {
                                             Text(item.description, color = VehicleInk, fontWeight = FontWeight.Medium)
+                                            if (item.completed) Text("בוצע", color = Color(0xFF788699))
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 Image(painterResource(R.drawable.ic_calender), null, Modifier.size(17.dp))
                                                 Text(item.date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")), Modifier.padding(start = 6.dp), color = VehicleInk)
@@ -254,6 +255,13 @@ private fun VehicleDetailsDialog(model: VehicleDetailsViewModel) {
                 })
             }
             if (dialog == VehicleDialog.MAINTENANCE && s.maintenanceRef != null) {
+                if (s.maintenance.any { it.ref == s.maintenanceRef && !it.completed }) {
+                    TextButton(model::completeMaintenance, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
+                        Text("סימון הטיפול כבוצע")
+                    }
+                } else {
+                    Text("הטיפול בוצע")
+                }
                 TextButton(model::requestDelete, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
                     Text("מחיקת טיפול", color = MaterialTheme.colorScheme.error)
                 }

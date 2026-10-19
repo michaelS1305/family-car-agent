@@ -58,16 +58,22 @@ class ManagementConnection(MemoryConnection):
                     r['status'] = 'cancelled'
         elif sql.startswith('INSERT INTO vehicle_maintenance('):
             vehicle, description, scheduled, creator = params
-            one = (uuid4(), description, scheduled, self.clock)
+            one = (uuid4(), description, scheduled, self.clock, False)
             self.maintenance.append((vehicle, len(self.maintenance) + 1, one, creator))
         elif sql.startswith('UPDATE vehicle_maintenance SET description='):
             assert sql == ('UPDATE vehicle_maintenance SET description=%s,scheduled_date=%s '
                            'WHERE vehicle_id=%s AND maintenance_ref=%s '
-                           'RETURNING maintenance_ref,description,scheduled_date,created_at'), sql
+                           'RETURNING maintenance_ref,description,scheduled_date,created_at,completed'), sql
             description, scheduled, vehicle, ref = params
             for i, r in enumerate(self.maintenance):
                 if r[0] == vehicle and r[2][0] == ref:
-                    one = (ref, description, scheduled, r[2][3])
+                    one = (ref, description, scheduled, r[2][3], r[2][4])
+                    self.maintenance[i] = (r[0], r[1], one, r[3])
+                    break
+        elif sql.startswith('UPDATE vehicle_maintenance SET completed=true'):
+            for i, r in enumerate(self.maintenance):
+                if r[0] == params[0] and r[2][0] == params[1]:
+                    one = (*r[2][:4], True)
                     self.maintenance[i] = (r[0], r[1], one, r[3])
                     break
         elif sql.startswith('DELETE FROM vehicle_maintenance '):
@@ -77,7 +83,7 @@ class ManagementConnection(MemoryConnection):
                     one = (r[2][0],)
                     self.maintenance.pop(i)
                     break
-        elif sql.startswith('SELECT maintenance_ref,description,scheduled_date,created_at FROM vehicle_maintenance '):
+        elif sql.startswith('SELECT maintenance_ref,description,scheduled_date,created_at,completed FROM vehicle_maintenance '):
             assert sql.endswith('WHERE vehicle_id=%s ORDER BY scheduled_date ASC,id ASC'), sql
             many = [r[2] for r in sorted(self.maintenance, key=lambda r: (r[2][2], r[1])) if r[0] == params[0]]
         else:
@@ -127,6 +133,19 @@ class VehicleManagementTests(unittest.TestCase):
         self.assertIsNone(row['started_at'])
         self.assertEqual(self.client.get('/api/vehicles').json(), [])
         self.assertEqual(self.client.get('/api/vehicles?include_retired=true').json(), [row])
+
+    def test_completion_is_creator_only_idempotent_and_edits_do_not_reopen(self):
+        payload = {'description': 'Oil', 'scheduled_date': '2030-01-01'}
+        item = self.client.post(self.path + '/maintenance', json=payload).json()
+        path = self.path + '/maintenance/' + item['maintenance_ref']
+        self.user = self.peer
+        self.assertEqual(self.client.post(path + '/complete').status_code,403)
+        self.user = self.other
+        self.assertEqual(self.client.post(path + '/complete').status_code,404)
+        self.user = self.owner
+        self.assertTrue(self.client.post(path + '/complete').json()['completed'])
+        self.assertTrue(self.client.post(path + '/complete').json()['completed'])
+        self.assertTrue(self.client.put(path,json=payload).json()['completed'])
 
     def test_edit_full_payload_and_no_internal_identity(self):
         self.conn.manufacturers[3] = ('New maker', True)
@@ -221,7 +240,8 @@ class VehicleManagementTests(unittest.TestCase):
         for description, scheduled in [('future', '2030-01-01'), ('past', '2020-01-01'), ('tie', '2020-01-01')]:
             result = self.client.post(self.path + '/maintenance', json={'description': description, 'scheduled_date': scheduled})
             self.assertEqual(result.status_code, 200)
-            self.assertEqual(set(result.json()), {'maintenance_ref', 'description', 'scheduled_date', 'created_at'})
+            self.assertEqual(set(result.json()), {'maintenance_ref', 'description', 'scheduled_date', 'created_at', 'completed'})
+            self.assertFalse(result.json()['completed'])
             refs.append(result.json()['maintenance_ref'])
             if len(refs) == 1:
                 self.assertEqual(len(self.client.get(self.path + '/maintenance').json()), 1)
@@ -332,6 +352,7 @@ class VehicleManagementPostgresTests(unittest.TestCase):
         statement = start + source.split(start, 1)[1].split(';', 1)[0] + ';'
         # Isolated local schema DDL only, not migration execution or public ACL changes.
         self.query(statement.replace('public.', self.schema + '.'))
+        self.query('ALTER TABLE vehicle_maintenance ADD COLUMN completed boolean NOT NULL DEFAULT false')
         self.car = self.vehicle()
         self.vehicle_id = self.query('SELECT id FROM vehicles WHERE vehicle_ref=%s', (self.car.vehicle_ref,))[0][0]
 

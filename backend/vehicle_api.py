@@ -140,6 +140,16 @@ def edit_maintenance(vehicle_ref: UUID, maintenance_ref: UUID, request: maintena
     return _call(run)
 
 
+@router.post('/{vehicle_ref}/maintenance/{maintenance_ref}/complete', response_model=maintenance.MaintenanceView)
+def complete_maintenance(vehicle_ref: UUID, maintenance_ref: UUID, response: Response,
+                         current_user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):
+    response.headers['Cache-Control'] = 'no-store'
+    def run():
+        with pool.connection() as conn:
+            return maintenance.complete_item(conn, current_user, vehicle_ref, maintenance_ref)
+    return _call(run)
+
+
 @router.delete('/{vehicle_ref}/maintenance/{maintenance_ref}', status_code=204)
 def delete_maintenance(vehicle_ref: UUID, maintenance_ref: UUID, response: Response,
                        current_user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):

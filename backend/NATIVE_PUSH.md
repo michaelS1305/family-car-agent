@@ -272,3 +272,101 @@ still apply. Key-ring rotation and throughput tuning remain separate work.
 
 No live FCM/Render/Supabase calls, credential inspection or application deployment
 are performed by this implementation's validation.
+
+## Reservation and maintenance reminders (local implementation, manual rollout)
+
+Apply `supabase/manual_migrations/2026101901_native_push_reminders.sql` manually
+to the separately verified Dev database **before deploying this backend** (the
+maintenance API now reads `completed`). Run the adjacent read-only verification
+SQL. Do not execute migrations at application startup. Existing vehicle events,
+their composite source FK, five-minute TTL, table ownership/RLS and backend-only
+Native Push ACL remain intact. No default privileges or policies are changed.
+`completed=false` is additive for existing maintenance rows; existing clients'
+PUT requests preserve it. The original migrations are unchanged. Prod is not
+verified or activated by these instructions.
+
+`NATIVE_PUSH_REMINDERS_ENABLED=true` is an additional, default-off rollout gate;
+`NATIVE_PUSH_ENABLED=true` is still required. Install the updated Android client
+manually before device testing. Old clients safely ignore unknown reminder types.
+Disabling the reminder gate stops new scheduling and suppresses reminder fetch /
+delivery, without altering TAKEN/RETURNED behavior. It does not revoke already
+displayed notifications. No new Firebase credentials or dependencies are needed.
+
+### Timing and recipients
+
+* Reservation: one elapsed hour before the Jerusalem-local stored `start_time`.
+  Stored timestamps have no offset; PostgreSQL `AT TIME ZONE 'Asia/Jerusalem'`
+  resolves them. The current reservation `user_id` is its creator/recipient.
+  Late creation or delayed workers catch up on the next pass while start is still
+  in the future; at/after start there is no reminder. Changes to start, vehicle or
+  owner define a different occurrence; returning to the same tuple does not send
+  another reminder. End-time/description changes do not create another reminder.
+* Maintenance: the **previous Jerusalem calendar day at 09:00**, not a fixed
+  24-hour offset. This is an explicit engineering choice because maintenance has
+  only a DATE, no appointment time. Catch-up ends at midnight starting the due
+  date; same-day/past-date creation is not reminded. The permanent administrator
+  is `families.created_by_user_id`; `parent`/`child` are not administrative grants.
+  A new date/vehicle/admin defines a different occurrence. Marking completed or
+  deleting (the existing cancellation operation) prevents future fetch/send.
+* On ambiguous/nonexistent DST wall times, PostgreSQL's standard-time resolution
+  applies. The legacy storage cannot distinguish repeated-hour folds; no new
+  timestamp interpretation is written back to reservations. Calendar dates are
+  never treated as UTC dates. A future offset-aware booking contract is separate.
+
+The existing worker polls authoritative source rows; no business mutation calls
+FCM or inserts reminder work. Durable source data plus a database occurrence
+unique key survive restart; a nonblocking advisory lock bounds one scheduling
+pass to 50 sources. Event + installation-generation deliveries commit in one
+independent transaction. A scheduler error rolls back that transaction, emits
+only `native_push_reminder_schedule_failed`, and cannot roll back the reservation
+or maintenance transaction. Subsequent polls retry. Cancellation/rescheduling
+racing the producer is checked against the live source at send and inbox read.
+
+The first eligible pass with an active installation creates an event with expiry
+`min(created time + 5 minutes, source start/due-date midnight)`. This deliberately
+retains the existing short-lived inbox/Android dedup protocol. Once produced, an
+occurrence is not reissued after delivery failure, expiry, new registration or
+generation rotation. Cleanup's seven-day retention exceeds every catch-up window,
+so deleting old outbox rows cannot replay a still-due occurrence. No guarantee of
+delivery is made: Render sleep, backlog (one delivery/pass), OS restrictions or
+offline clients may lose reminders. A sleeping Free instance is not a reliable
+alarm clock. No external scheduler or always-on infrastructure was introduced.
+
+### Secure content and client behavior
+
+FCM stays exactly `{"kind":"refresh","version":"1"}`. The existing authenticated,
+installation/generation-bound GET inbox adds `reservation_reminder` and
+`maintenance_reminder` types with `scheduled_for` (offset-aware ISO instant).
+Existing event fields are unchanged; no source ref, description or business data
+is sent over FCM. Android formats the returned date/time in Jerusalem and reuses
+the same permission/channel, account fencing, deduplication and notification path.
+Future iOS/Web clients can consume the same authorized contract; existing Web
+Push infrastructure is not changed. No Web maintenance UI existed to extend.
+
+Send and fetch both require live account, family, installation owner/generation,
+active vehicle, unchanged source ownership/date and active/uncompleted source.
+Maintenance additionally rechecks the current creator. Installation revocation
+or account switching cannot authorize a detail fetch with an old identity.
+An authorization/source change **after** an authorized response can still race
+local display; opaque in-flight FCM carries no sensitive data and cannot cancel
+an already displayed notification. Device QA must exercise these boundaries.
+
+Maintenance gains idempotent creator-only
+`POST /api/vehicles/{vehicle_ref}/maintenance/{maintenance_ref}/complete` and an
+additive `completed` boolean on list/create/update responses. Editing never
+reopens completed work; create a new item for a new treatment. Existing DELETE
+continues to cancel/remove the item. Android exposes completion in the existing
+maintenance editor, waits for server confirmation and refreshes with the existing
+owner/family guards. Errors are local, with no automatic mutation retry.
+
+### Local verification and deployment limits
+
+The reminder integration tests require an explicitly supplied loopback
+`GEMINI_TEST_DATABASE_URL` ending in `/test_gemini`. They create/drop isolated
+schemas, use the existing P2 DDL and the new migration (schema / local executor
+substitution only), and never contact cloud services. The new migration must
+still be reviewed against actual Dev catalog/default ACL before manual execution.
+Check application logs for sanitized scheduler failures after activation; malformed
+legacy timestamp text or a large source scan hitting the 3s statement deadline
+can prevent a pass. No claim of indexed large-scale scheduling throughput or
+physical-device reminder reliability is made by local tests.

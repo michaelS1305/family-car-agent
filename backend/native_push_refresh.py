@@ -1,6 +1,7 @@
 """Installation-bound short-lived inbox. Caller owns the transaction."""
 from deletion_gate import require_auth, IdentityUnavailable
 from vehicle_admission import CAR_TRANSITION_LOCK_NAMESPACE
+import native_push_reminders as reminders
 
 
 class RefreshError(Exception):
@@ -31,21 +32,23 @@ def events(conn, user, config, installation_ref, expected_generation, limit=20, 
              "JOIN users actor ON actor.id=e.actor_user_id JOIN auth.users a ON a.id=actor.auth_user_id "
              "JOIN vehicles v ON v.id=e.vehicle_id AND v.family_id=e.family_id "
              "WHERE d.installation_ref=%s AND d.recipient_user_id=%s AND d.installation_generation=%s "
-             "AND e.family_id=%s AND actor.family_id=e.family_id AND e.actor_user_id<>%s "
+             "AND e.family_id=%s AND actor.family_id=e.family_id AND " + reminders.eligibility() + " "
              "AND e.status IN ('pending','complete') AND e.expires_at>clock_timestamp() "
              "AND NOT EXISTS (SELECT 1 FROM account_deletion_jobs j WHERE j.auth_user_id=actor.auth_user_id) ")
-    params = (installation_ref, user.user_id, expected_generation, user.family_id, user.user_id)
+    params = (installation_ref, user.user_id, expected_generation, user.family_id)
     boundary, extra = '', ()
     if cursor is not None:
         row = conn.execute('SELECT e.occurred_at,e.event_ref' + scope + 'AND e.event_ref=%s', (*params, cursor)).fetchone()
         if not row:
             raise RefreshError('INVALID_NATIVE_PUSH_CURSOR', 422)
         boundary, extra = 'AND (e.occurred_at,e.event_ref)<(%s,%s) ', tuple(row)
-    rows = conn.execute('SELECT e.event_ref,e.event_type,e.occurred_at,e.expires_at,actor.name,v.vehicle_ref,v.display_name' +
+    detail = ',e.scheduled_for' if reminders.enabled() else ',NULL::timestamptz'
+    rows = conn.execute('SELECT e.event_ref,e.event_type,e.occurred_at,e.expires_at,actor.name,v.vehicle_ref,v.display_name' + detail +
                         scope + boundary + 'ORDER BY e.occurred_at DESC,e.event_ref DESC LIMIT %s',
                         (*params, *extra, limit + 1)).fetchall()
     items = [dict(event_ref=str(ref), type=kind, occurred_at=occurred.isoformat(), expires_at=expires.isoformat(),
-                  actor_name=name, vehicle_ref=str(vehicle), vehicle_name=display)
-             for ref, kind, occurred, expires, name, vehicle, display in rows[:limit]]
+                  actor_name=name, vehicle_ref=str(vehicle), vehicle_name=display,
+                  **({'scheduled_for': scheduled.isoformat()} if scheduled else {}))
+             for ref, kind, occurred, expires, name, vehicle, display, scheduled in rows[:limit]]
     more = len(rows) > limit
     return dict(items=items, has_more=more, next_cursor=items[-1]['event_ref'] if more else None)

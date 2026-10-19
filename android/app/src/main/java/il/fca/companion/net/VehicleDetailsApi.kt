@@ -11,7 +11,7 @@ import org.json.JSONObject
 data class VehicleDetail(val vehicle: ManagedVehicle, val inUse: Boolean) {
     val status get() = if (vehicle.readOnly) "לא פעיל" else if (inUse) "בשימוש" else "פנוי"
 }
-data class VehicleMaintenance(val ref: String, val description: String, val date: LocalDate)
+data class VehicleMaintenance(val ref: String, val description: String, val date: LocalDate, val completed: Boolean = false)
 interface VehicleDetailsGateway {
     suspend fun detail(owner: String, ref: String): VehicleDetail
     suspend fun maintenance(owner: String, ref: String): List<VehicleMaintenance>
@@ -22,6 +22,7 @@ interface VehicleDetailsGateway {
     suspend fun addMaintenance(owner: String, ref: String, description: String, date: LocalDate)
     suspend fun updateMaintenance(owner: String, ref: String, item: String, description: String, date: LocalDate)
     suspend fun deleteMaintenance(owner: String, ref: String, item: String)
+    suspend fun completeMaintenance(owner: String, ref: String, item: String)
 }
 class VehicleDetailsApi(private val api: FcaApi) : VehicleDetailsGateway {
     private val vehicles = VehiclesApi(api)
@@ -60,6 +61,11 @@ class VehicleDetailsApi(private val api: FcaApi) : VehicleDetailsGateway {
             api.call(owner, path(ref) + "/maintenance/${UUID.fromString(item)}", "DELETE")
         }
     }
+    override suspend fun completeMaintenance(owner: String, ref: String, item: String) {
+        withContext(Dispatchers.IO) {
+            api.call(owner, path(ref) + "/maintenance/${UUID.fromString(item)}/complete", "POST")
+        }
+    }
     companion object {
         internal fun editBody(draft: VehicleDraft): JSONObject {
             require(draft.valid)
@@ -72,7 +78,8 @@ class VehicleDetailsApi(private val api: FcaApi) : VehicleDetailsGateway {
                 val row = rows.getJSONObject(i)
                 OffsetDateTime.parse(row.getString("created_at"))
                 VehicleMaintenance(UUID.fromString(row.getString("maintenance_ref")).toString(),
-                    row.getString("description"), LocalDate.parse(row.getString("scheduled_date")))
+                    row.getString("description"), LocalDate.parse(row.getString("scheduled_date")),
+                    if (row.has("completed")) row.get("completed") as Boolean else false)
             }.also { require(it.map(VehicleMaintenance::ref).distinct().size == it.size) }
         }
     }
