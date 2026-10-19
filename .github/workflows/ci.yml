@@ -92,6 +92,16 @@ jobs:
           OAUTH_CALLBACK_URI=il.fca.companion://auth/callback
           SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci_fixture
           EOF
+      - name: Restore Firebase Dev configuration
+        shell: bash
+        env:
+          FIREBASE_DEV_CONFIG: ${{ secrets.FCA_FIREBASE_DEV_GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$FIREBASE_DEV_CONFIG" ]; then
+            echo "Missing Firebase Dev configuration secret"
+            exit 1
+          fi
+          printf '%s' "$FIREBASE_DEV_CONFIG" > app/src/dev/google-services.json
       - name: Verify Gradle runtime
         run: bash ./gradlew --version
       - name: Environment configuration guards
