@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 from dotenv import load_dotenv
@@ -11,6 +12,8 @@ from account_deletion_api import router as deletion_router, deletion_lifespan
 from vehicle_api import router as vehicle_router
 from vehicle_reference_api import router as vehicle_reference_router
 from device_api import router as device_router
+from native_push_api import router as native_push_router
+from native_push_worker import native_lifespan
 from deletion_gate import IdentityUnavailable
 
 load_dotenv()
@@ -120,11 +123,18 @@ def _cors_allowed_origins() -> list[str]:
     return origins
 
 
-app = FastAPI(lifespan=deletion_lifespan)
+@asynccontextmanager
+async def app_lifespan(app):
+    async with deletion_lifespan(app), native_lifespan(app):
+        yield
+
+
+app = FastAPI(lifespan=app_lifespan)
 app.include_router(deletion_router)
 app.include_router(vehicle_router)
 app.include_router(vehicle_reference_router)
 app.include_router(device_router)
+app.include_router(native_push_router)
 
 
 @app.exception_handler(IdentityUnavailable)
@@ -137,6 +147,8 @@ async def identity_unavailable(request, exc):
 
 @app.exception_handler(RequestValidationError)
 async def safe_disconnect_validation_error(request, exc):
+    if request.url.path.startswith('/api/native-push/'):
+        return JSONResponse(status_code=422, content={'detail': {'code': 'INVALID_NATIVE_PUSH_REQUEST'}})
     if request.url.path in ("/car/connect", "/car/disconnect"):
         # Never serialize non-finite inputs or echo the credential/body.
         return JSONResponse(status_code=422, content={

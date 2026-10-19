@@ -293,6 +293,8 @@ def load_main_module(environment=None):
                 "vehicle_reference_api": stub_module("vehicle_reference_api", router=Mock()),
                 "vehicle_api": stub_module("vehicle_api", router=Mock()),
                 "device_api": stub_module("device_api", router=Mock()),
+                "native_push_api": stub_module("native_push_api", router=Mock()),
+                "native_push_worker": stub_module("native_push_worker", native_lifespan=Mock()),
                 "dotenv": dotenv_stub,
                 "fastapi": fastapi_stub,
                 "fastapi.middleware.cors": cors_stub,

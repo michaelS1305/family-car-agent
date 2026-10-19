@@ -562,10 +562,11 @@ def get_user_by_token(shortcut_token):
 
 
 def apply_carplay_transition(shortcut_token, acquisition_id, *, disconnect=False):
+    from native_push_outbox import commit_boundary
     from carplay_adapter import transition
     from identity import CurrentUser
     from vehicle_identity import VehicleIdentityError
-    with pool.connection() as conn:
+    with commit_boundary(), pool.connection() as conn:
         row = conn.execute('SELECT id,name,family_id,auth_user_id FROM users WHERE shortcut_token=%s',
                            (shortcut_token,)).fetchone()
         if not row or row[3] is None:

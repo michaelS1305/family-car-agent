@@ -9,6 +9,7 @@ from vehicle_admission import NativeEvent
 from vehicle_api import vehicle_pool, _call
 import vehicle_lifecycle as lifecycle
 import vehicle_bindings
+from native_push_outbox import commit_boundary
 
 router = APIRouter(prefix='/api/devices', tags=['devices'])
 
@@ -38,7 +39,7 @@ def run(pool, response, operation):
     response.headers['Cache-Control'] = 'no-store'
     def execute():
         try:
-            with pool.connection() as conn:
+            with commit_boundary(), pool.connection() as conn:
                 return operation(conn)
         except IdentityUnavailable:
             raise HTTPException(403, detail={'code': 'IDENTITY_UNAVAILABLE', 'message': 'Identity unavailable'}) from None
