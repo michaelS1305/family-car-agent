@@ -1,6 +1,7 @@
 import java.util.Properties
 import java.util.Base64
 plugins {
+    id("com.google.gms.google-services")
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
 }
@@ -125,6 +126,7 @@ tasks.register("testEnvironmentConfiguration") {
     }
 }
 dependencies {
+    "devImplementation"("com.google.firebase:firebase-messaging:24.1.2")
     // Realtime only; REST and credential ownership stay with FCA's existing clients.
     implementation("io.github.jan-tennert.supabase:realtime-kt:3.2.2")
     implementation("io.ktor:ktor-client-okhttp:3.2.2")
@@ -136,4 +138,9 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16.1")
     testImplementation("androidx.work:work-testing:2.11.2")
+}
+
+// Production intentionally has neither Firebase resources nor the Messaging SDK.
+tasks.configureEach {
+    if (name.startsWith("processProd") && name.endsWith("GoogleServices")) enabled = false
 }

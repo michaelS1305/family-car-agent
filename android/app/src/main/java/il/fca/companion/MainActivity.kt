@@ -159,9 +159,14 @@ class MainActivity : ComponentActivity() {
         button("ניסיון משלוח ורענון אבחון") { DeliveryWorker.enqueue(this); draw() }
         label(app.store.diagnostics())
         button("יציאה מהחשבון (התור נשמר)") {
-            app.store.activate(null)
-            app.auth.signOut()
-            vehicles = emptyList(); displayName = ""; draw()
+            app.push.invalidate()
+            task {
+                app.push.revokeAvailable()
+                app.push.invalidate()
+                app.store.activate(null)
+                app.auth.signOut()
+                vehicles = emptyList(); displayName = ""
+            }
         }
         label("ניתוק ללא מיקום בית תקין לא מחזיר רכב. לאחר שדרוג נדרש חיבור Bluetooth אמיתי חדש לפני ההחזרה הראשונה.")
     }

@@ -37,6 +37,9 @@ class EntryViewModel(private val app: FcaApplication) : AndroidViewModel(app) {
             DeliveryWorker.enqueue(app)
         }
         override suspend fun clearSession() = withContext(Dispatchers.IO) {
+            app.push.invalidate()
+            app.push.revokeAvailable()
+            app.push.invalidate() // Fence any foreground activation while revocation was in flight.
             app.store.activate(null); app.auth.signOut()
         }
     })
@@ -59,6 +62,7 @@ class EntryViewModel(private val app: FcaApplication) : AndroidViewModel(app) {
     }
     fun enteredApp() {
         val owner = app.store.activeOwner() ?: return
+        model.authenticatedFamilyId?.let { app.push.activate(owner, it) }
         viewModelScope.launch {
             rootRefresh.enter(owner, { app.store.activeOwner() == it && app.auth.owner() == it }) {
                 withContext(Dispatchers.IO) { CompanionAccountRefresh.refresh(app, it) }
@@ -70,6 +74,7 @@ class EntryViewModel(private val app: FcaApplication) : AndroidViewModel(app) {
         try {
             pending.save(model.route)
             // Same activation boundary as the previous Companion login screen.
+            app.push.invalidate()
             app.store.activate(null)
             openBrowser(app.auth.beginLogin())
         } catch (_: Exception) { pending.clear(); model.genericFailure() }
@@ -101,6 +106,18 @@ class EntryViewModel(private val app: FcaApplication) : AndroidViewModel(app) {
 }
 
 class EntryActivity : ComponentActivity() {
+    private fun enteredApp() {
+        viewModel.enteredApp()
+        if (!il.fca.companion.push.NativePush.supported) return
+        val prefs = getSharedPreferences("push-permission", MODE_PRIVATE)
+        if (!prefs.getBoolean("asked", false) &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            prefs.edit().putBoolean("asked", true).apply()
+            // Same platform permission mechanism as Companion; no result callback is
+            // needed because every notification checks the current OS permission.
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 6124)
+        }
+    }
     private lateinit var viewModel: EntryViewModel
     private lateinit var chat: ChatViewModel
     private lateinit var history: HistoryViewModel
@@ -168,7 +185,7 @@ class EntryActivity : ComponentActivity() {
             EntryUi(viewModel.model, chat, history, vehicles, family, booking,
                 login = { viewModel.beginLogin { startActivity(Intent(Intent.ACTION_VIEW, it)) } },
                 next = viewModel::next, back = viewModel::back, changeAddress = viewModel::changeAddress,
-                retryBootstrap = viewModel::openExistingSession, enteredApp = viewModel::enteredApp,
+                retryBootstrap = viewModel::openExistingSession, enteredApp = ::enteredApp,
                 logout = { viewModel.logout { chat.activateOwner() } })
         }
     }
@@ -182,6 +199,7 @@ class EntryActivity : ComponentActivity() {
         super.onResume()
         viewModel.reconcileOwner()
         chat.activateOwner()
+        if (viewModel.model.screen == EntryScreen.AUTHENTICATED_APP) viewModel.enteredApp()
     }
     private fun callback(intent: Intent) {
         val uri = intent.data ?: return
