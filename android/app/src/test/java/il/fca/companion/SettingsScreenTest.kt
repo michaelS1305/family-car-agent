@@ -23,11 +23,25 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
+import org.json.JSONObject
 
 @OptIn(ExperimentalComposeUiApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], application = Application::class, qualifiers = "w360dp-h640dp-mdpi")
 class SettingsScreenTest {
+    @Test fun actualAuthenticatedEmailAppearsAsAccountValue() = runBlocking {
+        val model = AccountSettingsModel(object : AccountSettingsGateway {
+            override suspend fun email(owner: String) = "actual@example.test"
+            override suspend fun request(owner: String, method: String, preview: Boolean): JSONObject =
+                error("No deletion request without confirmation")
+        }, { AccountIdentity("A", 1) }, this)
+        model.loadEmail(); yield()
+        render({ SettingsScreen("דנה", openFamily = {}, openCompanion = {}, account = model) {} }) {
+            it.withText("actual@example.test")
+        }
+    }
     @Test fun approvedAssetsIncludingConvertedThemeInflate() {
         val context = RuntimeEnvironment.getApplication()
         for (resource in listOf(R.drawable.theme_icon, R.drawable.settings_icon,

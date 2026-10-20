@@ -43,6 +43,27 @@ class EntryViewModel(private val app: FcaApplication) : AndroidViewModel(app) {
             app.store.activate(null); app.auth.signOut()
         }
     })
+    internal val account = AccountSettingsModel(object : AccountSettingsGateway {
+        override suspend fun email(owner: String): String? = withContext(Dispatchers.IO) {
+            // Read the authenticated Auth profile, not JWT text or a fabricated address.
+            val profile = JSONObject(il.fca.companion.net.Http.request(il.fca.companion.BuildConfig.SUPABASE_URL,
+                "/auth/v1/user", bearer = app.auth.access(owner),
+                apiKey = il.fca.companion.BuildConfig.SUPABASE_PUBLISHABLE_KEY))
+            check(profile.getString("id") == owner && app.auth.owner() == owner)
+            (profile.opt("email") as? String)?.takeIf { it.isNotBlank() }
+        }
+        override suspend fun request(owner: String, method: String, preview: Boolean) = withContext(Dispatchers.IO) {
+            check(app.auth.owner() == owner && app.store.activeOwner() == owner)
+            if (method == "POST") app.push.invalidate()
+            JSONObject(app.api.call(owner, "/api/account/deletion" + if (preview) "/preview" else "",
+                method, if (method == "POST") JSONObject().put("confirmation", "DELETE_MY_ACCOUNT") else null))
+        }
+    }, {
+        val owner = app.store.activeOwner()?.takeIf { it == app.auth.owner() }
+        val family = model.authenticatedFamilyId
+        if (owner != null && family != null && model.screen == EntryScreen.AUTHENTICATED_APP)
+            AccountIdentity(owner, family) else null
+    }, viewModelScope)
     fun openExistingSession() {
         val owner = app.store.activeOwner()
         if (owner != null && owner == app.auth.owner()) {
@@ -59,8 +80,10 @@ class EntryViewModel(private val app: FcaApplication) : AndroidViewModel(app) {
             (app.store.activeOwner() == null || app.store.activeOwner() != app.auth.owner())) {
             rootRefresh.reset(); model.leaveAuthenticatedApp()
         }
+        account.reconcile()
     }
     fun enteredApp() {
+        if (account.state.protected) return
         val owner = app.store.activeOwner() ?: return
         model.authenticatedFamilyId?.let { app.push.activate(owner, it) }
         viewModelScope.launch {
@@ -186,7 +209,7 @@ class EntryActivity : ComponentActivity() {
                 login = { viewModel.beginLogin { startActivity(Intent(Intent.ACTION_VIEW, it)) } },
                 next = viewModel::next, back = viewModel::back, changeAddress = viewModel::changeAddress,
                 retryBootstrap = viewModel::openExistingSession, enteredApp = ::enteredApp,
-                logout = { viewModel.logout { chat.activateOwner() } })
+                logout = { viewModel.logout { chat.activateOwner() } }, account = viewModel.account)
         }
     }
     override fun onNewIntent(intent: Intent) {

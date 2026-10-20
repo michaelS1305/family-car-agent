@@ -41,6 +41,9 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 
 /**
  * Presentation model only; no fixture conversations, persistence or API calls.
@@ -61,6 +64,49 @@ internal fun ChatScreen(
 ) {
     val ink = Color(0xFF243341)
     val density = LocalDensity.current
+    val scroll = rememberScrollState()
+    val scrollPolicy = remember { ChatScrollPolicy() }
+    val threshold = with(density) { 48.dp.roundToPx() }
+    val userScroll = remember(scroll, threshold) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y > 0)
+                    scrollPolicy.userScrolled(Int.MAX_VALUE, threshold)
+                return Offset.Zero
+            }
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput)
+                    scrollPolicy.userScrolled(scroll.maxValue - scroll.value, threshold)
+                return Offset.Zero
+            }
+        }
+    }
+    val currentState by rememberUpdatedState(state)
+    LaunchedEffect(scroll) {
+        var previousKeys = emptyList<String>()
+        var previousMax = 0
+        var pendingPrepend = false
+        snapshotFlow {
+            Triple(currentState.messages.map { it.message.requestId + ":" + it.message.role },
+                currentState.historyLoaded || currentState.messages.isNotEmpty(), scroll.maxValue)
+        }.collect { (keys, ready, maximum) ->
+            if (maximum == Int.MAX_VALUE) return@collect // Not measured yet.
+            if (previousKeys.isNotEmpty() && keys.size > previousKeys.size &&
+                keys.takeLast(previousKeys.size) == previousKeys) pendingPrepend = true
+            val follow = scrollPolicy.update(keys, ready)
+            if (pendingPrepend) {
+                if (maximum != previousMax) {
+                    scroll.scrollTo((scroll.value + maximum - previousMax).coerceAtLeast(0))
+                    pendingPrepend = false
+                }
+            } else if (follow) {
+                // Immediate positioning avoids fighting the user's drag with a long animation.
+                scroll.scrollTo(maximum)
+            }
+            previousKeys = keys
+            previousMax = maximum
+        }
+    }
     val headerHeight = with(density) {
         WindowInsets.safeDrawing.getTop(this).toFloat() + 89.dp.toPx()
     }
@@ -157,9 +203,8 @@ internal fun ChatScreen(
                     // Only this conversation layer is sampled. The fixed wordmark,
                     // composer and bottom fade are outside the effect.
                     .graphicsLayer { renderEffect = headerBlur }
-                    .verticalScroll(
-                        rememberScrollState()
-                    )
+                    .nestedScroll(userScroll)
+                    .verticalScroll(scroll)
                     .padding(horizontal = 16.dp)
                     .padding(
                         top = WindowInsets.safeDrawing
@@ -362,7 +407,7 @@ internal fun ChatScreen(
                     ) {
                         TextButton(
                             onClick = {
-                                retry()
+                                if (retry()) scrollPolicy.sent()
                             },
                             enabled =
                                 retryReady &&
@@ -564,7 +609,7 @@ internal fun ChatScreen(
                             draft =
                                 draftAfterChatSend(
                                     draft,
-                                    send
+                                    { text -> send(text).also { if (it) scrollPolicy.sent() } }
                                 )
                         }
                     },

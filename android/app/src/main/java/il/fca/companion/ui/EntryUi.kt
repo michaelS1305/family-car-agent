@@ -38,7 +38,8 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
             booking: BookingViewModel,
             login: () -> Unit, next: () -> Unit,
             back: () -> Unit, changeAddress: () -> Unit, retryBootstrap: () -> Unit, enteredApp: () -> Unit,
-            logout: () -> Unit) {
+            logout: () -> Unit, account: AccountSettingsModel? = null) {
+    SideEffect { account?.reconcile() }
     var legal by remember { mutableStateOf<LegalCopy?>(null) }
     LaunchedEffect(chat.ownerGeneration, model.authenticatedFamilyId, model.screen) {
         booking.activate(chat.ownerGeneration, model.authenticatedFamilyId)
@@ -55,8 +56,9 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                     LaunchedEffect(chat.ownerGeneration) { chat.enter() }
                     key(chat.ownerGeneration) {
                         AuthenticatedAppShell(chat, model.authenticatedName, logout, model.busy, model.error,
-                            history, model.authenticatedFamilyId, vehicles, family, booking)
+                            history, model.authenticatedFamilyId, vehicles, family, booking, account)
                     }
+                    account?.let { AccountDeletionDialog(it, logout, model.busy, model.error) }
                 } else if (model.screen == EntryScreen.BOOTSTRAP) {
                     if (!model.busy) {
                         FcaErrorScreen("יש בעיה, נסה שוב", retry = retryBootstrap)

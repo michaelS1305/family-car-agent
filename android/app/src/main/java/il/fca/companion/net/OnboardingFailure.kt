@@ -38,7 +38,10 @@ class OnboardingFailure private constructor(
             if (path == "/api/me") {
                 OnboardingFailure(status, missingAccount = status == 403 && detail is String &&
                     detail in setOf("Authenticated user is not registered in the application",
-                        "Authenticated user is not assigned to a family"))
+                        "Authenticated user is not assigned to a family"),
+                    code = "ACCOUNT_UNAVAILABLE".takeIf {
+                        status == 403 && detail is JSONObject && detail.opt("code") == it
+                    })
             } else if (path in postPaths && detail is JSONObject) {
                 fun text(name: String, max: Int) = (detail.opt(name) as? String)
                     ?.takeIf { it.isNotBlank() && it.length <= max && it.none { c -> c.isISOControl() } }

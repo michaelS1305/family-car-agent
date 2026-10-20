@@ -72,7 +72,7 @@ internal class AppShellState {
 internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: String,
                                    logout: () -> Unit, logoutBusy: Boolean, logoutError: String?,
                                    history: HistoryViewModel, familyId: Long?, vehicles: VehiclesViewModel, family: FamilyViewModel,
-                                   booking: BookingViewModel) {
+                                   booking: BookingViewModel, account: AccountSettingsModel? = null) {
 
     val state = remember {
         AppShellState()
@@ -176,6 +176,7 @@ internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: Strin
                         BookingScreen(booking, state::back)
                     } else if (category == DashboardCategory.SETTINGS) {
                         SettingsScreen(authenticatedName,
+                            account = account,
                             openFamily = { state.openCategory(DashboardCategory.FAMILY) },
                             openCompanion = state::openCompanionVehicles,
                             back = state::back)

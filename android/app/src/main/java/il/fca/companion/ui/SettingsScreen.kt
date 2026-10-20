@@ -40,7 +40,8 @@ internal enum class SettingsSheet { COMPANION, SUPPORT, DELETE_ACCOUNT }
 
 @Composable
 internal fun SettingsScreen(authenticatedName: String, openFamily: () -> Unit,
-                           openCompanion: () -> Unit, back: () -> Unit) {
+                           openCompanion: () -> Unit, account: AccountSettingsModel? = null, back: () -> Unit) {
+    LaunchedEffect(account) { account?.loadEmail() }
     val capabilities = rememberSettingsCapabilities()
     val context = androidx.compose.ui.platform.LocalContext.current
     var sheet by remember { mutableStateOf<SettingsSheet?>(null) }
@@ -65,7 +66,7 @@ internal fun SettingsScreen(authenticatedName: String, openFamily: () -> Unit,
                         subtitle = "פתיחת ניהול המשפחה", chevron = true,
                         secondaryLabel = true, onClick = openFamily)
                     SettingsDivider()
-                    SettingsRow("אימייל", R.drawable.envelope_icon, value = NotConfigured)
+                    SettingsRow("אימייל", R.drawable.envelope_icon, value = account?.state?.email ?: NotConfigured)
                 }
                 SettingsSection("תצוגה") { ThemePreview() }
                 SettingsSection("הרשאות") {
@@ -92,7 +93,9 @@ internal fun SettingsScreen(authenticatedName: String, openFamily: () -> Unit,
                         onClick = { sheet = SettingsSheet.SUPPORT })
                 }
                 DangerRow("התנתקות", R.drawable.logout_icon)
-                DangerRow("מחיקת חשבון", R.drawable.delete_account_icon) { sheet = SettingsSheet.DELETE_ACCOUNT }
+                DangerRow("מחיקת חשבון", R.drawable.delete_account_icon) {
+                    if (account != null) account.openDeletion() else sheet = SettingsSheet.DELETE_ACCOUNT
+                }
             }
         }
         sheet?.let { SettingsPresentationSheet(it) { sheet = null } }

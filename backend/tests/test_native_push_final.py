@@ -68,6 +68,17 @@ class InboxTests(unittest.TestCase):
         self.query('INSERT INTO account_deletion_jobs VALUES(%s)',(self.users[2].auth_user_id,))
         with self.assertRaises(IdentityUnavailable): self.fetch()
 
+    def test_deleting_recipient_fences_payload_and_cascades_installations(self):
+        # The account-deletion job is the immediate gate; eventual user cleanup
+        # removes installations/deliveries without deleting a different member.
+        self.query('INSERT INTO account_deletion_jobs VALUES(%s)', (self.users[2].auth_user_id,))
+        with self.assertRaises(IdentityUnavailable):
+            self.fetch()
+        self.query('DELETE FROM users WHERE id=2')
+        self.assertEqual(self.query('SELECT count(*) FROM native_push_installations WHERE user_id=2'), [(0,)])
+        self.assertEqual(self.query('SELECT count(*) FROM native_push_deliveries WHERE recipient_user_id=2'), [(0,)])
+        self.assertEqual(self.query('SELECT count(*) FROM users WHERE id=1'), [(1,)])
+
     def test_actor_changes_hide_event(self):
         self.query('UPDATE users SET family_id=20 WHERE id=1')
         self.assertEqual(self.fetch()['items'], [])

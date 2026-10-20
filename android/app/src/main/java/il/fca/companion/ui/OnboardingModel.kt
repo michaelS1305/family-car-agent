@@ -78,6 +78,7 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
             authenticatedApp()
         } catch (e: OnboardingFailure) {
             if (!isCurrent()) { leaveAuthenticatedApp(); return@perform }
+            if (e.code == "ACCOUNT_UNAVAILABLE") { unavailableAccount(); return@perform }
             if (!e.missingAccount) throw e
             missingAccount()
         } catch (e: Exception) {
@@ -90,6 +91,12 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
         authenticatedFamilyId = null
         gateway.clearSession(); clearPrivateState(); screen = EntryScreen.INTRO
         error = "לא נמצא חשבון FCA פעיל. אפשר ליצור משפחה או להצטרף למשפחה."
+    }
+    private suspend fun unavailableAccount() {
+        gateway.clearSession()
+        authenticatedName = ""; authenticatedFamilyId = null
+        clearPrivateState(); screen = EntryScreen.INTRO
+        error = "החשבון אינו זמין או נמצא בתהליך מחיקה."
     }
     private fun clearError() { error = null; failure = null }
     private fun clearPrivateState() {
@@ -108,6 +115,7 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
                     authenticatedFamilyId = me.getLong("family_id")
                     authenticatedApp()
                 } catch (e: OnboardingFailure) {
+                    if (e.code == "ACCOUNT_UNAVAILABLE") { unavailableAccount(); return@perform }
                     if (!e.missingAccount) throw e
                     missingAccount()
                 }
