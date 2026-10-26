@@ -93,6 +93,65 @@ class JoinFamilyServiceTests(unittest.TestCase):
             lambda _auth_user_id, geocode, **kwargs: geocode(**kwargs)
         )
 
+    def test_diagnostics_require_explicit_flag_and_exact_dev_host(self):
+        for flag, host, enabled in (
+            ("true", "family-car-agent-dev.onrender.com", True),
+            ("", "family-car-agent-dev.onrender.com", False),
+            ("true", "family-car-agent.onrender.com", False),
+            ("true", "", False),
+        ):
+            with self.subTest(flag=flag, host=host), patch.dict(service.os.environ, {
+                "FCA_JOIN_ADDRESS_DIAGNOSTICS": flag, "RENDER_EXTERNAL_HOSTNAME": host,
+            }), patch.object(service.logger, "warning") as log:
+                service._address_diagnostic("geocoding_unresolved")
+                self.assertEqual(log.called, enabled)
+
+    def test_address_diagnostics_preserve_failures_and_exclude_private_data(self):
+        for stage, event, expected_code in (
+            ("unresolved", "geocoding_unresolved", "JOIN_FAMILY_ADDRESS_NOT_FOUND"),
+            ("unmatched", "family_location_unmatched", "JOIN_FAMILY_ADDRESS_NOT_FOUND"),
+            ("provider", "geocoding_infrastructure_failure", "SERVER_ERROR"),
+            ("database", "database_failure", None),
+            ("precheck", "database_failure", None),
+        ):
+            self.setUp()
+            geocoding_stub.geocode_address.return_value = {
+                "address": "private-address", "latitude": 31.1, "longitude": 35.1,
+            }
+            database_stub.submit_pwa_join_address.return_value = {"success": False}
+            failure = RuntimeError("private-token private-address")
+            if stage == "unresolved":
+                geocoding_stub.geocode_address.return_value = None
+            elif stage == "provider":
+                geocoding_stub.geocode_address.side_effect = failure
+            elif stage == "database":
+                database_stub.submit_pwa_join_address.side_effect = failure
+            elif stage == "precheck":
+                database_stub.precheck_pwa_join_address.side_effect = failure
+            with self.subTest(stage=stage), patch.dict(service.os.environ, {
+                "FCA_JOIN_ADDRESS_DIAGNOSTICS": "true",
+                "RENDER_EXTERNAL_HOSTNAME": "family-car-agent-dev.onrender.com",
+            }), patch.object(service.logger, "warning") as log:
+                with self.assertRaises(Exception) as raised:
+                    service.submit_join_family_address("private-user", "city, street, 10")
+                if expected_code:
+                    self.assertIsInstance(raised.exception, service.JoinFamilyError)
+                    self.assertEqual(raised.exception.code, expected_code)
+                    self.assertEqual(raised.exception.status_code, 503 if stage == "provider" else 404)
+                else:
+                    self.assertIs(raised.exception, failure)
+                log.assert_called_once_with("operation=join_family_address event=%s", event)
+
+    def test_logging_failure_does_not_replace_join_error(self):
+        geocoding_stub.geocode_address.return_value = None
+        with patch.dict(service.os.environ, {
+            "FCA_JOIN_ADDRESS_DIAGNOSTICS": "true",
+            "RENDER_EXTERNAL_HOSTNAME": "family-car-agent-dev.onrender.com",
+        }), patch.object(service.logger, "warning", side_effect=RuntimeError("logger failed")):
+            with self.assertRaises(service.JoinFamilyError) as raised:
+                service.submit_join_family_address("user", "city, street, 10")
+            self.assertEqual(raised.exception.code, "JOIN_FAMILY_ADDRESS_NOT_FOUND")
+
     def test_start_returns_no_internal_identity_or_family_id(self):
         database_stub.start_pwa_join_session.return_value = session()
 
