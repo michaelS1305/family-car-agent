@@ -1,0 +1,4 @@
+version: 1
+bundleID: com.familycaragent.app.dev
+infoPath: Config/Info.Dev.plist
+entitlementsPath: Config/Dev.entitlements

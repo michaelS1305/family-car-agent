@@ -1,0 +1,49 @@
+name: iOS CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    name: iOS validation
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+    defaults:
+      run:
+        working-directory: ios
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify Apple toolchain
+        run: |
+          xcodebuild -version
+          xcrun swift --version
+          xcrun --sdk iphonesimulator --show-sdk-path
+      - name: Resolve Swift package
+        run: swift package resolve
+      - name: Authentication, diagnostics and resources
+        run: |
+          export SWIFT_BIN="$(xcrun --find swiftc)"
+          bash Checks/run-ci-checks.sh
+      - name: Compile iOS Simulator package without signing
+        run: |
+          xcodebuild -scheme FamilyCarAgent \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/fca-ios-derived" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build

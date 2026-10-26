@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleDisplayName</key><string>FCA Dev</string>
+    <key>FCAEnvironment</key><string>development</string>
+    <!-- PUBLIC Dev publishable key only. No service-role / Apple private keys. -->
+    <key>FCASupabasePublishableKey</key><string>sb_publishable_vIB_0P9H5WAnadTKRVr4mw_bd0u2K3h</string>
+    <key>CFBundleURLTypes</key><array><dict>
+        <key>CFBundleURLName</key><string>com.familycaragent.app.dev.auth</string>
+        <key>CFBundleURLSchemes</key><array><string>com.familycaragent.app.dev</string></array>
+    </dict></array>
+</dict></plist>
