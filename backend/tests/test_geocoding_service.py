@@ -79,6 +79,68 @@ class GeocodingServiceTests(unittest.TestCase):
             )
         return value, request_payload
 
+    def diagnostic_env(self):
+        return patch.dict(geocoding_service.os.environ, {
+            "FCA_JOIN_ADDRESS_DIAGNOSTICS": "true",
+            "RENDER_EXTERNAL_HOSTNAME": "family-car-agent-dev.onrender.com",
+        })
+
+    def test_rejection_events_preserve_none(self):
+        cases = [
+            ([], "ZERO_RESULTS", "provider_zero_results"),
+            ([], "OK", "provider_empty_results"),
+            ([precise_result(types=["route"])], "OK", "no_precise_result"),
+            ([precise_result(), precise_result(latitude=32.0)], "OK", "ambiguous_precise_results"),
+        ]
+        for results, status, event in cases:
+            with self.subTest(event=event), self.diagnostic_env(), patch.object(geocoding_service, "_safe_log") as log:
+                self.assertIsNone(self.geocode(results, status)[0])
+                diagnostic = [c for c in log.call_args_list if c.args[1].startswith("operation=geocoding_rejection")]
+                self.assertEqual(len(diagnostic), 1)
+                self.assertEqual(diagnostic[0].args[2], event)
+
+    def test_each_fixed_rejection_category_and_confidentiality(self):
+        for category in ("invalid_result_type", "insufficient_precision", "partial_match",
+                         "invalid_coordinates", "country_mismatch", "city_mismatch",
+                         "street_mismatch", "house_number_mismatch"):
+            result = precise_result()
+            if category == "invalid_result_type": result["types"] = ["private-type"]
+            elif category == "insufficient_precision": result["geometry"]["location_type"] = "private-precision"
+            elif category == "partial_match": result["partial_match"] = True
+            elif category == "invalid_coordinates": result["geometry"]["location"] = {}
+            else:
+                index = {"country_mismatch": 3, "city_mismatch": 2,
+                         "street_mismatch": 1, "house_number_mismatch": 0}[category]
+                result["address_components"][index]["long_name"] = "private-value"
+                result["address_components"][index]["short_name"] = "private-value"
+            with self.subTest(category=category), self.diagnostic_env(), patch.object(geocoding_service, "_safe_log") as log:
+                self.assertIsNone(self.geocode([result])[0])
+                diagnostic = [c for c in log.call_args_list if c.args[1].startswith("operation=geocoding_rejection")]
+                self.assertEqual(diagnostic[0].args[2:], ("no_precise_result", category))
+                self.assertNotIn("private", str(log.call_args_list))
+                self.assertNotIn("test-key", str(log.call_args_list))
+
+    def test_rejection_categories_are_aggregated_once(self):
+        with self.diagnostic_env(), patch.object(geocoding_service, "_safe_log") as log:
+            self.geocode([precise_result(types=[]), precise_result(partial_match=True)])
+            diagnostic = [c for c in log.call_args_list if c.args[1].startswith("operation=geocoding_rejection")]
+            self.assertEqual(len(diagnostic), 1)
+            self.assertEqual(diagnostic[0].args[3], "invalid_result_type,partial_match")
+
+    def test_diagnostic_guard_and_logging_failure_preserve_behavior(self):
+        for flag, host in (("", "family-car-agent-dev.onrender.com"),
+                           ("true", "family-car-agent.onrender.com"), ("true", "")):
+            with patch.dict(geocoding_service.os.environ, {
+                "FCA_JOIN_ADDRESS_DIAGNOSTICS": flag, "RENDER_EXTERNAL_HOSTNAME": host,
+            }), patch.object(geocoding_service, "_safe_log") as log:
+                self.assertIsNone(self.geocode([])[0])
+                self.assertFalse(any(c.args[1].startswith("operation=geocoding_rejection") for c in log.call_args_list))
+        with self.diagnostic_env(), patch.object(geocoding_service.logger, "log", side_effect=RuntimeError("failed")):
+            self.assertIsNone(self.geocode([])[0])
+            self.assertIsNotNone(self.geocode([precise_result()])[0])
+            with self.assertRaises(RuntimeError):
+                self.geocode([], "REQUEST_DENIED")
+
     def test_rooftop_street_address_is_accepted_with_israel_bias(self):
         value, get = self.geocode([precise_result()])
 

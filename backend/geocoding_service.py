@@ -35,6 +35,34 @@ def _safe_log(level, message, *args):
         pass
 
 
+def _rejection_diagnostic(event, results=(), city=None, street=None, house_number=None):
+    # Observational only: failures here must never affect provider validation.
+    try:
+        if not (os.getenv("FCA_JOIN_ADDRESS_DIAGNOSTICS") == "true"
+                and os.getenv("RENDER_EXTERNAL_HOSTNAME") == "family-car-agent-dev.onrender.com"):
+            return
+        reasons = set()
+        for result in results:
+            geometry = result.get("geometry") or {}
+            location = geometry.get("location") or {}
+            checks = {
+                "invalid_result_type": bool(set(result.get("types") or []).intersection(ACCEPTED_RESULT_TYPES)),
+                "insufficient_precision": geometry.get("location_type") in ACCEPTED_LOCATION_TYPES,
+                "partial_match": result.get("partial_match") is not True,
+                "invalid_coordinates": isinstance(location.get("lat"), (int, float))
+                    and isinstance(location.get("lng"), (int, float)),
+                "country_mismatch": _component_matches(result, {"country"}, "IL"),
+                "city_mismatch": _component_matches(result, {"locality", "postal_town", "sublocality_level_1"}, city),
+                "street_mismatch": _component_matches(result, {"route"}, street),
+                "house_number_mismatch": _component_matches(result, {"street_number"}, house_number),
+            }
+            reasons.update(reason for reason, passed in checks.items() if not passed)
+        _safe_log(logging.WARNING, "operation=geocoding_rejection event=%s categories=%s",
+                  event, ",".join(sorted(reasons)) or "none")
+    except Exception:
+        pass
+
+
 def _fetch_geocoding_payload(connection, request_kwargs):
     try:
         response = requests.get(**request_kwargs, timeout=(5, 10))
@@ -171,6 +199,8 @@ def _select_unambiguous_address(results, city, street, house_number):
         if _is_precise_address_result(result, city, street, house_number)
     ]
     if not precise_results:
+        _rejection_diagnostic("no_precise_result" if results else "provider_empty_results",
+                              results, city, street, house_number)
         return None
 
     first = precise_results[0]
@@ -183,6 +213,7 @@ def _select_unambiguous_address(results, city, street, house_number):
         > MAX_EQUIVALENT_RESULT_DISTANCE_METERS
         for candidate in precise_results[1:]
     ):
+        _rejection_diagnostic("ambiguous_precise_results")
         return None
     return first
 
@@ -212,6 +243,7 @@ def geocode_address(city, street, house_number):
     )
     status = payload.get("status")
     if status == "ZERO_RESULTS":
+        _rejection_diagnostic("provider_zero_results")
         _safe_log(
             logging.INFO,
             "operation=geocoding stage=provider_success "
