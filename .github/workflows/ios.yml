@@ -38,6 +38,7 @@ jobs:
         run: swift package resolve
       - name: Authentication, diagnostics and resources
         run: |
+          export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
           export SWIFT_BIN="$(xcrun --find swiftc)"
           bash Checks/run-ci-checks.sh
       - name: Compile iOS Simulator package without signing
