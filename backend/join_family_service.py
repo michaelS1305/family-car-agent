@@ -20,7 +20,7 @@ from onboarding_rules import (
     HUMAN_NAME_MAX_LENGTH,
     is_valid_family_code,
     normalize_human_name,
-    parse_home_address,
+    prepare_address_proposal,
 )
 
 
@@ -56,7 +56,7 @@ ERROR_MESSAGES = {
         "שם המשפחה יכול להכיל אותיות, רווחים, מקף או גרש, ללא ספרות."
     ),
     "INVALID_ADDRESS_FORMAT": (
-        "הכתובת לא נראית מלאה. יש לכתוב: עיר, רחוב, מספר בית."
+        "הכתובת לא נראית מלאה. יש להזין עיר, רחוב ומספר בית ברור. אם יש כמה מספרים, יש להבהיר את הכתובת."
     ),
     "ADDRESS_TOO_LONG": "הכתובת ארוכה מדי. ניתן להזין עד 200 תווים.",
     "JOIN_FAMILY_ADDRESS_NOT_FOUND": (
@@ -205,20 +205,18 @@ def submit_join_family_name(auth_user_id, family_name):
 def submit_join_family_address(auth_user_id, home_address):
     if len(home_address) > 200:
         raise JoinFamilyError("ADDRESS_TOO_LONG", 400)
-    parsed_address = parse_home_address(home_address)
+    parsed_address = prepare_address_proposal(home_address)
     if not parsed_address:
         raise JoinFamilyError("INVALID_ADDRESS_FORMAT", 400)
 
     _address_database_call(precheck_pwa_join_address, auth_user_id)
 
-    city, street, house_number = parsed_address
-    normalized_address = f"{city}, {street}, {house_number}"
+    normalized_address, house_number = parsed_address
     try:
         location = geocode_with_capacity(
             auth_user_id,
             geocode_address,
-            city=city, street=street, house_number=house_number,
-            match_city_street=False,
+            house_number=house_number, address_query=normalized_address,
         )
     except GeocodingAdmissionError as exc:
         _address_diagnostic("geocoding_admission_rejected")
@@ -245,7 +243,10 @@ def submit_join_family_address(auth_user_id, home_address):
     if not result["success"]:
         _address_diagnostic("family_location_unmatched")
         raise JoinFamilyError("JOIN_FAMILY_ADDRESS_NOT_FOUND", 404)
-    return _public_session(result["session"])
+    response = _public_session(result["session"])
+    # Only the candidate just submitted by this caller, never the stored family location.
+    response.update(latitude=location["latitude"], longitude=location["longitude"])
+    return response
 
 
 def confirm_join_family_address(auth_user_id, confirmed):

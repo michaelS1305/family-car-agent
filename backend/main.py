@@ -569,6 +569,8 @@ def resolve_family_address(
         "normalized_address": resolved.normalized_address,
         "display_address": resolved.display_address,
         "resolution_token": resolved.resolution_token,
+        "latitude": resolved.latitude,
+        "longitude": resolved.longitude,
     }
 
 

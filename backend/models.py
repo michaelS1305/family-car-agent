@@ -156,6 +156,8 @@ class FamilyAddressResolveRequest(BaseModel):
 
 
 class FamilyAddressResolveResponse(BaseModel):
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
     normalized_address: str
     display_address: str
     resolution_token: str

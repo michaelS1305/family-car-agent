@@ -2,7 +2,7 @@ import logging
 import multiprocessing
 import os
 import unicodedata
-from math import asin, cos, radians, sin, sqrt
+from math import asin, cos, radians, sin, sqrt, isfinite
 
 import requests
 
@@ -49,8 +49,7 @@ def _rejection_diagnostic(event, results=(), city=None, street=None, house_numbe
                 "invalid_result_type": bool(set(result.get("types") or []).intersection(ACCEPTED_RESULT_TYPES)),
                 "insufficient_precision": geometry.get("location_type") in ACCEPTED_LOCATION_TYPES,
                 "partial_match": result.get("partial_match") is not True,
-                "invalid_coordinates": isinstance(location.get("lat"), (int, float))
-                    and isinstance(location.get("lng"), (int, float)),
+                "invalid_coordinates": _valid_coordinates(location),
                 "country_mismatch": _component_matches(result, {"country"}, "IL"),
                 "city_mismatch": _component_matches(result, {"locality", "postal_town", "sublocality_level_1"}, city),
                 "street_mismatch": _component_matches(result, {"route"}, street),
@@ -173,6 +172,11 @@ def _component_matches(result, component_types, expected):
     )
 
 
+def _valid_coordinates(location):
+    return all(type(location.get(k)) in (int, float) and isfinite(location[k])
+               and -limit <= location[k] <= limit for k, limit in (("lat", 90), ("lng", 180)))
+
+
 def _is_precise_address_result(result, city, street, house_number, *, match_city_street=True):
     geometry = result.get("geometry") or {}
     location = geometry.get("location") or {}
@@ -182,8 +186,7 @@ def _is_precise_address_result(result, city, street, house_number, *, match_city
         bool(result_types.intersection(ACCEPTED_RESULT_TYPES))
         and result.get("partial_match") is not True
         and geometry.get("location_type") in ACCEPTED_LOCATION_TYPES
-        and isinstance(location.get("lat"), (int, float))
-        and isinstance(location.get("lng"), (int, float))
+        and _valid_coordinates(location)
         and _component_matches(result, {"street_number"}, house_number)
         and (not match_city_street or (
             _component_matches(result, {"route"}, street)
@@ -219,9 +222,9 @@ def _select_unambiguous_address(results, city, street, house_number, *, match_ci
     return first
 
 
-def geocode_address(city, street, house_number, *, match_city_street=True):
-    # JOIN alone opts out: authoritative family name/location and code checks follow.
-    # CREATE and all other callers retain strict textual component matching.
+def geocode_address(city=None, street=None, house_number=None, *, match_city_street=True, address_query=None):
+    # Legacy component callers remain strict. Full-query callers receive a proposal
+    # requiring explicit confirmation; JOIN additionally checks family location/code.
     if not GOOGLE_MAPS_API_KEY:
         _safe_log(
             logging.ERROR,
@@ -230,7 +233,7 @@ def geocode_address(city, street, house_number, *, match_city_street=True):
         )
         raise RuntimeError("GOOGLE_MAPS_API_KEY is not configured")
 
-    address = f"{street} {house_number}, {city}, Israel"
+    address = address_query if address_query is not None else f"{street} {house_number}, {city}, Israel"
 
     payload = _request_geocoding_payload(
         {
@@ -272,8 +275,17 @@ def geocode_address(city, street, house_number, *, match_city_street=True):
         "operation=geocoding stage=provider_success provider_status=OK",
     )
 
+    results = payload.get("results") or []
+    if address_query is not None:
+        # Proposals require complete named components, but not cross-language equality.
+        # Missing components are not evidence for silently choosing another location.
+        if any(not isinstance(r.get("formatted_address"), str) or not r["formatted_address"].strip()
+                or not _component_values(r, {"route"}) or not _component_values(
+                r, {"locality", "postal_town", "sublocality_level_1"}) for r in results):
+            return None
+        match_city_street = False
     result = _select_unambiguous_address(
-        payload.get("results") or [],
+        results,
         city,
         street,
         house_number,

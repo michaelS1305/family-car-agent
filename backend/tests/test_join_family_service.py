@@ -341,7 +341,9 @@ class JoinFamilyServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(result["step"], "address_confirmed")
-        self.assertIs(capacity_stub.geocode_with_capacity.call_args.kwargs["match_city_street"], False)
+        self.assertEqual(capacity_stub.geocode_with_capacity.call_args.kwargs["address_query"], "תל אביב, דיזנגוף, 120")
+        self.assertEqual(result["latitude"], 32.0809)
+        self.assertEqual(result["longitude"], 34.7806)
         database_stub.precheck_pwa_join_address.assert_called_once_with("auth-user-uuid")
         self.assertNotIn("family_id", result)
         database_stub.submit_pwa_join_address.assert_called_once_with(

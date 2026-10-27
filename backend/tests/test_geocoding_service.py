@@ -87,6 +87,34 @@ class GeocodingServiceTests(unittest.TestCase):
         result["address_components"][2] = address_component("Dimona", "Dimona", "locality")
         return result
 
+    def test_full_query_formats_are_proposals_not_word_splitting(self):
+        for query in ("דימונה, המעפיל, 1209", "המעפיל 1209 דימונה", "דימונה המעפיל 1209", "המעפיל 1209, דימונה", "רחוב רב מילים 1209 עיר רב מילים"):
+            value, request = self.geocode([self.latin_result()], address_query=query)
+            self.assertIsNotNone(value)
+            self.assertEqual(request.call_args.args[0]["params"]["address"], query)
+            self.assertEqual(value["latitude"], 31.072207)
+
+    def test_proposal_retains_precision_and_identity_checks(self):
+        candidates = [precise_result(formatted_address=""), precise_result(partial_match=True), precise_result(types=["locality"]),
+                      precise_result(latitude=float("nan")), precise_result(longitude=181),
+                      precise_result(latitude=True)]
+        wrong_house = precise_result()
+        wrong_house["address_components"][0]["long_name"] = "5"
+        wrong_house["address_components"][0]["short_name"] = "5"
+        candidates.append(wrong_house)
+        wrong_country = precise_result()
+        wrong_country["address_components"][-1] = address_component("France", "FR", "country")
+        candidates.append(wrong_country)
+        imprecise = precise_result()
+        imprecise["geometry"]["location_type"] = "APPROXIMATE"
+        candidates.append(imprecise)
+        incomplete = precise_result()
+        incomplete["address_components"] = incomplete["address_components"][:1]
+        candidates.append(incomplete)
+        for result in candidates:
+            self.assertIsNone(self.geocode([result], address_query="המעפיל 1209 דימונה")[0])
+        self.assertIsNone(self.geocode([precise_result(), precise_result(latitude=32)], address_query="המעפיל 1209 דימונה")[0])
+
     def test_join_accepts_latin_components_but_default_create_remains_strict(self):
         self.assertIsNone(self.geocode([self.latin_result()])[0])
         result, _ = self.geocode([self.latin_result()], match_city_street=False)

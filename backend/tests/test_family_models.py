@@ -7,6 +7,7 @@ from models import (
     CreateFamilyAddressRequest,
     CreateFamilyRequest,
     FamilyAddressResolveRequest,
+    FamilyAddressResolveResponse,
     FamilyRoleUpdateRequest,
     JoinFamilyCodeRequest,
     JoinFamilyCompleteRequest,
@@ -131,3 +132,12 @@ class OnboardingModelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class AddressCoordinateResponseTests(unittest.TestCase):
+    def test_verified_coordinates_are_serialized_and_invalid_values_rejected(self):
+        base = dict(normalized_address="candidate", display_address="proposal", resolution_token="opaque")
+        result = FamilyAddressResolveResponse(**base, latitude=31.0, longitude=35.0)
+        self.assertEqual(result.model_dump()["latitude"], 31.0)
+        for lat, lng in ((91, 35), (31, 181), (float("nan"), 35), (31, float("inf"))):
+            with self.assertRaises(ValidationError):
+                FamilyAddressResolveResponse(**base, latitude=lat, longitude=lng)

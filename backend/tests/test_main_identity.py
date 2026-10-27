@@ -867,11 +867,11 @@ class CreateFamilyRouteTests(unittest.TestCase):
             types.SimpleNamespace(
                 normalized_address="תל אביב, דיזנגוף, 120",
                 display_address="דיזנגוף 120, תל אביב, ישראל",
-                resolution_token="opaque-resolution-token",
+                resolution_token="opaque-resolution-token", latitude=32.0809, longitude=34.7806,
             )
         )
 
-    def test_address_resolution_returns_opaque_token_without_coordinates(self):
+    def test_address_resolution_returns_token_and_verified_coordinates(self):
         request = types.SimpleNamespace(home_address="תל אביב, דיזנגוף, 120")
 
         response = main.resolve_family_address(
@@ -883,9 +883,9 @@ class CreateFamilyRouteTests(unittest.TestCase):
             "normalized_address": "תל אביב, דיזנגוף, 120",
             "display_address": "דיזנגוף 120, תל אביב, ישראל",
             "resolution_token": "opaque-resolution-token",
+            "latitude": 32.0809, "longitude": 34.7806,
         })
-        self.assertNotIn("latitude", response)
-        self.assertNotIn("longitude", response)
+        self.assertEqual(response["latitude"], 32.0809)
 
     def test_address_resolution_keeps_existing_structured_503_response(self):
         family_creation_stub.resolve_create_family_address.side_effect = (

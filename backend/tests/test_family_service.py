@@ -191,6 +191,7 @@ class FamilyServiceTests(unittest.TestCase):
             self.current_user(),
             "דימונה, המעפיל, 1210",
         )
+        self.assertEqual((resolved["latitude"], resolved["longitude"]), (31.072, 35.036))
         updated = service.update_family_address_for_current_user(
             self.current_user(),
             resolved["resolution_token"],
