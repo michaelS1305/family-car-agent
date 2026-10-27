@@ -35,7 +35,7 @@ def _safe_log(level, message, *args):
         pass
 
 
-def _rejection_diagnostic(event, results=(), city=None, street=None, house_number=None):
+def _rejection_diagnostic(event, results=(), city=None, street=None, house_number=None, *, match_city_street=True):
     # Observational only: failures here must never affect provider validation.
     try:
         if not (os.getenv("FCA_JOIN_ADDRESS_DIAGNOSTICS") == "true"
@@ -56,6 +56,9 @@ def _rejection_diagnostic(event, results=(), city=None, street=None, house_numbe
                 "street_mismatch": _component_matches(result, {"route"}, street),
                 "house_number_mismatch": _component_matches(result, {"street_number"}, house_number),
             }
+            if not match_city_street:
+                checks.pop("city_mismatch")
+                checks.pop("street_mismatch")
             reasons.update(reason for reason, passed in checks.items() if not passed)
         _safe_log(logging.WARNING, "operation=geocoding_rejection event=%s categories=%s",
                   event, ",".join(sorted(reasons)) or "none")
@@ -170,7 +173,7 @@ def _component_matches(result, component_types, expected):
     )
 
 
-def _is_precise_address_result(result, city, street, house_number):
+def _is_precise_address_result(result, city, street, house_number, *, match_city_street=True):
     geometry = result.get("geometry") or {}
     location = geometry.get("location") or {}
     result_types = set(result.get("types") or [])
@@ -182,25 +185,23 @@ def _is_precise_address_result(result, city, street, house_number):
         and isinstance(location.get("lat"), (int, float))
         and isinstance(location.get("lng"), (int, float))
         and _component_matches(result, {"street_number"}, house_number)
-        and _component_matches(result, {"route"}, street)
-        and _component_matches(
-            result,
-            {"locality", "postal_town", "sublocality_level_1"},
-            city,
-        )
+        and (not match_city_street or (
+            _component_matches(result, {"route"}, street)
+            and _component_matches(result, {"locality", "postal_town", "sublocality_level_1"}, city)
+        ))
         and _component_matches(result, {"country"}, "IL")
     )
 
 
-def _select_unambiguous_address(results, city, street, house_number):
+def _select_unambiguous_address(results, city, street, house_number, *, match_city_street=True):
     precise_results = [
         result
         for result in results
-        if _is_precise_address_result(result, city, street, house_number)
+        if _is_precise_address_result(result, city, street, house_number, match_city_street=match_city_street)
     ]
     if not precise_results:
         _rejection_diagnostic("no_precise_result" if results else "provider_empty_results",
-                              results, city, street, house_number)
+                              results, city, street, house_number, match_city_street=match_city_street)
         return None
 
     first = precise_results[0]
@@ -218,7 +219,9 @@ def _select_unambiguous_address(results, city, street, house_number):
     return first
 
 
-def geocode_address(city, street, house_number):
+def geocode_address(city, street, house_number, *, match_city_street=True):
+    # JOIN alone opts out: authoritative family name/location and code checks follow.
+    # CREATE and all other callers retain strict textual component matching.
     if not GOOGLE_MAPS_API_KEY:
         _safe_log(
             logging.ERROR,
@@ -274,6 +277,7 @@ def geocode_address(city, street, house_number):
         city,
         street,
         house_number,
+        match_city_street=match_city_street,
     )
     if not result:
         return None

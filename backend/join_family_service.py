@@ -218,6 +218,7 @@ def submit_join_family_address(auth_user_id, home_address):
             auth_user_id,
             geocode_address,
             city=city, street=street, house_number=house_number,
+            match_city_street=False,
         )
     except GeocodingAdmissionError as exc:
         _address_diagnostic("geocoding_admission_rejected")

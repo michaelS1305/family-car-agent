@@ -63,7 +63,7 @@ class GeocodingServiceTests(unittest.TestCase):
         self.response = Mock()
         self.response.raise_for_status.return_value = None
 
-    def geocode(self, results, status="OK"):
+    def geocode(self, results, status="OK", **options):
         with (
             patch.object(geocoding_service, "GOOGLE_MAPS_API_KEY", "test-key"),
             patch.object(
@@ -76,8 +76,38 @@ class GeocodingServiceTests(unittest.TestCase):
                 "דימונה",
                 "המעפיל",
                 "1209",
+                **options,
             )
         return value, request_payload
+
+    def latin_result(self):
+        result = precise_result(latitude=31.072207, longitude=35.036462)
+        result.pop("partial_match")
+        result["address_components"][1] = address_component("HaMa'apil Street", "HaMa'apil Street", "route")
+        result["address_components"][2] = address_component("Dimona", "Dimona", "locality")
+        return result
+
+    def test_join_accepts_latin_components_but_default_create_remains_strict(self):
+        self.assertIsNone(self.geocode([self.latin_result()])[0])
+        result, _ = self.geocode([self.latin_result()], match_city_street=False)
+        self.assertEqual((result["latitude"], result["longitude"]), (31.072207, 35.036462))
+
+    def test_join_preserves_precision_country_house_and_partial_guards(self):
+        for case in ("house", "country", "precision", "partial", "type", "coordinates"):
+            result = self.latin_result()
+            if case == "house": result["address_components"][0] = address_component("1210", "1210", "street_number")
+            if case == "country": result["address_components"][3] = address_component("US", "US", "country")
+            if case == "precision": result["geometry"]["location_type"] = "RANGE_INTERPOLATED"
+            if case == "partial": result["partial_match"] = True
+            if case == "type": result["types"] = ["route"]
+            if case == "coordinates": result["geometry"]["location"].pop("lat")
+            with self.subTest(case=case):
+                self.assertIsNone(self.geocode([result], match_city_street=False)[0])
+
+    def test_join_does_not_discard_other_language_candidate_before_ambiguity_check(self):
+        far = self.latin_result()
+        far["geometry"]["location"]["lat"] = 32.0
+        self.assertIsNone(self.geocode([precise_result(), far], match_city_street=False)[0])
 
     def diagnostic_env(self):
         return patch.dict(geocoding_service.os.environ, {
