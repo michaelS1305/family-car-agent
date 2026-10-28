@@ -46,6 +46,8 @@ def key_cohort(conn, config):
 
 
 def begin(conn, user, config, *, installation_ref, request_id, platform, token):
+    if platform != 'android':
+        return response('REGISTRATION_UNAVAILABLE')
     scope(conn, user)
     key_cohort(conn,config)
     now = conn.execute('SELECT clock_timestamp()').fetchone()[0]
@@ -106,7 +108,7 @@ def begin(conn, user, config, *, installation_ref, request_id, platform, token):
 def confirm(conn, user, config, *, installation_ref, challenge_ref, nonce):
     scope(conn, user)
     installation = conn.execute('SELECT generation,status FROM native_push_installations '
-        'WHERE installation_ref=%s AND user_id=%s AND provider_project=%s FOR UPDATE',
+        "WHERE installation_ref=%s AND user_id=%s AND provider_project=%s AND platform='android' FOR UPDATE",
         (installation_ref,user.user_id,config.project)).fetchone()
     if not installation:
         return response('REGISTRATION_UNAVAILABLE')

@@ -21,6 +21,8 @@ class Config:
     key_id: str
     encryption_key: bytes = field(repr=False)
     fingerprint_key: bytes = field(repr=False)
+    environment: str
+    android_package: str
 
     @classmethod
     def load(cls):
@@ -30,11 +32,21 @@ class Config:
             key_id = os.environ['NATIVE_PUSH_KEY_ID']
             enc = base64.b64decode(os.environ['NATIVE_PUSH_ENCRYPTION_KEY'], validate=True)
             fp = base64.b64decode(os.environ['NATIVE_PUSH_FINGERPRINT_KEY'], validate=True)
+            environment = os.environ['NATIVE_PUSH_ENVIRONMENT']
+            package = os.environ['NATIVE_PUSH_ANDROID_PACKAGE']
+            expected = {
+                'dev': ('il.fca.companion.dev', 'https://jouhqvbxhsvkluwkqmdg.supabase.co'),
+                'prod': ('il.fca.companion', 'https://xrgijytfigcuxmdktvmd.supabase.co'),
+            }.get(environment)
+            if (expected is None or package != expected[0]
+                    or os.environ.get('SUPABASE_URL', '').rstrip('/') != expected[1]
+                    or project != 'family-car-agent-dev'):
+                raise ValueError()
             if (not re.fullmatch(r'[a-z][a-z0-9-]{4,61}[a-z0-9]', project)
                     or not os.path.isabs(path) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', key_id)
                     or len(enc) != 32 or len(fp) != 32 or hmac.compare_digest(enc, fp)):
                 raise ValueError()
-            return cls(project, path, key_id, enc, fp)
+            return cls(project, path, key_id, enc, fp, environment, package)
         except (KeyError, ValueError, TypeError):
             raise ConfigurationError() from None
 

@@ -20,7 +20,7 @@ class Begin(BaseModel):
     model_config = ConfigDict(extra='forbid', hide_input_in_errors=True)
     installation_ref: UUID4
     request_id: UUID4
-    platform: Literal['android','ios']
+    platform: Literal['android']
     token: str = Field(min_length=20,max_length=4096,pattern=r'^[A-Za-z0-9_:\-.]+$',repr=False)
 
 

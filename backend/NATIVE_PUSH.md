@@ -7,11 +7,51 @@ before separate schema, privileges, credentials and client review.
 ## Configuration (names only)
 
 - `NATIVE_PUSH_ENABLED`: opt in explicitly; otherwise no producer, worker or registration.
-- `NATIVE_PUSH_PROJECT`: exact environment Firebase project.
+- `NATIVE_PUSH_PROJECT`: `family-car-agent-dev` (shared Firebase project).
+- `NATIVE_PUSH_ENVIRONMENT`: required `dev` or `prod` when enabled.
+- `NATIVE_PUSH_ANDROID_PACKAGE`: required `il.fca.companion.dev` for `dev`,
+  or `il.fca.companion` for `prod`. Every Android send, including challenges and
+  retries, uses this server-owned value as FCM `restricted_package_name`.
+- `SUPABASE_URL`: must match the existing environment: Dev
+  `https://jouhqvbxhsvkluwkqmdg.supabase.co`, Production
+  `https://xrgijytfigcuxmdktvmd.supabase.co` (trailing slash accepted).
 - `NATIVE_PUSH_CREDENTIALS_FILE`: absolute service-account JSON path, mounted externally.
 - `NATIVE_PUSH_KEY_ID`: non-secret identifier for the encryption/key cohort.
 - `NATIVE_PUSH_ENCRYPTION_KEY`: base64 encoding of a cryptographically random 32-byte AES key.
 - `NATIVE_PUSH_FINGERPRINT_KEY`: separate, independently generated 32-byte base64 HMAC key.
+
+### Shared-project isolation rollout
+
+Before deploying this version, add the two new variables above to Render Dev
+while the old code is still running; the old version ignores them. Verify the
+existing project and Supabase URL match, then deploy after explicit approval.
+Missing or inconsistent settings fail closed with the existing sanitized
+configuration error / 503 behavior; there is no implicit fallback or automatic
+disabling of the feature. Do not deploy first and configure afterward.
+Keep the existing Dev service-account file, key cohort, installations and tokens.
+Rollback is to the prior code while retaining the added variables, not key rotation.
+
+Future Production uses `prod` and `il.fca.companion`, its own Supabase database,
+service account / secret file and independent encryption and fingerprint keys.
+Keep Production push disabled until its separate client and rollout are approved.
+This change neither enables Android Production nor changes cloud configuration.
+Do not copy active push tables between environments. No schema migration is needed.
+
+Only Android registrations and sends are supported for now. Existing non-Android
+installations cannot confirm registration; the sender refuses them without network
+I/O. iOS requires a separately reviewed application/platform isolation design.
+Firebase App ID is not independently verifiable in the existing request protocol:
+neither an environment variable nor a client claim authenticates it. Supabase JWT
+verification, installation ownership, expiring challenge proof, generation and
+revocation remain required. App Check is not introduced here.
+
+Package restrictions protect this sender's requests, not the whole Firebase IAM
+boundary. Both service accounts still have project-level sending authority and a
+compromised credential can send outside this code without the restriction. The
+server cannot introspect a token's package locally: FCM enforces it at send time.
+Offline tests model that contract; an approved Dev/Production device test remains
+necessary. Registration mismatch must not become ACTIVE because no valid challenge
+is delivered. Preserve opaque refresh payloads and authenticated detail fetching.
 
 No credentials belong in this repository. All instances serving an environment
 must use identical project/key configuration. Do not change keys in place or

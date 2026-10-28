@@ -25,7 +25,8 @@ import native_push_registration as registration
 import native_push_worker as worker
 
 
-CONFIG = Config('test-fca-project','/test-only/unused.json','test',b'e'*32,b'f'*32)
+CONFIG = Config('test-fca-project','/test-only/unused.json','test',b'e'*32,b'f'*32,
+                'dev','il.fca.companion.dev')
 
 
 class SecurityTests(unittest.TestCase):
@@ -68,13 +69,13 @@ class SecurityTests(unittest.TestCase):
         transport=Mock()
         provider=Fcm(CONFIG,transport=transport,clock=lambda:1000)
         provider._token,provider._until='mock-access',2000
-        self.assertEqual(provider.send('x',{},expires_at=datetime.fromtimestamp(999,timezone.utc),platform='ios').code,'expired')
+        self.assertEqual(provider.send('x',{},expires_at=datetime.fromtimestamp(999,timezone.utc),platform='android').code,'expired')
         transport.post.assert_not_called()
 
     def test_wrong_project_never_sends(self):
         transport=Mock()
         provider=Fcm(CONFIG,transport=transport,loader=lambda p:{'project_id':'wrong'})
-        self.assertEqual(provider.send('x',{},expires_at=datetime.now(timezone.utc)+timedelta(minutes=1),platform='ios').code,'configuration')
+        self.assertEqual(provider.send('x',{},expires_at=datetime.now(timezone.utc)+timedelta(minutes=1),platform='android').code,'configuration')
         transport.post.assert_not_called()
 
     def test_provider_classification(self):

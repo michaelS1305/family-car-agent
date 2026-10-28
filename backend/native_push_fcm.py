@@ -80,16 +80,17 @@ class Fcm:
                 raise ConfigurationError() from None
 
     def send(self, token, data, *, expires_at, platform):
+        # Never let an untrusted platform select an unrestricted send path.
+        if platform != 'android':
+            return Result('configuration')
         try:
             access = self._access_token()
             remaining = int(expires_at.timestamp() - self.clock())
             if remaining <= 0:
                 return Result('expired')
             message = {'token': token, 'data': data,
-                'android': {'ttl': f'{remaining}s', 'priority': 'high'},
-                'apns': {'headers': {'apns-expiration': str(int(expires_at.timestamp())),
-                                     'apns-push-type': 'background', 'apns-priority': '5'},
-                         'payload': {'aps': {'content-available': 1}}}}
+                'android': {'ttl': f'{remaining}s', 'priority': 'high',
+                            'restricted_package_name': self.config.android_package}}
             response = self.http.post(
                 f'https://fcm.googleapis.com/v1/projects/{self.config.project}/messages:send',
                 json={'message': message}, headers={'Authorization': 'Bearer ' + access},
