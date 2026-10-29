@@ -237,14 +237,19 @@ class MultiCarReservationPostgresTests(unittest.TestCase):
         booked = self.create(vehicle_ref=a)
         self.retire(a)
         self.assertEqual(self.create(vehicle_ref=a)['code'], 'VEHICLE_NOT_FOUND_OR_UNAVAILABLE')
-        self.assertEqual(self.update(booked['reservation_ref'], vehicle_ref=a)['vehicle_ref'], str(a))
+        # Retirement cancels not-yet-ended reservations; they cannot be edited.
+        self.assertEqual(self.update(booked['reservation_ref'], vehicle_ref=a)['code'],
+                         'RESERVATION_NOT_FOUND_OR_UNAVAILABLE')
+        self.assertEqual(self.query('SELECT status FROM reservations WHERE reservation_ref=%s',
+                                    (booked['reservation_ref'],)), [('cancelled',)])
         listing = self.database.list_family_reservations(self.family, self.creator[1], 'future', 'all', '2026-01-01')
-        self.assertEqual(str(listing[0][5]), str(a))
+        self.assertEqual(listing, [])
         ai = self.database.get_ai_reservations(self.family)
         self.assertEqual(ai['items'][0]['vehicle_ref'], str(a))
+        self.assertEqual(ai['items'][0]['status'], 'cancelled')
         self.assertNotIn('reservation_id', ai['items'][0])
         self.assertNotIn('vehicle_id', ai['items'][0])
-        self.assertTrue(self.cancel(booked['reservation_ref'])['success'])
+        self.assertEqual(self.cancel(booked['reservation_ref'])['code'], 'RESERVATION_NOT_FOUND_OR_UNAVAILABLE')
         active = self.create(vehicle_ref=b)
         self.assertEqual(self.update(active['reservation_ref'], vehicle_ref=a)['code'], 'VEHICLE_NOT_FOUND_OR_UNAVAILABLE')
 

@@ -224,7 +224,12 @@ class ExactMigrationTests(unittest.TestCase):
             raise RuntimeError('Only disposable loopback test_gemini allowed')
         name='test_fca_reminder_'+uuid4().hex
         with psycopg.connect(dsn,autocommit=True) as admin:
-            admin.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
+            # Cluster roles are fixture setup, not privileges of the migration executor.
+            for role in ('anon','authenticated','service_role'):
+                if not admin.execute('SELECT 1 FROM pg_roles WHERE rolname=%s',(role,)).fetchone():
+                    admin.execute(sql.SQL('CREATE ROLE {}').format(sql.Identifier(role)))
+            # Match the migration executor's ownership without requiring superuser.
+            admin.execute(sql.SQL('CREATE DATABASE {} OWNER postgres').format(sql.Identifier(name)))
             try:
                 with psycopg.connect(dsn,dbname=name,autocommit=True) as conn:
                     conn.execute('SET ROLE postgres')
@@ -234,9 +239,6 @@ class ExactMigrationTests(unittest.TestCase):
                     conn.execute('CREATE TABLE vehicle_events(event_id uuid PRIMARY KEY,user_id integer NOT NULL,'
                         'vehicle_id integer NOT NULL,family_id integer NOT NULL,occurred_at timestamptz NOT NULL,'
                         'UNIQUE(event_id,user_id,vehicle_id,family_id))')
-                    for role in ('anon','authenticated','service_role'):
-                        if not conn.execute('SELECT 1 FROM pg_roles WHERE rolname=%s',(role,)).fetchone():
-                            conn.execute(sql.SQL('CREATE ROLE {}').format(sql.Identifier(role)))
                     # Reproduce unwanted defaults, verify migration does not change them.
                     conn.execute('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public '
                                  'GRANT TRUNCATE,REFERENCES,TRIGGER,MAINTAIN ON TABLES TO anon,authenticated,service_role')
