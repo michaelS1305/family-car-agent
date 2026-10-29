@@ -102,6 +102,38 @@ jobs:
             exit 1
           fi
           printf '%s' "$FIREBASE_DEV_CONFIG" > app/src/dev/google-services.json
+      - name: Restore Firebase Production configuration
+        shell: bash
+        env:
+          # Despite the legacy suffix, this secret contains raw JSON, not Base64.
+          FIREBASE_PROD_CONFIG: ${{ secrets.FIREBASE_PROD_GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          raw = os.environ.get("FIREBASE_PROD_CONFIG", "")
+          if not raw.strip():
+              sys.exit("Missing Firebase Production configuration secret")
+          try:
+              config = json.loads(raw)
+              project = config["project_info"]
+              clients = [client["client_info"] for client in config["client"]
+                         if client["client_info"]["android_client_info"]["package_name"] == "il.fca.companion"]
+              valid = (project["project_id"] == "family-car-agent-dev"
+                       and project["project_number"] == "452367109329"
+                       and len(clients) == 1
+                       and clients[0]["mobilesdk_app_id"] == "1:452367109329:android:c5a668180a0a8b84bdc9f0")
+          except (ValueError, KeyError, TypeError):
+              sys.exit("Invalid Firebase Production configuration JSON or structure")
+          if not valid:
+              sys.exit("Firebase Production configuration does not match the approved registration")
+          destination = Path("app/src/prod/google-services.json")
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          destination.write_text(raw, encoding="utf-8")
+          PY
       - name: Verify Gradle runtime
         run: bash ./gradlew --version
       - name: Environment configuration guards
