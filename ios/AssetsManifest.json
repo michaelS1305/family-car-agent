@@ -1,0 +1,152 @@
+{
+  "icons": {
+    "about_icon": {
+      "kind": "Icons",
+      "catalog_name": "about_icon"
+    },
+    "bell_icon": {
+      "kind": "Icons",
+      "catalog_name": "bell_icon"
+    },
+    "bluetooth_icon": {
+      "kind": "Icons",
+      "catalog_name": "bluetooth_icon"
+    },
+    "booking_center_icon": {
+      "kind": "Icons",
+      "catalog_name": "booking_center_icon"
+    },
+    "car_icon": {
+      "kind": "Icons",
+      "catalog_name": "car_icon"
+    },
+    "chat_icon": {
+      "kind": "Icons",
+      "catalog_name": "chat_icon"
+    },
+    "chat_suppory_icon": {
+      "kind": "Icons",
+      "catalog_name": "chat_suppory_icon"
+    },
+    "clock_icon": {
+      "kind": "Icons",
+      "catalog_name": "clock_icon"
+    },
+    "dashboard_icon": {
+      "kind": "Icons",
+      "catalog_name": "dashboard_icon"
+    },
+    "delete_account_icon": {
+      "kind": "Icons",
+      "catalog_name": "delete_account_icon"
+    },
+    "envelope_icon": {
+      "kind": "Icons",
+      "catalog_name": "envelope_icon"
+    },
+    "family_icon": {
+      "kind": "Icons",
+      "catalog_name": "family_icon"
+    },
+    "history_icon": {
+      "kind": "Icons",
+      "catalog_name": "history_icon"
+    },
+    "info_icon": {
+      "kind": "Icons",
+      "catalog_name": "info_icon"
+    },
+    "license_plate": {
+      "kind": "Icons",
+      "catalog_name": "license_plate"
+    },
+    "location_icon": {
+      "kind": "Icons",
+      "catalog_name": "location_icon"
+    },
+    "logout_icon": {
+      "kind": "Icons",
+      "catalog_name": "logout_icon"
+    },
+    "maintenance_icon": {
+      "kind": "Icons",
+      "catalog_name": "maintenance_icon"
+    },
+    "manufacturer_icon": {
+      "kind": "Icons",
+      "catalog_name": "manufacturer_icon"
+    },
+    "no_cars_icon": {
+      "kind": "Icons",
+      "catalog_name": "no_cars_icon"
+    },
+    "phone_icon": {
+      "kind": "Icons",
+      "catalog_name": "phone_icon"
+    },
+    "privacy_icon": {
+      "kind": "Icons",
+      "catalog_name": "privacy_icon"
+    },
+    "settings_icon": {
+      "kind": "Icons",
+      "catalog_name": "settings_icon"
+    },
+    "single_car_icon": {
+      "kind": "Icons",
+      "catalog_name": "single_car_icon"
+    },
+    "success_icon": {
+      "kind": "Icons",
+      "catalog_name": "success_icon"
+    },
+    "support_icon": {
+      "kind": "Icons",
+      "catalog_name": "support_icon"
+    },
+    "theme_icon": {
+      "kind": "Icons",
+      "catalog_name": "theme_icon"
+    },
+    "trash_icon": {
+      "kind": "Icons",
+      "catalog_name": "trash_icon"
+    },
+    "user_icon": {
+      "kind": "Icons",
+      "catalog_name": "user_icon"
+    },
+    "vehicles_icon": {
+      "kind": "Icons",
+      "catalog_name": "vehicles_icon"
+    },
+    "warning_icon": {
+      "kind": "Icons",
+      "catalog_name": "warning_icon"
+    },
+    "vehicle_crossover": {
+      "kind": "Vehicles",
+      "catalog_name": "vehicle_crossover"
+    },
+    "vehicle_hatchback": {
+      "kind": "Vehicles",
+      "catalog_name": "vehicle_hatchback"
+    },
+    "vehicle_sedan": {
+      "kind": "Vehicles",
+      "catalog_name": "vehicle_sedan"
+    },
+    "vehicle_suv": {
+      "kind": "Vehicles",
+      "catalog_name": "vehicle_suv"
+    },
+    "vehicle_minivan": {
+      "kind": "Vehicles",
+      "catalog_name": "vehicle_minivan"
+    }
+  },
+  "notes": [
+    "Vector PDF imagesets generated from provided SVG via Inkscape.",
+    "Original SVG and supplied PNG files remain in AssetSources."
+  ]
+}
