@@ -26,10 +26,17 @@ class EntryViewModel(private val app: FcaApplication) : AndroidViewModel(app) {
     private val pending = PendingLoginRoute(app)
     private var exchanging = false
     private val rootRefresh = AuthenticatedRootRefresh()
+    internal val firstVehicleSetup = FirstVehicleSetupState()
+    internal fun setupIdentity(): VehiclesIdentity? {
+        val owner = app.store.activeOwner()?.takeIf { it == app.auth.owner() } ?: return null
+        val family = model.authenticatedFamilyId ?: return null
+        return if (model.screen == EntryScreen.AUTHENTICATED_APP) VehiclesIdentity(owner, family) else null
+    }
     val model = OnboardingModel(object : OnboardingGateway {
         override suspend fun request(path: String, method: String, body: JSONObject?) = withContext(Dispatchers.IO) {
             val owner = checkNotNull(app.auth.owner())
-            JSONObject(if (path == "/api/family") app.api.call(owner, path, method, body)
+            JSONObject(if (path == "/api/me" && method == "GET") app.api.bootstrap(owner)
+                else if (path == "/api/family") app.api.call(owner, path, method, body)
                 else app.api.onboarding(owner, path, method, body))
         }
         override suspend fun activate() = withContext(Dispatchers.IO) {
@@ -42,7 +49,7 @@ class EntryViewModel(private val app: FcaApplication) : AndroidViewModel(app) {
             app.push.invalidate() // Fence any foreground activation while revocation was in flight.
             app.store.activate(null); app.auth.signOut()
         }
-    })
+    }, { app.auth.owner() })
     internal val account = AccountSettingsModel(object : AccountSettingsGateway {
         override suspend fun email(owner: String): String? = withContext(Dispatchers.IO) {
             // Read the authenticated Auth profile, not JWT text or a fabricated address.
@@ -76,6 +83,7 @@ class EntryViewModel(private val app: FcaApplication) : AndroidViewModel(app) {
         }
     }
     fun reconcileOwner() {
+        if (app.store.activeOwner() == null || app.store.activeOwner() != app.auth.owner()) firstVehicleSetup.clear()
         if (model.screen in setOf(EntryScreen.AUTHENTICATED_APP, EntryScreen.BOOTSTRAP, EntryScreen.SUCCESS) &&
             (app.store.activeOwner() == null || app.store.activeOwner() != app.auth.owner())) {
             rootRefresh.reset(); model.leaveAuthenticatedApp()
@@ -94,6 +102,7 @@ class EntryViewModel(private val app: FcaApplication) : AndroidViewModel(app) {
     }
     fun beginLogin(openBrowser: (Uri) -> Unit) {
         if (exchanging || model.busy) return
+        firstVehicleSetup.clear()
         try {
             pending.save(model.route)
             // Same activation boundary as the previous Companion login screen.
@@ -150,6 +159,7 @@ class EntryActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel = ViewModelProvider(this)[EntryViewModel::class.java]
+        viewModel.firstVehicleSetup.restoreOnce(savedInstanceState?.getBundle("firstVehicleSetup"))
         val app = application as FcaApplication
         chat = ViewModelProvider(this, object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -209,7 +219,8 @@ class EntryActivity : ComponentActivity() {
                 login = { viewModel.beginLogin { startActivity(Intent(Intent.ACTION_VIEW, it)) } },
                 next = viewModel::next, back = viewModel::back, changeAddress = viewModel::changeAddress,
                 retryBootstrap = viewModel::openExistingSession, enteredApp = ::enteredApp,
-                logout = { viewModel.logout { chat.activateOwner() } }, account = viewModel.account)
+                logout = { viewModel.logout { chat.activateOwner() } }, account = viewModel.account,
+                firstVehicleSetup = viewModel.firstVehicleSetup, setupIdentity = viewModel::setupIdentity)
         }
     }
     override fun onNewIntent(intent: Intent) {
@@ -217,6 +228,10 @@ class EntryActivity : ComponentActivity() {
         setIntent(intent)
         if (intent.data != null) callback(intent) else viewModel.reconcileOwner()
         chat.activateOwner()
+    }
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBundle("firstVehicleSetup", viewModel.firstVehicleSetup.save())
+        super.onSaveInstanceState(outState)
     }
     override fun onResume() {
         super.onResume()

@@ -43,7 +43,7 @@ private fun FcaLoadingScreen(loading: Boolean) {
     val breathing = rememberInfiniteTransition(label = "loading breathing")
     val breath by breathing.animateFloat(1f, .84f,
         infiniteRepeatable(tween(1800), RepeatMode.Reverse), label = "logo alpha")
-    Box(Modifier.fillMaxSize().background(Color(0xFFF6F7F7))
+    Box(Modifier.fillMaxSize().background(fcaColor(Color(0xFFF6F7F7), FcaColorRole.BACKGROUND))
         .clearAndSetSemantics {
             // A stable description, not a live region; no announcements on animation frames.
             if (loading) {
@@ -61,7 +61,7 @@ private fun FcaLoadingScreen(loading: Boolean) {
                 modifier = Modifier.align(Alignment.Center)
                     .offset(y = logoSize / 2 + 48.dp).width(120.dp).height(4.dp)
                     .clip(RoundedCornerShape(50)),
-                color = Color(0xFF637B97), trackColor = Color(0xFFE0E5E7))
+                color = fcaColor(Color(0xFF637B97), FcaColorRole.SECONDARY), trackColor = fcaColor(Color(0xFFE0E5E7), FcaColorRole.BORDER))
         }
     }
 }

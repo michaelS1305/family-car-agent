@@ -30,8 +30,10 @@ import androidx.compose.ui.unit.sp
 import il.fca.companion.R
 import il.fca.companion.net.*
 
-internal val VehicleInk = Color(0xFF23364E)
-internal val VehicleBorder = Color(0xFFDDE2E8)
+internal val VehicleInk: Color
+    @Composable get() = fcaColor(Color(0xFF23364E), FcaColorRole.TEXT)
+internal val VehicleBorder: Color
+    @Composable get() = fcaColor(Color(0xFFDDE2E8), FcaColorRole.BORDER)
 internal fun vehicleIllustration(category: VehicleCategory?): Int = when (category) {
     VehicleCategory.HATCHBACK -> R.drawable.vehicle_hatchback
     VehicleCategory.SEDAN -> R.drawable.vehicle_sedan
@@ -48,7 +50,7 @@ internal fun VehiclesScreen(model: VehiclesViewModel, familyId: Long?, back: () 
         model.start()
         onDispose {
             // Activity recreation must not discard an uncertain POST's retry identity.
-            if (activity?.isChangingConfigurations != true) model.stop()
+            if (activity?.isChangingConfigurations != true) model.pause()
         }
     }
     val state = model.state
@@ -62,7 +64,7 @@ internal fun VehiclesScreen(model: VehiclesViewModel, familyId: Long?, back: () 
         FcaErrorScreen("לא ניתן לטעון את הרכבים", model::refresh, "חזרה לדשבורד", navigateBack)
         return
     }
-    Column(Modifier.fillMaxSize().background(Color(0xFFF6F7F7)).navigationBarsPadding(),
+    Column(Modifier.fillMaxSize().background(fcaColor(Color(0xFFF6F7F7), FcaColorRole.BACKGROUND)).navigationBarsPadding(),
         horizontalAlignment = Alignment.CenterHorizontally) {
         Column(Modifier.widthIn(max = 620.dp).fillMaxSize()) {
             VehiclesHeader(if (state.page == VehiclesPage.ADD) "הוספת רכב" else "רכבים", navigateBack)
@@ -70,7 +72,7 @@ internal fun VehiclesScreen(model: VehiclesViewModel, familyId: Long?, back: () 
                 VehiclesPage.ADD -> AddVehicleScreen(model)
                 VehiclesPage.PLACEHOLDER -> Unit // VehicleDetailsRoute owns the selected-vehicle flow above.
                 VehiclesPage.LIST -> when {
-                    state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    state.loading && !state.loaded -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                     state.loadError -> Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("לא ניתן לטעון את הרכבים", color = VehicleInk)
                         TextButton(onClick = model::refresh) { Text("נסה שוב") }
@@ -83,7 +85,7 @@ internal fun VehiclesScreen(model: VehiclesViewModel, familyId: Long?, back: () 
                         if (state.canCreate) {
                             Spacer(Modifier.height(16.dp))
                             Text("הוסיפו את הרכב הראשון של המשפחה\nכדי להתחיל לנהל אותו כאן",
-                                color = Color(0xFF788699), fontSize = 18.sp, lineHeight = 26.sp,
+                                color = fcaColor(Color(0xFF788699), FcaColorRole.SECONDARY), fontSize = 18.sp, lineHeight = 26.sp,
                                 textAlign = TextAlign.Center)
                             Spacer(Modifier.height(28.dp))
                             OutlinedButton(onClick = model::add, modifier = Modifier.fillMaxWidth().height(56.dp),
@@ -93,12 +95,12 @@ internal fun VehiclesScreen(model: VehiclesViewModel, familyId: Long?, back: () 
                                 Image(painterResource(R.drawable.ic_add), null, Modifier.size(24.dp))
                             }
                             Spacer(Modifier.height(14.dp))
-                            Text("זמין למנהל המשפחה בלבד", color = Color(0xFF788699),
+                            Text("זמין למנהל המשפחה בלבד", color = fcaColor(Color(0xFF788699), FcaColorRole.SECONDARY),
                                 fontSize = 14.sp, textAlign = TextAlign.Center)
                         } else {
                             Spacer(Modifier.height(16.dp))
                             Text("כרגע אין רכבים במשפחה\nרק מנהל המשפחה יכול להוסיף רכבים",
-                                color = Color(0xFF788699), fontSize = 18.sp, lineHeight = 26.sp,
+                                color = fcaColor(Color(0xFF788699), FcaColorRole.SECONDARY), fontSize = 18.sp, lineHeight = 26.sp,
                                 textAlign = TextAlign.Center)
                         }
                     }
@@ -118,7 +120,7 @@ internal fun VehiclesScreen(model: VehiclesViewModel, familyId: Long?, back: () 
                             item {
                                 Column(Modifier.padding(top = 22.dp, bottom = 10.dp)) {
                                     HorizontalDivider(color = VehicleBorder)
-                                    Text("רכבים לא פעילים", Modifier.padding(top = 22.dp), color = Color(0xFF788699),
+                                    Text("רכבים לא פעילים", Modifier.padding(top = 22.dp), color = fcaColor(Color(0xFF788699), FcaColorRole.SECONDARY),
                                         fontSize = 20.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
@@ -134,25 +136,26 @@ internal fun VehiclesScreen(model: VehiclesViewModel, familyId: Long?, back: () 
 @Composable
 internal fun VehiclesHeader(title: String, back: () -> Unit) {
     Box(Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 16.dp)) {
-        Image(painterResource(R.drawable.fca_header_wordmark), "Family Car Agent",
+        val wordmarkBlend = if (LocalFcaDark.current) BlendMode.SrcOver else BlendMode.Multiply
+        Image(painterResource(if (LocalFcaDark.current) R.drawable.family_car_agent_road_logo_1__dark else R.drawable.fca_header_wordmark), "Family Car Agent",
             Modifier.align(Alignment.Center).fillMaxWidth(.63f).height(58.dp).graphicsLayer {
                 compositingStrategy = CompositingStrategy.Offscreen
-                blendMode = BlendMode.Multiply
+                blendMode = wordmarkBlend
             }, contentScale = ContentScale.Fit)
         IconButton(onClick = back, modifier = Modifier.align(AbsoluteAlignment.CenterRight)
-            .size(46.dp).background(Color.White.copy(alpha = .85f), CircleShape)) {
-            Image(painterResource(R.drawable.ic_chevron_back), "חזרה", Modifier.size(22.dp))
+            .size(46.dp).background(fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .85f), CircleShape)) {
+            Image(painterResource(R.drawable.ic_chevron_back), "חזרה", Modifier.size(22.dp), colorFilter = fcaControlIconFilter())
         }
     }
     if (title == "רכבים") {
         // The approved artwork includes the title; preserve its full canvas, as in History.
         Box(Modifier.fillMaxWidth().height(108.dp), contentAlignment = Alignment.Center) {
             Image(painterResource(R.drawable.vehicles_icon), "רכבים",
-                Modifier.requiredSize(200.dp).offset(y = (-15).dp), contentScale = ContentScale.Fit)
+                Modifier.requiredSize(200.dp).offset(y = (-15).dp), contentScale = ContentScale.Fit, colorFilter = fcaControlIconFilter())
         }
     } else Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 24.dp), horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically) {
-        Image(painterResource(R.drawable.single_car_icon), null, Modifier.size(40.dp))
+        Image(painterResource(R.drawable.single_car_icon), null, Modifier.size(40.dp), colorFilter = fcaControlIconFilter())
         Spacer(Modifier.width(12.dp))
         Text(title, color = VehicleInk, fontWeight = FontWeight.Bold, fontSize = 27.sp)
     }
@@ -161,10 +164,10 @@ internal fun VehiclesHeader(title: String, back: () -> Unit) {
 @Composable
 private fun VehicleCard(vehicle: ManagedVehicle, open: () -> Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min = 94.dp).alpha(if (vehicle.readOnly) .5f else 1f)
-        .clip(RoundedCornerShape(24.dp)).background(Color.White.copy(alpha = .7f))
+        .clip(RoundedCornerShape(24.dp)).background(fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .7f))
         .border(1.dp, VehicleBorder, RoundedCornerShape(24.dp)).clickable(onClick = open).padding(16.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Image(painterResource(R.drawable.ic_chevron_back), null, Modifier.size(18.dp))
+        Image(painterResource(R.drawable.ic_chevron_back), null, Modifier.size(18.dp), colorFilter = fcaControlIconFilter())
         Text(vehicle.name, Modifier.weight(1f).padding(horizontal = 16.dp), color = VehicleInk,
             fontSize = 22.sp, fontWeight = FontWeight.Bold)
         // Entire illustration is preserved, never tinted or mirrored for RTL.

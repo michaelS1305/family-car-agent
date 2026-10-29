@@ -26,10 +26,11 @@ class VehiclesTest {
         var rows = emptyList<ManagedVehicle>(); var admin = true; var catalogs = 0
         val owners = mutableListOf<String>(); val requests = mutableListOf<VehicleSubmission>()
         var list: (suspend () -> List<ManagedVehicle>)? = null
+        var permission: (suspend () -> Boolean)? = null
         var catalog: suspend () -> List<Manufacturer> = { listOf(Manufacturer(1, "יונדאי"), Manufacturer(2, "קיה")) }
         var createAction: suspend (VehicleSubmission) -> ManagedVehicle = { error("unexpected create") }
         override suspend fun vehicles(owner: String): List<ManagedVehicle> { owners += owner; return list?.invoke() ?: rows }
-        override suspend fun canCreate(owner: String) = admin
+        override suspend fun canCreate(owner: String) = permission?.invoke() ?: admin
         override suspend fun manufacturers(owner: String): List<Manufacturer> { catalogs++; return catalog() }
         override suspend fun create(owner: String, submission: VehicleSubmission): ManagedVehicle {
             owners += owner; requests += submission; return createAction(submission)
@@ -38,6 +39,38 @@ class VehiclesTest {
     private suspend fun settle() { repeat(8) { yield() } }
     private fun vm(api: Gateway, scope: CoroutineScope, identity: () -> VehiclesIdentity? = { VehiclesIdentity("A", 10) }) =
         VehiclesViewModel(api, identity, scope)
+
+    @Test fun readsStartConcurrentlyWithoutGrantingPermissionEarly() = runBlocking {
+        val listStarted = CompletableDeferred<Unit>(); val permissionStarted = CompletableDeferred<Unit>()
+        val api = Gateway().apply {
+            list = { listStarted.complete(Unit); permissionStarted.await(); listOf(vehicle(1)) }
+            permission = { permissionStarted.complete(Unit); listStarted.await(); true }
+        }
+        val model = vm(api, this)
+        try {
+            model.start(); assertFalse(model.state.canCreate)
+            withTimeout(2000) { while (!model.state.loaded) yield() }
+            assertTrue(model.state.canCreate); assertEquals(1, model.state.rows.size)
+        } finally { model.stop() }
+    }
+    @Test fun revisitRetainsDisplayButRefreshesPermissionAndHidesOtherIdentity() = runBlocking {
+        var who = VehiclesIdentity("A", 10)
+        val api = Gateway().apply { rows = listOf(vehicle(1)) }
+        val model = vm(api, this) { who }
+        val gate = CompletableDeferred<List<ManagedVehicle>>()
+        try {
+            model.start(); settle(); assertTrue(model.state.loaded)
+            model.pause(); assertFalse(model.state.canCreate)
+            api.list = { gate.await() }; model.start(); model.start(); settle()
+            assertEquals(listOf(vehicle(1)), model.state.rows); assertTrue(model.state.loading)
+            model.add(); assertEquals(VehiclesPage.LIST, model.state.page)
+            assertEquals(2, api.owners.size)
+            who = VehiclesIdentity("B", 10)
+            assertTrue(model.state.rows.isEmpty())
+            gate.complete(listOf(vehicle(2))); settle(); assertTrue(model.state.rows.isEmpty())
+            model.start(); settle(); assertEquals(listOf(vehicle(2)), model.state.rows)
+        } finally { gate.complete(emptyList()); model.stop() }
+    }
 
     @Test fun fieldsAreRequiredWithoutNormalizationOrInventedRegex() {
         assertTrue(draft().valid)
@@ -183,14 +216,15 @@ class VehiclesTest {
         listOf("manufacturer", "plate", "inUse", "driver", "model").forEach { assertFalse(card.contains(it)) }
         assertTrue(card.contains("clickable(onClick = open)"))
         val shell = File("src/main/java/il/fca/companion/ui/AuthenticatedAppShell.kt").readText()
-        assertTrue(shell.contains("VehiclesScreen(vehicles, familyId, state::back)"))
+        assertTrue(shell.replace(Regex("\\s+"), "").contains("VehiclesScreen(vehicles,familyId,state::back)"))
         assertTrue(shell.contains("state.category != DashboardCategory.VEHICLES"))
     }
     @Test fun emptyStateUsesHistoryHeaderTreatmentAndAdminOnlyCopy() {
         val ui = File("src/main/java/il/fca/companion/ui/VehiclesScreen.kt").readText()
         val header = ui.substringAfter("internal fun VehiclesHeader").substringBefore("private fun VehicleCard")
         assertTrue(header.contains("compositingStrategy = CompositingStrategy.Offscreen"))
-        assertTrue(header.contains("blendMode = BlendMode.Multiply"))
+        assertTrue(header.contains("if (LocalFcaDark.current) BlendMode.SrcOver else BlendMode.Multiply"))
+        assertTrue(header.contains("blendMode = wordmarkBlend"))
         assertTrue(header.contains("AbsoluteAlignment.CenterRight"))
         val title = header.substringAfter("if (title == \"רכבים\")").substringBefore("} else Row")
         assertTrue(title.contains("R.drawable.vehicles_icon"))

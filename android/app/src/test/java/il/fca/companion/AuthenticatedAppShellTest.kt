@@ -6,6 +6,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AuthenticatedAppShellTest {
+    @Test fun everyDashboardCategoryReturnsToDashboardThenChatWithoutLeakingSelection() {
+        val shell = AppShellState()
+        for (category in DashboardCategory.entries) {
+            shell.select(AppMode.DASHBOARD)
+            shell.openCategory(category)
+            assertEquals(category, shell.category)
+            shell.back()
+            assertNull(shell.category)
+            assertEquals(AppMode.DASHBOARD, shell.mode)
+            shell.back()
+            assertEquals(AppMode.CHAT, shell.mode)
+            shell.openCategory(category)
+            assertNull(shell.category)
+        }
+    }
     @Test fun shellDefaultsToChatAndBackRevealsChat() {
         val shell = AppShellState()
         assertEquals(AppMode.CHAT, shell.mode)

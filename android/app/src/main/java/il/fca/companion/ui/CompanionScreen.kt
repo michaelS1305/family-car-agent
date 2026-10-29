@@ -44,7 +44,7 @@ internal fun CompanionScreen(
             Column(
                 Modifier
                     .fillMaxSize()
-                    .background(Color(0xFFF6F7F7))
+                    .background(fcaColor(Color(0xFFF6F7F7), FcaColorRole.BACKGROUND))
                     .safeDrawingPadding(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -72,7 +72,7 @@ internal fun CompanionScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp),
-                        color = Color(0xFF788699),
+                        color = fcaColor(Color(0xFF788699), FcaColorRole.SECONDARY),
                         fontSize = 14.sp,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                         lineHeight = 19.sp
@@ -84,10 +84,10 @@ internal fun CompanionScreen(
                         else state.health
 
                     val color = when (health) {
-                        CompanionHealth.READY -> Color(0xFF148054)
-                        CompanionHealth.ACTION -> Color(0xFFAA6217)
+                        CompanionHealth.READY -> fcaColor(Color(0xFF148054), FcaColorRole.SUCCESS)
+                        CompanionHealth.ACTION -> fcaColor(Color(0xFFAA6217), FcaColorRole.WARNING)
                         CompanionHealth.SETUP -> VehicleInk
-                        else -> Color(0xFF788699)
+                        else -> fcaColor(Color(0xFF788699), FcaColorRole.SECONDARY)
                     }
 
                     Row(
@@ -120,7 +120,7 @@ internal fun CompanionScreen(
                             ),
                             null,
                             Modifier.size(32.dp)
-                        )
+                        , colorFilter = fcaControlIconFilter())
 
                         Text(
                             companionStatusText(verificationLoading, if (retired) "לא פעיל" else state.overall),
@@ -274,7 +274,7 @@ private fun CompanionCard(
 
         Text(
             note,
-            color = Color(0xFF788699),
+            color = fcaColor(Color(0xFF788699), FcaColorRole.SECONDARY),
             fontSize = 13.sp
         )
 

@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
     private val companion get() = getSystemService(CompanionDeviceManager::class.java)
 
     override fun onCreate(state: Bundle?) {
+        applyFcaPlatformTheme(this)
         super.onCreate(state)
         readTarget(intent)
         content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 24, 24, 24) }
@@ -88,7 +89,7 @@ class MainActivity : ComponentActivity() {
             if (!productContent) {
                 productContent = true
                 setContent {
-                    MaterialTheme {
+                    FcaTheme {
                         CompanionScreen(targetName, presentation, busy, targetVerified, targetRetired, productMessage, verificationLoading,
                             back = { finish() }, refresh = { app.store.activeOwner()?.let { owner -> task { load(owner) } } },
                             register = { app.store.activeOwner()?.let { owner -> task {

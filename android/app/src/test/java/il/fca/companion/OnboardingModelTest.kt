@@ -18,6 +18,41 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], application = Application::class)
 class OnboardingModelTest {
+    @Test fun joinConfirmationWithoutUsableCoordinatesStillRequiresExplicitConfirmation() = runBlocking {
+        for (coordinates in listOf("{}", "{\"latitude\":null,\"longitude\":null}",
+            "{\"latitude\":\"invalid\",\"longitude\":35}")) {
+            val gateway = Gateway().apply { response = { JSONObject(coordinates)
+                .put("step", "address_confirmed").put("resolved_address", "כתובת מאומתת") } }
+            val model = OnboardingModel(gateway)
+            model.authenticated(LoginRoute.JOIN_FAMILY)
+            assertEquals(3, model.step)
+            assertNull(model.addressLocation)
+            assertNull(model.error)
+            assertEquals("כתובת מאומתת", model.resolvedAddress)
+            assertFalse(gateway.activated)
+            assertEquals(listOf("/api/onboarding/join-family/start"), gateway.calls.map { it.first })
+            gateway.response = { JSONObject().put("step", "family_code") }
+            model.next()
+            assertEquals(4, model.step)
+            assertTrue(gateway.calls.last().third!!.getBoolean("confirmed"))
+        }
+    }
+    @Test fun cancelledAddressRequestDoesNotBecomeUserErrorAndCanRetry() = runBlocking {
+        val gateway = Gateway()
+        val model = OnboardingModel(gateway)
+        model.authenticated(LoginRoute.CREATE_FAMILY)
+        model.familyName = "לוי"; model.next(); model.address = "כתובת לבדיקה"
+        gateway.response = { throw kotlinx.coroutines.CancellationException("cancelled") }
+        val result = runCatching { model.next() }
+        assertTrue(result.exceptionOrNull() is kotlinx.coroutines.CancellationException)
+        assertFalse(model.busy)
+        assertNull(model.error)
+        assertEquals(2, model.step)
+        gateway.response = { JSONObject().put("normalized_address", "כתובת").put("display_address", "כתובת")
+            .put("resolution_token", "opaque") }
+        model.next()
+        assertEquals(3, model.step)
+    }
     @Test fun authenticatedNameUsesExistingMeAndLogoutReusesGatewayCleanup() = runBlocking {
         val gateway = Gateway().apply { response = { JSONObject().put("family_id", 1).put("name", "דנה לוי") } }
         val model = OnboardingModel(gateway)
@@ -55,6 +90,31 @@ class OnboardingModelTest {
             assertFalse(model.busy)
             assertTrue(gateway.calls.isEmpty())
         }
+    }
+    @Test fun candidateCoordinatesClearOnChangeAndCannotCrossIdentity() = runBlocking {
+        var owner = "A"
+        val gateway = Gateway().apply { response = { JSONObject().put("normalized_address", "typed")
+            .put("display_address", "proposal").put("resolution_token", "opaque")
+            .put("latitude", 31.0).put("longitude", 35.0) } }
+        val model = OnboardingModel(gateway) { owner }
+        model.authenticated(LoginRoute.CREATE_FAMILY)
+        model.familyName = "כהן"; model.next()
+        model.address = "רחוב רב מילים 12 עיר"; model.next()
+        assertEquals(31.0, model.addressLocation!!.latitude, 0.0)
+        owner = "B"; assertNull(model.addressLocation)
+        model.changeAddress(); assertNull(model.addressLocation)
+    }
+    @Test fun joinUsesOnlySubmittedCandidateCoordinates() = runBlocking {
+        val gateway = Gateway().apply { response = { path ->
+            JSONObject().put("step", if(path.endsWith("address")) "address_confirmed" else if(path.endsWith("family-name")) "address" else "family_name")
+                .put("latitude", 31.5).put("longitude", 35.5)
+        } }
+        val model = OnboardingModel(gateway)
+        model.authenticated(LoginRoute.JOIN_FAMILY)
+        model.familyName = "כהן"; model.next()
+        model.address = "רחוב 12 עיר"; model.next()
+        assertEquals(31.5, model.addressLocation!!.latitude, 0.0)
+        model.back(); assertNull(model.addressLocation)
     }
     private class Gateway : OnboardingGateway {
         val calls = mutableListOf<Triple<String, String, JSONObject?>>()
@@ -157,7 +217,6 @@ class OnboardingModelTest {
         val gateway = Gateway().apply { response = { path -> when(path) {
             "/api/onboarding/create-family/address" -> JSONObject().put("resolution_token", "fixture-resolution")
                 .put("display_address", "כתובת לבדיקה").put("normalized_address", "כתובת לבדיקה")
-                .put("latitude", 0).put("longitude", 0)
             "/api/me" -> JSONObject().put("family_id", 1).put("name", "שם מהשרת")
             "/api/family" -> JSONObject().put("family_code", "abc123")
             else -> JSONObject().put("created", true)

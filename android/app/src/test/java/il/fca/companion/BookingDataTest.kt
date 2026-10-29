@@ -40,6 +40,20 @@ class BookingDataTest {
         BookingViewModel(api, identity, scope) { day }
     private suspend fun settle() { repeat(5) { yield() } }
 
+    @Test fun bookingProjectionPreservesAssociatedVehicleCategories() {
+        val rows = VehicleCategory.entries.mapIndexed { i, category ->
+            parse(json().put("reservation_ref", ref(i + 1)).put("vehicle_ref", ref(i + 10))
+                .put("vehicle_display_name", "same name").put("vehicle_category", category.wire))
+        }
+        val projected = bookingRows(rows.reversed(), day)
+        rows.forEach { expected ->
+            val actual = projected.single { it.ref == expected.ref }
+            assertEquals(expected.vehicleRef, actual.vehicleRef)
+            assertEquals(vehicleIllustration(expected.category), vehicleIllustration(actual.category))
+        }
+        assertEquals(R.drawable.single_car_icon, vehicleIllustration(parse(json()).category))
+    }
+
     @Test fun queryUsesGridAndOnlyBoundedPublicParameters() {
         val path = URLDecoder.decode(BookingApi.path(BookingRange(day, day.plusDays(35))), "UTF-8")
         assertEquals("/api/reservations?range_start=2026-10-15T00:00:00&range_end=2026-11-19T00:00:00&scope=all", path)

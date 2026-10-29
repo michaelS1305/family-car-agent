@@ -5,6 +5,25 @@ import il.fca.companion.auth.SessionStore
 import org.json.JSONObject
 
 class FcaApi(private val auth: SessionStore) {
+    suspend fun bootstrap(owner: String): String {
+        suspend fun attempt(force: Boolean): String {
+            val token = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { auth.access(owner, force) }
+            return BootstrapRead.run(current = { auth.owner() == owner }) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    Http.onboardingRequest(BuildConfig.FCA_BASE_URL, "/api/me", "GET", null, token)
+                }
+            }
+        }
+        try { return attempt(false) }
+        catch (error: OnboardingFailure) {
+            if (error.status != 401) throw error
+            return attempt(true)
+        }
+        catch (error: HttpFailure) {
+            if (error.status != 401) throw error
+            return attempt(true)
+        }
+    }
     internal fun booking(owner: String, path: String, method: String, body: JSONObject): String {
         require(BookingFailure.supports(path, method))
         return bookingAuthenticated { force ->

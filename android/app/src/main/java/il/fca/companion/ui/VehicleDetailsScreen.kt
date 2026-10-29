@@ -68,20 +68,21 @@ internal fun VehicleDetailsRoute(ref: String, identity: () -> VehiclesIdentity?,
 @Composable
 internal fun VehicleProductHeader(back: () -> Unit) {
     Box(Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 16.dp)) {
-        Image(painterResource(R.drawable.fca_header_wordmark), "Family Car Agent",
+        val wordmarkBlend = if (LocalFcaDark.current) BlendMode.SrcOver else BlendMode.Multiply
+        Image(painterResource(if (LocalFcaDark.current) R.drawable.family_car_agent_road_logo_1__dark else R.drawable.fca_header_wordmark), "Family Car Agent",
             Modifier.align(Alignment.Center).fillMaxWidth(.63f).height(58.dp).graphicsLayer {
-                compositingStrategy = CompositingStrategy.Offscreen; blendMode = BlendMode.Multiply
+                compositingStrategy = CompositingStrategy.Offscreen; blendMode = wordmarkBlend
             }, contentScale = ContentScale.Fit)
         IconButton(back, Modifier.align(AbsoluteAlignment.CenterRight).size(46.dp)
-            .background(Color.White.copy(alpha = .85f), CircleShape)) {
-            Image(painterResource(R.drawable.ic_chevron_back), "חזרה", Modifier.size(22.dp))
+            .background(fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .85f), CircleShape)) {
+            Image(painterResource(R.drawable.ic_chevron_back), "חזרה", Modifier.size(22.dp), colorFilter = fcaControlIconFilter())
         }
     }
 }
 
 @Composable
 internal fun VehiclePanel(content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().background(Color.White.copy(alpha = .72f), RoundedCornerShape(18.dp))
+    Column(Modifier.fillMaxWidth().background(fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .72f), RoundedCornerShape(18.dp))
         .border(1.dp, VehicleBorder, RoundedCornerShape(18.dp)).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
 }
@@ -96,7 +97,7 @@ internal fun VehicleDetailsScreen(model: VehicleDetailsViewModel, companion: Com
         return
     }
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-        Column(Modifier.fillMaxSize().background(Color(0xFFF6F7F7)).navigationBarsPadding(),
+        Column(Modifier.fillMaxSize().background(fcaColor(Color(0xFFF6F7F7), FcaColorRole.BACKGROUND)).navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally) {
             VehicleProductHeader(back)
             when {
@@ -134,39 +135,39 @@ internal fun VehicleDetailsScreen(model: VehicleDetailsViewModel, companion: Com
                                 )
                             }
                         }
-                        val statusColor = if (v.readOnly) Color(0xFF7A8795) else if (detail.inUse) Color(0xFF9B631A) else Color(0xFF168153)
+                        val statusColor = if (v.readOnly) fcaColor(Color(0xFF7A8795), FcaColorRole.SECONDARY) else if (detail.inUse) fcaColor(Color(0xFF9B631A), FcaColorRole.WARNING) else fcaColor(Color(0xFF168153), FcaColorRole.SUCCESS)
                         Text(detail.status, Modifier.fillMaxWidth().background(statusColor.copy(alpha = .10f), RoundedCornerShape(16.dp))
                             .padding(10.dp), color = statusColor, fontWeight = FontWeight.Bold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                         VehiclePanel {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Image(painterResource(R.drawable.phone_icon), null, Modifier.size(36.dp))
+                                Image(painterResource(R.drawable.phone_icon), null, Modifier.size(36.dp), colorFilter = fcaControlIconFilter())
                                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                                     Text("חיבור וזיהוי אוטומטי", color = VehicleInk, fontWeight = FontWeight.Bold)
                                     Text(if (v.readOnly) "לא פעיל" else companion.summary, color = VehicleInk)
                                     if (!v.readOnly) companion.friendlyName?.let { Text(it, color = VehicleInk, fontSize = 13.sp) }
                                 }
                                 if (!v.readOnly) IconButton(openCompanion) {
-                                    Image(painterResource(R.drawable.ic_chevron_right), "פתיחת חיבור וזיהוי אוטומטי", Modifier.size(22.dp))
+                                    Image(painterResource(R.drawable.ic_chevron_right), "פתיחת חיבור וזיהוי אוטומטי", Modifier.size(22.dp), colorFilter = fcaControlIconFilter())
                                 }
                             }
-                            if (v.readOnly) Text("הגדרות הקישור אינן פעילות לרכב זה", fontSize = 13.sp, color = Color.Gray)
+                            if (v.readOnly) Text("הגדרות הקישור אינן פעילות לרכב זה", fontSize = 13.sp, color = fcaColor(Color.Gray, FcaColorRole.SECONDARY))
                         }
                         VehiclePanel {
                             SectionHeading("טיפולים", if (s.canManage) R.drawable.ic_add else null) { model.open(VehicleDialog.MAINTENANCE) }
                             when {
                                 s.maintenanceLoading -> LinearProgressIndicator(Modifier.fillMaxWidth())
                                 s.maintenanceError -> { Text("לא ניתן לטעון טיפולים"); TextButton(model::refreshMaintenance) { Text("נסה שוב") } }
-                                s.maintenance.isEmpty() -> Text("אין טיפולים להצגה", color = Color(0xFF788699))
+                                s.maintenance.isEmpty() -> Text("אין טיפולים להצגה", color = fcaColor(Color(0xFF788699), FcaColorRole.SECONDARY))
                                 else -> s.maintenance.forEach { item ->
                                     Row(Modifier.fillMaxWidth().border(1.dp, VehicleBorder, RoundedCornerShape(14.dp))
                                         .clickable(enabled = s.canManage && !s.busy) { model.openMaintenance(item) }.padding(12.dp),
                                         verticalAlignment = Alignment.CenterVertically) {
-                                        Image(painterResource(R.drawable.maintenance_icon), null, Modifier.size(28.dp))
+                                        Image(painterResource(R.drawable.maintenance_icon), null, Modifier.size(28.dp), colorFilter = fcaControlIconFilter())
                                         Column(Modifier.padding(start = 10.dp)) {
                                             Text(item.description, color = VehicleInk, fontWeight = FontWeight.Medium)
-                                            if (item.completed) Text("בוצע", color = Color(0xFF788699))
+                                            if (item.completed) Text("בוצע", color = fcaColor(Color(0xFF788699), FcaColorRole.SECONDARY))
                                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Image(painterResource(R.drawable.ic_calender), null, Modifier.size(17.dp))
+                                                Image(painterResource(R.drawable.ic_calender), null, Modifier.size(17.dp), colorFilter = fcaControlIconFilter())
                                                 Text(item.date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")), Modifier.padding(start = 6.dp), color = VehicleInk)
                                             }
                                         }
@@ -185,14 +186,14 @@ internal fun VehicleDetailsScreen(model: VehicleDetailsViewModel, companion: Com
                             }
                         }
                         if (s.canManage) OutlinedButton({ model.open(VehicleDialog.RETIRE) }, Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFBD2626)),
-                            border = BorderStroke(1.dp, Color(0xFFEBCACA))) {
-                            Image(painterResource(R.drawable.trash_icon), null, Modifier.size(40.dp))
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = fcaColor(Color(0xFFBD2626), FcaColorRole.DANGER)),
+                            border = BorderStroke(1.dp, fcaColor(Color(0xFFEBCACA), FcaColorRole.DANGER_SURFACE))) {
+                            Image(painterResource(R.drawable.trash_icon), null, Modifier.size(40.dp), colorFilter = fcaControlIconFilter())
                             Text("הוצאת הרכב משימוש", Modifier.padding(horizontal = 2.dp, vertical = 2.dp))
                         }
                         if (v.readOnly) VehiclePanel {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Image(painterResource(R.drawable.info_icon), null, Modifier.size(24.dp))
+                                Image(painterResource(R.drawable.info_icon), null, Modifier.size(24.dp), colorFilter = fcaControlIconFilter())
                                 Text("רכב זה אינו פעיל\nלא ניתן לבצע שינויים או פעולות ברכב זה", Modifier.padding(start = 10.dp), color = VehicleInk)
                             }
                         }
@@ -208,7 +209,7 @@ internal fun VehicleDetailsScreen(model: VehicleDetailsViewModel, companion: Com
 private fun SectionHeading(title: String, action: Int?, click: () -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(title, Modifier.weight(1f), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = VehicleInk)
-        if (action != null) IconButton(click) { Image(painterResource(action), title, Modifier.size(25.dp)) }
+        if (action != null) IconButton(click) { Image(painterResource(action), title, Modifier.size(25.dp), colorFilter = fcaControlIconFilter()) }
     }
 }
 
@@ -218,25 +219,27 @@ private fun VehicleDetailsDialog(model: VehicleDetailsViewModel) {
     val s = model.state
     val dialog = s.dialog ?: return
     val context = LocalContext.current
+    val pickerContext = android.view.ContextThemeWrapper(context, if (LocalFcaDark.current)
+        R.style.Theme_Fca_Companion_Dark else R.style.Theme_Fca_Companion_Light)
     ModalBottomSheet(onDismissRequest = model::close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = Color(0xFFF9FAFA)) {
+        containerColor = fcaColor(Color(0xFFF9FAFA), FcaColorRole.SURFACE)) {
         Column(Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)) {
             val title = when (dialog) { VehicleDialog.EDIT -> "עריכת פרטי רכב"; VehicleDialog.MAINTENANCE -> if (s.maintenanceRef == null) "הוספת טיפול" else "עריכת טיפול"; VehicleDialog.RETIRE -> "להוציא את הרכב משימוש?" }
             Text(title, fontSize = 23.sp, fontWeight = FontWeight.Bold, color = VehicleInk)
             when (dialog) {
                 VehicleDialog.RETIRE -> {
-                    Image(painterResource(R.drawable.trash_icon), null, Modifier.size(36.dp).align(Alignment.CenterHorizontally))
+                    Image(painterResource(R.drawable.trash_icon), null, Modifier.size(36.dp).align(Alignment.CenterHorizontally), colorFilter = fcaControlIconFilter())
                     Text("הרכב יישאר בהיסטוריה ולא יהיה זמין לשימוש ולהזמנות חדשות. הזמנות פעילות שטרם הסתיימו, כולל הזמנות עתידיות, יבוטלו. לא ניתן להחזיר את הרכב לפעילות.", color = VehicleInk)
                 }
                 VehicleDialog.MAINTENANCE -> {
                     OutlinedTextField(s.description, { model.maintenanceDraft(it, s.date) }, enabled = !s.busy,
                         label = { Text("תיאור הטיפול") }, modifier = Modifier.fillMaxWidth())
                     OutlinedButton(onClick = {
-                        DatePickerDialog(context, { _, year, month, day -> model.maintenanceDraft(s.description, LocalDate.of(year, month + 1, day)) },
+                        DatePickerDialog(pickerContext, { _, year, month, day -> model.maintenanceDraft(s.description, LocalDate.of(year, month + 1, day)) },
                             s.date.year, s.date.monthValue - 1, s.date.dayOfMonth).show()
                     }, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
-                        Image(painterResource(R.drawable.ic_calender), null, Modifier.size(22.dp))
+                        Image(painterResource(R.drawable.ic_calender), null, Modifier.size(22.dp), colorFilter = fcaControlIconFilter())
                         Text(s.date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")), Modifier.padding(8.dp))
                     }
                 }
@@ -249,7 +252,7 @@ private fun VehicleDetailsDialog(model: VehicleDetailsViewModel) {
                 VehicleDialog.RETIRE -> true
             }
             Button(model::submit, enabled = valid && !s.busy, modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = if (dialog == VehicleDialog.RETIRE) Color(0xFFBD2626) else VehicleInk)) {
+                colors = ButtonDefaults.buttonColors(containerColor = if (dialog == VehicleDialog.RETIRE) fcaColor(Color(0xFFBD2626), FcaColorRole.DANGER) else VehicleInk)) {
                 Text(if (s.busy) "ממתינים לאישור…" else when (dialog) {
                     VehicleDialog.EDIT -> "שמירה"; VehicleDialog.MAINTENANCE -> if (s.maintenanceRef == null) "הוספת טיפול" else "שמירה"; VehicleDialog.RETIRE -> "הוצאה משימוש"
                 })

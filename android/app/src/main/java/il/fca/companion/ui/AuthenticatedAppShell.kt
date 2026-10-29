@@ -1,3 +1,4 @@
+
 package il.fca.companion.ui
 
 import androidx.activity.compose.BackHandler
@@ -39,15 +40,21 @@ internal class AppShellState {
     private var companionHint = false
 
     fun openCompanionVehicles() {
-        if (mode != AppMode.DASHBOARD || category != DashboardCategory.SETTINGS) return
+        if (
+            mode != AppMode.DASHBOARD ||
+            category != DashboardCategory.SETTINGS
+        ) return
+
         openCategory(DashboardCategory.VEHICLES)
         companionHint = true
     }
 
-    fun takeCompanionHint(): Boolean = companionHint.also { companionHint = false }
+    fun takeCompanionHint(): Boolean =
+        companionHint.also { companionHint = false }
 
     var mode by mutableStateOf(AppMode.CHAT)
         private set
+
     var category by mutableStateOf<DashboardCategory?>(null)
         private set
 
@@ -56,26 +63,68 @@ internal class AppShellState {
         category = null
         mode = value
     }
+
     fun openCategory(value: DashboardCategory) {
         companionHint = false
-        if (mode == AppMode.DASHBOARD) category = value
+        if (mode == AppMode.DASHBOARD) {
+            category = value
+        }
+    }
+    fun openFirstVehicleSetup() {
+        select(AppMode.DASHBOARD)
+        openCategory(DashboardCategory.VEHICLES)
     }
 
     fun back() {
         companionHint = false
-        if (category != null) category = null else mode = AppMode.CHAT
+
+        if (category != null) {
+            category = null
+        } else {
+            mode = AppMode.CHAT
+        }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: String,
-                                   logout: () -> Unit, logoutBusy: Boolean, logoutError: String?,
-                                   history: HistoryViewModel, familyId: Long?, vehicles: VehiclesViewModel, family: FamilyViewModel,
-                                   booking: BookingViewModel, account: AccountSettingsModel? = null) {
-
+internal fun AuthenticatedAppShell(
+    chat: ChatViewModel,
+    authenticatedName: String,
+    logout: () -> Unit,
+    logoutBusy: Boolean,
+    logoutError: String?,
+    history: HistoryViewModel,
+    familyId: Long?,
+    vehicles: VehiclesViewModel,
+    family: FamilyViewModel,
+    booking: BookingViewModel,
+    account: AccountSettingsModel? = null,
+    firstVehicleSetup: FirstVehicleSetupState? = null,
+    setupIdentity: VehiclesIdentity? = null
+) {
     val state = remember {
         AppShellState()
+    }
+    LaunchedEffect(firstVehicleSetup, setupIdentity) {
+        if (firstVehicleSetup != null && setupIdentity != null) {
+            firstVehicleSetup.activate(setupIdentity)
+            if (firstVehicleSetup.needsCheck(setupIdentity)) vehicles.start()
+        }
+    }
+    SideEffect {
+        if (firstVehicleSetup != null && setupIdentity != null)
+            firstVehicleSetup.observe(setupIdentity, vehicles.state)
+    }
+    if (firstVehicleSetup?.visible(setupIdentity, vehicles.state) == true && !logoutBusy &&
+        account?.state?.dialog != true && account?.state?.protected != true) {
+        FirstVehicleSetupDialog(
+            dismiss = { setupIdentity?.let { firstVehicleSetup.dismiss(it) } },
+            setup = {
+                setupIdentity?.let {
+                    if (firstVehicleSetup.dismiss(it)) state.openFirstVehicleSetup()
+                }
+            })
     }
 
     /*
@@ -86,9 +135,10 @@ internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: Strin
      * is handled by imePadding() on the outer Column.
      */
     val imeVisible = WindowInsets.isImeVisible
+
     val headerFadeHeight = with(LocalDensity.current) {
-        // End near the wordmark bottom (4dp top padding + 85dp image bounds).
-        WindowInsets.statusBars.getTop(this).toFloat() + 89.dp.toPx()
+        WindowInsets.statusBars.getTop(this).toFloat() +
+                89.dp.toPx()
     }
 
     BackHandler(
@@ -98,239 +148,331 @@ internal fun AuthenticatedAppShell(chat: ChatViewModel, authenticatedName: Strin
     }
 
     Box(Modifier.fillMaxSize()) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF6F7F7))
-            .windowInsetsPadding(
-                WindowInsets.safeDrawing.only(
-                    WindowInsetsSides.Horizontal
-                )
-            )
-            .imePadding()
-    ) {
 
-        /*
-         * Main application content.
-         */
-        Box(
+        Column(
             modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
+                .fillMaxSize()
+                .background(fcaColor(Color(0xFFF6F7F7), FcaColorRole.BACKGROUND))
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(
+                        WindowInsetsSides.Horizontal
+                    )
+                )
+                .imePadding()
         ) {
 
-            ChatScreen(
-                state = chat.state,
-                send = chat::sendMessage,
-                retry = chat::retryPendingRequest,
-                reloadHistory = chat::loadHistory,
-                userName = authenticatedName
-            )
+            /*
+             * Main application content.
+             */
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
 
-            androidx.compose.animation.AnimatedVisibility(
-                visible = state.mode == AppMode.DASHBOARD,
-                modifier = Modifier.fillMaxSize().windowInsetsPadding(
-                    WindowInsets.safeDrawing.only(WindowInsetsSides.Top)
-                ),
-                enter = fadeIn() +
-                        slideInVertically {
-                            it / 30
-                        },
-                exit = fadeOut() +
-                        slideOutVertically {
-                            it / 30
+                ChatScreen(
+                    state = chat.state,
+                    send = chat::sendMessage,
+                    retry = chat::retryPendingRequest,
+                    reloadHistory = chat::loadHistory,
+                    userName = authenticatedName
+                )
+
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = state.mode == AppMode.DASHBOARD,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(
+                            WindowInsets.safeDrawing.only(
+                                WindowInsetsSides.Top
+                            )
+                        ),
+                    enter = fadeIn() +
+                            slideInVertically {
+                                it / 30
+                            },
+                    exit = fadeOut() +
+                            slideOutVertically {
+                                it / 30
+                            }
+                ) {
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                fcaColor(Color(0xFFF6F7F7), FcaColorRole.BACKGROUND).copy(
+                                    alpha = 0.98f
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+
+                        val category = state.category
+
+                        if (category == null) {
+                            DashboardScreen(
+                                authenticatedName,
+                                state::openCategory,
+                                logout,
+                                logoutBusy,
+                                logoutError
+                            )
+                        } else if (
+                            category == DashboardCategory.HISTORY
+                        ) {
+                            HistoryScreen(
+                                history,
+                                familyId,
+                                state::back
+                            )
+                        } else if (
+                            category == DashboardCategory.VEHICLES
+                        ) {
+                            val showHint = remember {
+                                state.takeCompanionHint()
+                            }
+
+                            val snackbar = remember {
+                                androidx.compose.material3.SnackbarHostState()
+                            }
+
+                            LaunchedEffect(Unit) {
+                                if (showHint) {
+                                    snackbar.showSnackbar(
+                                        COMPANION_VEHICLES_HINT,
+                                        duration =
+                                            androidx.compose.material3.SnackbarDuration.Short
+                                    )
+                                }
+                            }
+
+                            VehiclesScreen(
+                                vehicles,
+                                familyId,
+                                state::back
+                            )
+
+                            CompositionLocalProvider(
+                                androidx.compose.ui.platform.LocalLayoutDirection
+                                        provides androidx.compose.ui.unit.LayoutDirection.Rtl
+                            ) {
+                                androidx.compose.material3.SnackbarHost(
+                                    snackbar,
+                                    Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .navigationBarsPadding()
+                                )
+                            }
+                        } else if (
+                            category == DashboardCategory.FAMILY
+                        ) {
+                            FamilyScreen(
+                                family,
+                                familyId,
+                                state::back
+                            )
+                        } else if (
+                            category == DashboardCategory.BOOKING_CENTER
+                        ) {
+                            BookingScreen(
+                                booking,
+                                state::back
+                            )
+                        } else if (
+                            category == DashboardCategory.SETTINGS
+                        ) {
+                            SettingsScreen(
+                                authenticatedName,
+                                logout = logout,
+                                logoutBusy = logoutBusy,
+                                account = account,
+                                openFamily = {
+                                    state.openCategory(
+                                        DashboardCategory.FAMILY
+                                    )
+                                },
+                                openCompanion =
+                                    state::openCompanionVehicles,
+                                back = state::back
+                            )
+                        } else {
+                            DashboardCategoryPlaceholder(
+                                category,
+                                state::back
+                            )
                         }
+                    }
+                }
+            }
+
+            /*
+             * Bottom Chat / Dashboard slider.
+             *
+             * Completely removed from the layout
+             * while the IME is open.
+             */
+            if (
+                !imeVisible &&
+                state.category != DashboardCategory.HISTORY &&
+                state.category != DashboardCategory.VEHICLES &&
+                state.category != DashboardCategory.FAMILY &&
+                state.category != DashboardCategory.BOOKING_CENTER &&
+                state.category != DashboardCategory.SETTINGS
             ) {
 
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Color(0xFFF6F7F7).copy(
-                                alpha = 0.98f
-                            )
-                        ),
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(bottom = 2.dp)
+                        .height(57.6.dp),
                     contentAlignment = Alignment.Center
                 ) {
 
-                    val category = state.category
-                    if (category == null) {
-                        DashboardScreen(authenticatedName, state::openCategory, logout, logoutBusy, logoutError)
-                    } else if (category == DashboardCategory.HISTORY) {
-                        HistoryScreen(history, familyId, state::back)
-                    } else if (category == DashboardCategory.VEHICLES) {
-                        val showHint = remember { state.takeCompanionHint() }
-                        val snackbar = remember { androidx.compose.material3.SnackbarHostState() }
-                        LaunchedEffect(Unit) {
-                            if (showHint) snackbar.showSnackbar(COMPANION_VEHICLES_HINT,
-                                duration = androidx.compose.material3.SnackbarDuration.Short)
-                        }
-                        VehiclesScreen(vehicles, familyId, state::back)
-                        CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Rtl) {
-                            androidx.compose.material3.SnackbarHost(snackbar,
-                                Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
-                        }
-                    } else if (category == DashboardCategory.FAMILY) {
-                        FamilyScreen(family, familyId, state::back)
-                    } else if (category == DashboardCategory.BOOKING_CENTER) {
-                        BookingScreen(booking, state::back)
-                    } else if (category == DashboardCategory.SETTINGS) {
-                        SettingsScreen(authenticatedName,
-                            account = account,
-                            openFamily = { state.openCategory(DashboardCategory.FAMILY) },
-                            openCompanion = state::openCompanionVehicles,
-                            back = state::back)
-                    } else {
-                        DashboardCategoryPlaceholder(category, state::back)
-                    }
-                }
-            }
-        }
-
-        /*
-         * Bottom Chat / Dashboard slider.
-         *
-         * Completely removed from the layout while the IME is open.
-         *
-         * When the keyboard is closed, navigationBarsPadding keeps
-         * the slider above Android's system navigation area.
-         */
-        if (!imeVisible && state.category != DashboardCategory.HISTORY && state.category != DashboardCategory.VEHICLES && state.category != DashboardCategory.FAMILY && state.category != DashboardCategory.BOOKING_CENTER && state.category != DashboardCategory.SETTINGS) {
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(bottom = 2.dp)
-                    .height(57.6.dp),
-                contentAlignment = Alignment.Center
-            ) {
-
-                BoxWithConstraints(
-                    modifier = Modifier
-                        .padding(horizontal = 12.dp)
-                        .scale(0.8f)
-                        .widthIn(max = 340.dp)
-                        .fillMaxWidth()
-                        .requiredHeight(72.dp)
-                        .background(
-                            color = Color.White.copy(
-                                alpha = 0.8f
-                            ),
-                            shape = RoundedCornerShape(50)
-                        )
-                        .border(
-                            width = 1.dp,
-                            color = Color(0xFFE0E5E7),
-                            shape = RoundedCornerShape(50)
-                        )
-                ) {
-
-                    val position by animateFloatAsState(
-                        targetValue =
-                            if (state.mode == AppMode.CHAT) {
-                                0f
-                            } else {
-                                1f
-                            },
-                        label = "mode"
-                    )
-
-                    /*
-                     * Selected half of the slider.
-                     */
-                    Box(
+                    BoxWithConstraints(
                         modifier = Modifier
-                            .padding(4.dp)
-                            .offset(
-                                x = (maxWidth / 2) * position
-                            )
-                            .width(
-                                maxWidth / 2 - 8.dp
-                            )
-                            .fillMaxHeight()
+                            .padding(horizontal = 12.dp)
+                            .scale(0.8f)
+                            .widthIn(max = 340.dp)
+                            .fillMaxWidth()
+                            .requiredHeight(72.dp)
                             .background(
-                                color = Color(0xFFE4EBEF),
+                                color = fcaColor(Color.White, FcaColorRole.SURFACE).copy(
+                                    alpha = 0.8f
+                                ),
                                 shape = RoundedCornerShape(50)
                             )
-                    )
-
-                    /*
-                     * Chat and Dashboard controls.
-                     */
-                    Row(
-                        modifier = Modifier.fillMaxSize()
+                            .border(
+                                width = 1.dp,
+                                color = fcaColor(Color(0xFFE0E5E7), FcaColorRole.BORDER),
+                                shape = RoundedCornerShape(50)
+                            )
                     ) {
 
-                        AppMode.entries.forEach { mode ->
+                        val position by animateFloatAsState(
+                            targetValue =
+                                if (state.mode == AppMode.CHAT) {
+                                    0f
+                                } else {
+                                    1f
+                                },
+                            label = "mode"
+                        )
 
-                            Row(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .selectable(
-                                        selected = state.mode == mode,
-                                        onClick = {
-                                            state.select(mode)
-                                        }
-                                    ),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-
-                                Image(
-                                    painter = painterResource(
-                                        if (mode == AppMode.CHAT) {
-                                            R.drawable.chat_icon
-                                        } else {
-                                            R.drawable.dashboard_icon
-                                        }
-                                    ),
-                                    contentDescription =
-                                        if (mode == AppMode.CHAT) {
-                                            "צ׳אט"
-                                        } else {
-                                            "דשבורד"
-                                        },
-                                    modifier = Modifier.requiredSize(
-                                        67.2.dp
-                                    )
+                        /*
+                         * Selected half of the slider.
+                         */
+                        Box(
+                            modifier = Modifier
+                                .padding(4.dp)
+                                .offset(
+                                    x = (maxWidth / 2) * position
                                 )
+                                .width(
+                                    maxWidth / 2 - 8.dp
+                                )
+                                .fillMaxHeight()
+                                .background(
+                                    color = fcaColor(Color(0xFFE4EBEF), FcaColorRole.ELEVATED),
+                                    shape = RoundedCornerShape(50)
+                                )
+                        )
+
+                        /*
+                         * Chat and Dashboard controls.
+                         */
+                        Row(
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+
+                            AppMode.entries.forEach { mode ->
+
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .selectable(
+                                            selected = state.mode == mode,
+                                            onClick = {
+                                                state.select(mode)
+                                            }
+                                        ),
+                                    horizontalArrangement =
+                                        Arrangement.Center,
+                                    verticalAlignment =
+                                        Alignment.CenterVertically
+                                ) {
+
+                                    Image(
+                                        painter = painterResource(
+                                            if (mode == AppMode.CHAT) {
+                                                R.drawable.chat_icon
+                                            } else {
+                                                R.drawable.dashboard_icon
+                                            }
+                                        ),
+                                        contentDescription =
+                                            if (mode == AppMode.CHAT) {
+                                                "צ׳אט"
+                                            } else {
+                                                "דשבורד"
+                                            },
+                                        modifier =
+                                            Modifier.requiredSize(
+                                                67.2.dp
+                                            )
+                                    , colorFilter = fcaControlIconFilter())
+                                }
                             }
                         }
                     }
                 }
             }
         }
-    }
-    // Sibling of the inset content: window-origin drawing without consuming any insets.
-    // Multiply preserves the dark wordmark rather than washing it out with a light scrim.
-    if (state.mode == AppMode.CHAT) {
-        Canvas(Modifier.matchParentSize()) {
-            drawRect(
-                brush = Brush.verticalGradient(
-                    0f to Color(0xFFE4EBEF).copy(alpha = .8f),
-                    .4f to Color(0xFFE4EBEF).copy(alpha = .5f),
-                    .75f to Color(0xFFE4EBEF).copy(alpha = .18f),
-                    1f to Color(0xFFE4EBEF).copy(alpha = 0f),
-                    endY = headerFadeHeight
-                ),
-                size = Size(size.width, headerFadeHeight),
-                blendMode = BlendMode.Multiply
-            )
+
+        /*
+         * Sibling of inset content:
+         * window-origin drawing without consuming insets.
+         */
+        if (state.mode == AppMode.CHAT) {
+            val palette = fcaPalette()
+            Canvas(Modifier.matchParentSize()) {
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to palette.resolve(Color(0xFFE4EBEF), FcaColorRole.ELEVATED).copy(
+                            alpha = .8f
+                        ),
+                        .4f to palette.resolve(Color(0xFFE4EBEF), FcaColorRole.ELEVATED).copy(
+                            alpha = .5f
+                        ),
+                        .75f to palette.resolve(Color(0xFFE4EBEF), FcaColorRole.ELEVATED).copy(
+                            alpha = .18f
+                        ),
+                        1f to palette.resolve(Color(0xFFE4EBEF), FcaColorRole.ELEVATED).copy(
+                            alpha = 0f
+                        ),
+                        endY = headerFadeHeight
+                    ),
+                    size = Size(
+                        size.width,
+                        headerFadeHeight
+                    ),
+                    blendMode = BlendMode.Multiply
+                )
+            }
         }
-    }
+
+
     }
 }
 
 @Composable
 private fun GaugeIcon() {
-
+    val ink = fcaColor(Color(0xFF243341), FcaColorRole.TEXT)
     Canvas(
         modifier = Modifier.size(24.dp)
     ) {
-
-        val ink = Color(0xFF243341)
 
         drawArc(
             color = ink,

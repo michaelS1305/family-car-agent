@@ -34,7 +34,11 @@ internal class AccountSettingsModel(
     private var generation = 0
     private var emailLoading = false
     private var stored by mutableStateOf(AccountSettingsState())
-    val state: AccountSettingsState get() = if (active != null && active == identity()) stored else AccountSettingsState()
+    val state: AccountSettingsState get() {
+        // Always subscribe Compose to changes, even before identity activation.
+        val snapshot = stored
+        return if (active != null && active == identity()) snapshot else AccountSettingsState()
+    }
 
     fun reconcile() {
         if (active == identity()) return

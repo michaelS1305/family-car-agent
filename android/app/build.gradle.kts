@@ -40,12 +40,15 @@ val configurations = environments.mapValues { (flavor, _) ->
         rootProject.file("fca.$flavor.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
     }
 }
+// Dev-only Maps credential. Never reuse the backend Geocoding credential.
+val devMapsKey = providers.environmentVariable("FCA_ANDROID_DEV_MAPS_API_KEY").orNull
+    ?: configurations.getValue("dev").getProperty("MAPS_API_KEY", "")
 android {
     namespace = "il.fca.companion"
     compileSdk = 36
     defaultConfig {
         applicationId = "il.fca.companion"
-        minSdk = 35
+        minSdk = 34
         targetSdk = 36
         versionCode = 1
         versionName = "0.1"
@@ -58,6 +61,8 @@ android {
                 applicationId = env.id
                 resValue("string", "app_name", env.label)
                 manifestPlaceholders["oauthScheme"] = env.id
+                buildConfigField("boolean", "ADDRESS_MAPS_ENABLED", (flavor == "dev" && devMapsKey.isNotBlank()).toString())
+                if (flavor == "dev") manifestPlaceholders["devMapsApiKey"] = devMapsKey
                 buildConfigField("String", "FCA_BASE_URL", quoted(env.backend))
                 buildConfigField("String", "SUPABASE_URL", quoted(env.supabase))
                 buildConfigField("String", "OAUTH_CALLBACK_URI", quoted(env.callback))
@@ -126,7 +131,9 @@ tasks.register("testEnvironmentConfiguration") {
     }
 }
 dependencies {
+    implementation("com.google.android.gms:play-services-maps:20.1.0")
     "devImplementation"("com.google.firebase:firebase-messaging:24.1.2")
+    "prodImplementation"("com.google.firebase:firebase-messaging:24.1.2")
     // Realtime only; REST and credential ownership stay with FCA's existing clients.
     implementation("io.github.jan-tennert.supabase:realtime-kt:3.2.2")
     implementation("io.ktor:ktor-client-okhttp:3.2.2")
@@ -140,7 +147,21 @@ dependencies {
     testImplementation("androidx.work:work-testing:2.11.2")
 }
 
-// Production intentionally has neither Firebase resources nor the Messaging SDK.
-tasks.configureEach {
-    if (name.startsWith("processProd") && name.endsWith("GoogleServices")) enabled = false
+// Production must never fall back to a root, Dev or build-type Firebase file.
+tasks.withType<com.google.gms.googleservices.GoogleServicesTask>().configureEach {
+    if (name.startsWith("processProd")) {
+        val source = file("src/prod/google-services.json")
+        googleServicesJsonFiles.set(listOf(source))
+        doFirst {
+            val valid = runCatching {
+                val json = groovy.json.JsonSlurper().parse(source) as Map<*, *>
+                val project = json["project_info"] as Map<*, *>
+                val clients = (json["client"] as List<*>).map { (it as Map<*, *>)["client_info"] as Map<*, *> }
+                    .filter { (it["android_client_info"] as Map<*, *>)["package_name"] == "il.fca.companion" }
+                project["project_id"] == "family-car-agent-dev" && project["project_number"] == "452367109329" &&
+                    clients.size == 1 && clients.single()["mobilesdk_app_id"] == "1:452367109329:android:c5a668180a0a8b84bdc9f0"
+            }.getOrDefault(false)
+            require(valid) { "Production Firebase configuration is missing or does not match the approved registration" }
+        }
+    }
 }

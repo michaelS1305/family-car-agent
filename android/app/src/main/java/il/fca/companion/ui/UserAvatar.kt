@@ -3,7 +3,6 @@ package il.fca.companion.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -24,25 +23,10 @@ internal fun UserAvatar(
     size: Dp = 44.dp,
     modifier: Modifier = Modifier
 ) {
-    val dark = isSystemInDarkTheme()
-
-    val background = if (dark) {
-        Color(0xFF303941)
-    } else {
-        Color(0xFFE4E9EC)
-    }
-
-    val border = if (dark) {
-        Color(0xFF56636E)
-    } else {
-        Color(0xFFBFC9D0)
-    }
-
-    val foreground = if (dark) {
-        Color(0xFFF0F3F5)
-    } else {
-        Color(0xFF243341)
-    }
+    val colors = LocalFcaColors.current
+    val background = colors.disabled
+    val border = colors.border
+    val foreground = colors.text
 
     val initials = avatarInitials(name)
 

@@ -21,7 +21,7 @@ internal fun BookingFilterSheet(model: BookingViewModel) {
     val draft = state.draft
     var picker by remember { mutableStateOf<Boolean?>(null) }
     ModalBottomSheet(onDismissRequest = model::dismissFilters,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Color(0xFFF6F7F7)) {
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = fcaColor(Color(0xFFF6F7F7), FcaColorRole.BACKGROUND)) {
         Column(Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("סינון הזמנות", style = MaterialTheme.typography.titleLarge, color = VehicleInk)

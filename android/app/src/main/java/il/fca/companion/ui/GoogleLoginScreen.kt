@@ -22,14 +22,16 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.*
 import il.fca.companion.R
 
-private val LoginInk = Color(0xFF243341)
-private val LoginSecondary = Color(0xFF637B97)
+private val LoginInk: Color
+    @Composable get() = fcaColor(Color(0xFF243341), FcaColorRole.TEXT)
+private val LoginSecondary: Color
+    @Composable get() = fcaColor(Color(0xFF637B97), FcaColorRole.SECONDARY)
 internal const val LOGIN_TITLE = "מתחברים וממשיכים"
 internal const val LOGIN_SUBTITLE = "כדי להשלים את החיבור והזיהוי שלכם, התחברו עם חשבונכם האישי"
 internal const val LOGIN_AUTH_NOTE = "פרטי ההתחברות נשמרים ומנוהלים על ידי Supabase Auth."
 
-internal fun loginLegalText(open: (LegalCopy) -> Unit): AnnotatedString {
-    val styles = TextLinkStyles(SpanStyle(color = Color(0xFF112642), textDecoration = TextDecoration.Underline, fontWeight = FontWeight.SemiBold))
+internal fun loginLegalText(ink: Color = Color(0xFF112642), open: (LegalCopy) -> Unit): AnnotatedString {
+    val styles = TextLinkStyles(SpanStyle(color = ink, textDecoration = TextDecoration.Underline, fontWeight = FontWeight.SemiBold))
     return buildAnnotatedString {
         append("אנו מעבדים מידע אישי כדי לספק את Family Car Agent. מידע על המטרות, הספקים והזכויות שלך מופיע ב־ ")
         withLink(LinkAnnotation.Clickable("privacy", styles) { open(PRIVACY) }) { append("מדיניות הפרטיות") }
@@ -48,27 +50,28 @@ internal data class LoginLayout(val title: TextStyle, val subtitle: TextStyle, v
 
 // Measure the exact rendered strings, including linked spans, before distributing whitespace.
 internal fun loginLayout(measurer: TextMeasurer, density: Density, innerWidth: Float,
-                         availableHeight: Float, legal: AnnotatedString): LoginLayout {
+                         availableHeight: Float, legal: AnnotatedString, ink: Color = Color(0xFF243341),
+                         secondaryInk: Color = Color(0xFF637B97), noteInk: Color = Color(0xFF6B7785)): LoginLayout {
     val widthPx = with(density) { innerWidth.dp.roundToPx() }
     fun style(size: Float, line: Float, weight: FontWeight = FontWeight.Normal) = TextStyle(
         fontFamily = FontFamily.SansSerif, fontSize = size.sp, lineHeight = line.sp,
-        fontWeight = weight, textAlign = TextAlign.Center, color = LoginSecondary, letterSpacing = 0.sp)
+        fontWeight = weight, textAlign = TextAlign.Center, color = secondaryInk, letterSpacing = 0.sp)
     fun height(text: AnnotatedString, style: TextStyle) = with(density) {
         measurer.measure(text, style, constraints = Constraints(maxWidth = widthPx)).size.height.toDp().value
     }
     var result: LoginLayout? = null
     for (compact in listOf(false, true)) {
         var titleSize = if (compact) 26f else 30f
-        var title = style(titleSize, titleSize * 1.25f, FontWeight.Bold).copy(color = LoginInk)
+        var title = style(titleSize, titleSize * 1.25f, FontWeight.Bold).copy(color = ink)
         while (measurer.measure(LOGIN_TITLE, title, softWrap = false).size.width > widthPx && titleSize > 20f) {
             titleSize -= .5f
-            title = style(titleSize, titleSize * 1.25f, FontWeight.Bold).copy(color = LoginInk)
+            title = style(titleSize, titleSize * 1.25f, FontWeight.Bold).copy(color = ink)
         }
         val subtitle = style(if (compact) 15f else 17f, if (compact) 22f else 26f)
         val secondary = style(if (compact) 11f else 11.5f, if (compact) 15f else 16f)
-            .copy(color = Color(0xFF6B7785))
+            .copy(color = noteInk)
         val legalStyle = style(if (compact) 11f else 11.5f, if (compact) 15f else 16f)
-            .copy(color = Color(0xFF6B7785))
+            .copy(color = noteInk)
         val logo = if (compact) 70f else 114f
         val padding = if (compact) 10f else 18f
         // Existing Google asset is 720 x 160: preserve its proportions and actually use the card width.
@@ -86,26 +89,26 @@ internal fun loginLayout(measurer: TextMeasurer, density: Density, innerWidth: F
                                            back: () -> Unit, openLegal: (LegalCopy) -> Unit) {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
-    val legal = loginLegalText(openLegal)
+    val legal = loginLegalText(fcaColor(Color(0xFF112642), FcaColorRole.TEXT), openLegal)
     BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         val width = minOf(maxWidth.value - 32f, 440f)
         val available = maxHeight.value - 64f
-        val layout = loginLayout(measurer, density, width - 32f, available, legal)
+        val layout = loginLayout(measurer, density, width - 32f, available, legal, LoginInk, LoginSecondary, fcaColor(Color(0xFF6B7785), FcaColorRole.SECONDARY))
         Column(Modifier.width(width.dp).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(8.dp))
             Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
-                Text("התחברות", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF53677D))
+                Text("התחברות", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = fcaColor(Color(0xFF53677D), FcaColorRole.SECONDARY))
                 OutlinedIconButton(onClick = back, enabled = enabled, modifier = Modifier.size(48.dp)
                     .align(Alignment.CenterStart).semantics { contentDescription = "חזרה" },
-                    shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, Color(0xFFE5E3E0))) {
+                    shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, fcaColor(Color(0xFFE5E3E0), FcaColorRole.BORDER))) {
                     Text("→", fontSize = 25.sp, color = LoginInk)
                 }
             }
             // Center the card in the remaining viewport; compact screens spend space on content first.
             Spacer(Modifier.weight(1f))
             OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp),
-                border = BorderStroke(1.dp, Color(0xFFEAE8E5)),
-                colors = CardDefaults.outlinedCardColors(containerColor = Color.White)) {
+                border = BorderStroke(1.dp, fcaColor(Color(0xFFEAE8E5), FcaColorRole.BORDER)),
+                colors = CardDefaults.outlinedCardColors(containerColor = fcaColor(Color.White, FcaColorRole.SURFACE))) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = layout.padding.dp),
                     horizontalAlignment = Alignment.CenterHorizontally) {
                     Image(painterResource(R.drawable.fca_logo), null, Modifier.size(layout.logo.dp), contentScale = ContentScale.Fit)
@@ -114,7 +117,7 @@ internal fun loginLayout(measurer: TextMeasurer, density: Density, innerWidth: F
                     LoginGap(layout.gap * .8f)
                     Text(LOGIN_SUBTITLE, Modifier.fillMaxWidth(), style = layout.subtitle)
                     LoginGap(layout.gap * 1.3f)
-                    Surface(onClick = login, enabled = enabled, shape = RoundedCornerShape(50), color = Color.White,
+                    Surface(onClick = login, enabled = enabled, shape = RoundedCornerShape(50), color = fcaColor(Color.White, FcaColorRole.SURFACE),
                         modifier = Modifier.fillMaxWidth().height(layout.buttonHeight.dp).semantics { contentDescription = "התחברות באמצעות Google" }) {
                         Image(painterResource(R.drawable.google_sign_in), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
                     }

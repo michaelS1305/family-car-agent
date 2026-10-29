@@ -29,7 +29,7 @@ internal fun BookingEditor(model: BookingViewModel) {
         confirmValueChange = { it != SheetValue.Hidden || !model.visibleAction.submitting })
     ModalBottomSheet(onDismissRequest = { model.dismiss() }, sheetState = sheet,
         properties = ModalBottomSheetProperties(shouldDismissOnBackPress = !state.submitting),
-        containerColor = Color(0xFFF9FAFA)) {
+        containerColor = fcaColor(Color(0xFFF9FAFA), FcaColorRole.SURFACE)) {
         BackHandler { model.dismiss() }
         Column(Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)) {

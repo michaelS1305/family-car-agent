@@ -6,7 +6,9 @@ import androidx.compose.runtime.setValue
 import il.fca.companion.net.OnboardingFailure
 import il.fca.companion.net.AddressVerification
 import il.fca.companion.net.ResolvedAddress
+import il.fca.companion.net.VerifiedLocation
 import org.json.JSONObject
+import kotlinx.coroutines.CancellationException
 
 enum class EntryScreen { INTRO, LOGIN, ONBOARDING, SUCCESS, BOOTSTRAP, AUTHENTICATED_APP }
 
@@ -18,7 +20,7 @@ interface OnboardingGateway {
 
 // Memory-only state, retained by the entry ViewModel across configuration changes.
 // No SavedStateHandle / rememberSaveable for private form or server data.
-class OnboardingModel(private val gateway: OnboardingGateway) {
+class OnboardingModel(private val gateway: OnboardingGateway, private val currentIdentity: () -> String? = { "test" }) {
     var screen by mutableStateOf(EntryScreen.INTRO); private set
     var route by mutableStateOf(LoginRoute.EXISTING_ACCOUNT); private set
     var step by mutableStateOf(1); private set
@@ -37,6 +39,12 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
     var resolvedAddress by mutableStateOf(""); private set
     var createdCode by mutableStateOf(""); private set
     private var resolution: ResolvedAddress? = null
+    private var candidateLocation by mutableStateOf<VerifiedLocation?>(null)
+    private var candidateIdentity: String? = null
+    private var operationIdentity: String? = null
+    var addressLocation: VerifiedLocation?
+        get() = candidateLocation.takeIf { candidateIdentity != null && candidateIdentity == currentIdentity() }
+        private set(value) { candidateIdentity = operationIdentity; candidateLocation = value }
     private var completed = false
     val totalSteps get() = if (route == LoginRoute.CREATE_FAMILY) 4 else 5
 
@@ -49,6 +57,7 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
     }
     fun back() {
         if (busy) return
+        addressLocation = null
         clearError()
         when (screen) {
             EntryScreen.LOGIN -> { screen = EntryScreen.INTRO; clearPrivateState() }
@@ -101,7 +110,7 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
     private fun clearError() { error = null; failure = null }
     private fun clearPrivateState() {
         familyName = ""; address = ""; userName = ""; joinCode = ""; consent = false
-        resolution = null; resolvedAddress = ""; createdCode = ""; completed = false; step = 1
+        resolution = null; addressLocation = null; resolvedAddress = ""; createdCode = ""; completed = false; step = 1
     }
     suspend fun authenticated(selected: LoginRoute) = perform {
         route = selected
@@ -125,6 +134,7 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
         }
     }
     suspend fun changeAddress() = perform {
+        addressLocation = null
         if (route == LoginRoute.JOIN_FAMILY) {
             applyJoin(gateway.request(joinPath("address-confirmation"), "POST", JSONObject().put("confirmed", false)))
         } else { step = 2; resolution = null }
@@ -137,7 +147,7 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
             error = "שם המשפחה יכול להכיל אותיות, רווחים, מקף או גרש, ללא ספרות."; return@perform
         }
         if (step == 2 && (address.isBlank() || address.codePointCount(0, address.length) > 200)) {
-            error = if (address.isBlank()) "יש לכתוב כתובת בפורמט: עיר, רחוב, מספר בית."
+            error = if (address.isBlank()) "יש להזין עיר, רחוב ומספר בית."
                 else "הכתובת ארוכה מדי. ניתן להזין עד 200 תווים."; return@perform
         }
         if (step == totalSteps && (!validName(userName) || !consent)) {
@@ -149,10 +159,11 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
             when (step) {
                 1 -> step = 2
                 2 -> {
+                    addressLocation = null
                     val result = AddressVerification.resolve(address, creatingFamily = true) { path, body ->
                         gateway.request(path, "POST", body)
                     }
-                    resolvedAddress = result.display; resolution = result; step = 3
+                    resolvedAddress = result.display; resolution = result; addressLocation = result.location; step = 3
                 }
                 3 -> step = 4
                 4 -> {
@@ -171,6 +182,7 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
                 4 -> "code" to JSONObject().put("family_code", joinCode)
                 else -> "complete" to JSONObject().put("user_name", userName)
             }
+            addressLocation = null
             val result = gateway.request(joinPath(suffix), "POST", payload)
             if (step == 5) { completed = true; finishAccount() } else applyJoin(result)
         }
@@ -190,6 +202,7 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
     }
     private fun joinPath(suffix: String) = "/api/onboarding/join-family/$suffix"
     private fun applyJoin(result: JSONObject) {
+        addressLocation = VerifiedLocation.from(result)
         step = when (result.getString("step")) {
             "family_name" -> 1; "address" -> 2; "address_confirmed" -> 3
             "family_code" -> 4; "user_name" -> 5
@@ -202,8 +215,10 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
     }
     private suspend fun perform(action: suspend () -> Unit) {
         if (busy) return
+        operationIdentity = currentIdentity()
         working = true; clearError()
         try { action() }
+        catch (e: CancellationException) { throw e }
         catch (e: OnboardingFailure) {
             failure = e; error = e.uiMessage ?: "יש בעיה, נסה שוב"
             if (route == LoginRoute.CREATE_FAMILY) {
@@ -215,7 +230,9 @@ class OnboardingModel(private val gateway: OnboardingGateway) {
             }
             if (route == LoginRoute.JOIN_FAMILY && e.code == "INVALID_JOIN_STEP") {
                 // Reconcile without resetting attempts or manufacturing a local session.
-                try { applyJoin(gateway.request(joinPath("start"), "POST")) } catch (_: Exception) { /* Keep error. */ }
+                try { applyJoin(gateway.request(joinPath("start"), "POST")) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { /* Keep error. */ }
             }
         }
         catch (_: Exception) { genericFailure() }

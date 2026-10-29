@@ -116,7 +116,7 @@ internal fun BookingScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFFF6F7F7))
+                .background(fcaColor(Color(0xFFF6F7F7), FcaColorRole.BACKGROUND))
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -174,7 +174,7 @@ internal fun BookingScreen(
                     scaffoldState = scaffold,
                     sheetPeekHeight = peek,
                     sheetSwipeEnabled = !blocked,
-                    sheetContainerColor = Color(0xFFECEFF1),
+                    sheetContainerColor = fcaColor(Color(0xFFECEFF1), FcaColorRole.ELEVATED),
                     sheetShape = RoundedCornerShape(
                         topStart = 26.dp,
                         topEnd = 26.dp
@@ -234,7 +234,7 @@ internal fun BookingScreen(
                                 modifier = Modifier
                                     .requiredSize(170.dp)
                                     .offset(y = (-15).dp)
-                            )
+                            , colorFilter = fcaControlIconFilter())
                         }
 
                         // Calendar panel.
@@ -242,12 +242,12 @@ internal fun BookingScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .background(
-                                    Color.White.copy(alpha = .65f),
+                                    fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .65f),
                                     RoundedCornerShape(24.dp)
                                 )
                                 .border(
                                     1.dp,
-                                    Color(0xFFE0E5EB),
+                                    fcaColor(Color(0xFFE0E5EB), FcaColorRole.BORDER),
                                     RoundedCornerShape(24.dp)
                                 )
                                 .padding(10.dp)
@@ -322,7 +322,7 @@ internal fun BookingScreen(
                                         modifier = Modifier.weight(1f),
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Medium,
-                                        color = Color(0xFF738197),
+                                        color = fcaColor(Color(0xFF738197), FcaColorRole.SECONDARY),
                                         textAlign = TextAlign.Center
                                     )
                                 }
@@ -363,9 +363,7 @@ internal fun BookingScreen(
                                                                 .size(42.dp)
                                                                 .background(
                                                                     if (selected) {
-                                                                        Color(
-                                                                            0xFF285B9D
-                                                                        )
+                                                                        fcaColor(Color(0xFF285B9D), FcaColorRole.ACTION)
                                                                     } else {
                                                                         Color.Transparent
                                                                     },
@@ -388,16 +386,14 @@ internal fun BookingScreen(
                                                                 fontSize = 17.sp,
                                                                 color =
                                                                     if (selected) {
-                                                                        Color.White
+                                                                        fcaColor(Color.White, FcaColorRole.ON_ACTION)
                                                                     } else if (
                                                                         date.month ==
                                                                         month.month
                                                                     ) {
                                                                         VehicleInk
                                                                     } else {
-                                                                        Color(
-                                                                            0xFFA8AFBA
-                                                                        )
+                                                                        fcaColor(Color(0xFFA8AFBA), FcaColorRole.OUTSIDE_DATE)
                                                                     }
                                                             )
 
@@ -407,11 +403,9 @@ internal fun BookingScreen(
                                                                     .background(
                                                                         if (date in dots) {
                                                                             if (selected) {
-                                                                                Color.White
+                                                                                fcaColor(Color.White, FcaColorRole.ON_ACTION)
                                                                             } else {
-                                                                                Color(
-                                                                                    0xFF285B9D
-                                                                                )
+                                                                                fcaColor(Color(0xFF285B9D), FcaColorRole.ACTION)
                                                                             }
                                                                         } else {
                                                                             Color.Transparent
@@ -451,7 +445,7 @@ internal fun BookingToolbar(
             .widthIn(max = 340.dp)
             .fillMaxWidth()
             .background(
-                Color(0xFFEDF0F3),
+                fcaColor(Color(0xFFEDF0F3), FcaColorRole.ELEVATED),
                 RoundedCornerShape(40.dp)
             )
             .padding(6.dp),
@@ -495,7 +489,7 @@ internal fun BookingToolbar(
             modifier = Modifier
                 .size(48.dp)
                 .background(
-                    Color.White.copy(alpha = .8f),
+                    fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .8f),
                     CircleShape
                 )
                 .clickable(onClick = onToday),
@@ -532,7 +526,7 @@ internal fun BookingReservationRow(
                 .fillMaxWidth()
                 .heightIn(min = 104.dp)
                 .background(
-                    Color.White.copy(alpha = .82f),
+                    fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .82f),
                     RoundedCornerShape(18.dp)
                 )
                 .border(
@@ -583,7 +577,7 @@ internal fun BookingReservationRow(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth(),
-                    color = Color(0xFF738197),
+                    color = fcaColor(Color(0xFF738197), FcaColorRole.SECONDARY),
                     fontSize = 10.sp,
                     textAlign = TextAlign.Center,
                     maxLines = 2,
@@ -661,7 +655,7 @@ internal fun BookingReservationRow(
 
 @Composable
 private fun BookingClockIcon() {
-    val color = Color(0xFF637B97)
+    val color = fcaColor(Color(0xFF637B97), FcaColorRole.SECONDARY)
 
     Canvas(
         modifier = Modifier.size(16.dp)
@@ -706,7 +700,7 @@ private fun BookingToolbarIcon(
         modifier = Modifier
             .size(48.dp)
             .background(
-                Color.White.copy(alpha = .8f),
+                fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .8f),
                 CircleShape
             )
             .then(
@@ -721,7 +715,8 @@ private fun BookingToolbarIcon(
         Image(
             painter = painterResource(asset),
             contentDescription = label,
-            modifier = Modifier.size(iconSize)
+            modifier = Modifier.size(iconSize),
+            colorFilter = fcaControlIconFilter()
         )
     }
 }

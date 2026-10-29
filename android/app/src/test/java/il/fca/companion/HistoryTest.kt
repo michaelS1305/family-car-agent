@@ -25,6 +25,8 @@ class HistoryTest {
     private val start = Instant.parse("2026-10-12T10:00:00Z")
     private fun row(n: Int) = HistoryUsage(ref(n), ref(100), ref(200), "רכב", "מרק", start, start.plusSeconds(60))
     private class Gateway : HistoryGateway {
+        var illustrationAction: suspend () -> Map<String, VehicleCategory?> = { emptyMap() }
+        override suspend fun illustrations(owner: String) = illustrationAction()
         val pages = mutableListOf<Triple<String, HistoryFilters, String?>>()
         var vehicleCalls = 0
         var pageAction: suspend (String?) -> HistoryPage = { HistoryPage(emptyList(), false, null) }
@@ -38,9 +40,96 @@ class HistoryTest {
         override suspend fun members(owner: String) = memberAction()
     }
     private suspend fun settle() { repeat(6) { yield() } }
+    @Test fun pausedScreenObserversCannotStartRequestsWithoutAnActiveLifecycle() = runBlocking {
+        val api = Gateway().apply { pageAction = { HistoryPage(listOf(row(1)), true, ref(2)) } }
+        val model = vm(api, this)
+        try {
+            model.start(); settle(); model.pause()
+            val count = api.pages.size; val vehicles = api.vehicleCalls
+            model.nextPage(); model.retryPage(); model.retryCurrent(); model.loadOptions(); settle()
+            assertEquals(count, api.pages.size); assertEquals(vehicles, api.vehicleCalls)
+            assertEquals(listOf(row(1)), model.state.rows)
+        } finally { model.stop() }
+    }
+    @Test fun revisitRetainsHistoryReplacesFirstPageAndRetriesRefreshWithoutDuplicates() = runBlocking {
+        val api = Gateway().apply { pageAction = { HistoryPage(listOf(row(1)), false, null) } }
+        val model = vm(api, this)
+        val gate = CompletableDeferred<HistoryPage>()
+        try {
+            model.start(); settle(); model.pause()
+            api.pageAction = { gate.await() }
+            model.start(); model.start(); settle()
+            assertEquals(listOf(row(1)), model.state.rows)
+            assertTrue(model.state.loading); assertEquals(2, api.pages.size)
+            gate.completeExceptionally(java.io.IOException()); settle()
+            assertTrue(model.state.pageError)
+            api.pageAction = { HistoryPage(listOf(row(2)), false, null) }
+            model.retryPage(); settle()
+            assertEquals(listOf(row(2)), model.state.rows)
+            assertFalse(model.state.pageError); assertTrue(api.pages.all { it.third == null })
+        } finally { gate.complete(HistoryPage(emptyList(), false, null)); model.stop() }
+    }
+    @Test fun retainedHistoryIsHiddenImmediatelyOnAccountOrFamilyChange() = runBlocking {
+        var who = HistoryIdentity("A", 11)
+        val api = Gateway().apply { pageAction = { HistoryPage(listOf(row(1)), false, null) } }
+        val model = vm(api, this, { who })
+        try {
+            model.start(); settle(); model.pause()
+            who = HistoryIdentity("A", 12); assertTrue(model.state.rows.isEmpty())
+            model.start(); settle(); model.pause()
+            who = HistoryIdentity("B", 12); assertTrue(model.state.rows.isEmpty())
+            model.reconcileIdentity(); who = HistoryIdentity("A", 12)
+            assertTrue(model.state.rows.isEmpty())
+        } finally { model.stop() }
+    }
     private fun vm(api: Gateway, scope: CoroutineScope, identity: () -> HistoryIdentity? = { HistoryIdentity("A", 11) },
                    signals: Flow<BroadcastSignal> = flow { awaitCancellation() }) =
         HistoryViewModel(api, identity, { signals }, scope)
+
+    @Test fun illustrationCatalogIsOptionalAndIdentityFenced() = runBlocking {
+        var who: HistoryIdentity? = HistoryIdentity("A", 11)
+        val pending = CompletableDeferred<Map<String, VehicleCategory?>>()
+        val api = Gateway().apply {
+            illustrationAction = { withContext(NonCancellable) { pending.await() } }
+        }
+        val model = vm(api, this, { who })
+        try {
+            model.start(); settle()
+            assertTrue(model.state.loaded)
+            who = HistoryIdentity("B", 12)
+            api.illustrationAction = { mapOf(ref(200) to VehicleCategory.SUV) }
+            model.start(); settle()
+            pending.complete(mapOf(ref(100) to VehicleCategory.SEDAN)); settle()
+            assertNull(model.state.illustrations[ref(100)])
+            assertEquals(VehicleCategory.SUV, model.state.illustrations[ref(200)])
+            model.stop()
+            assertTrue(model.state.illustrations.isEmpty())
+            api.illustrationAction = { error("optional lookup failed") }
+            model.start(); settle()
+            assertTrue(model.state.loaded)
+            assertTrue(model.state.illustrations.isEmpty())
+        } finally { model.stop() }
+    }
+
+    @Test fun illustrationCatalogAssociatesAllCategoriesByReference() = runBlocking {
+        val vehicles = VehicleCategory.entries.mapIndexed { i, category ->
+            VehiclesApi.parseVehicle(JSONObject().put("vehicle_ref", ref(i + 1)).put("display_name", "same name")
+                .put("created_at", start.toString()).put("retired_at", start.plusSeconds(1).toString())
+                .put("category", category.wire).put("manufacturer_id", JSONObject.NULL)
+                .put("manufacturer_name_he", JSONObject.NULL).put("model", JSONObject.NULL)
+                .put("license_plate", JSONObject.NULL))
+        }
+        assertTrue(vehicles.all { it.readOnly })
+        val catalog = vehicles.associate { it.ref to it.category }
+        val model = vm(Gateway().apply { illustrationAction = { catalog } }, this)
+        try {
+            model.start(); settle()
+            catalog.forEach { (ref, category) ->
+                assertEquals(vehicleIllustration(category), vehicleIllustration(model.state.illustrations[ref]))
+            }
+            assertEquals(R.drawable.single_car_icon, vehicleIllustration(model.state.illustrations[ref(999)]))
+        } finally { model.stop() }
+    }
 
     @Test fun initialsHandleShortBlankWhitespaceAndUnicode() {
         assertEquals("מר", historyInitials(" מרק לוי "))
@@ -221,23 +310,29 @@ class HistoryTest {
         val ui = File("src/main/java/il/fca/companion/ui/HistoryScreen.kt").readText()
         for (asset in listOf("fca_header_wordmark", "history_icon", "ic_chevron_back", "ic_filter", "car_icon", "user_icon", "ic_calender"))
             assertTrue(ui.contains("R.drawable.$asset"))
-        assertTrue(ui.contains("R.drawable.vehicle_sedan"))
+        assertFalse(ui.contains("R.drawable.vehicle_sedan"))
         assertFalse(ui.contains("shadowElevation"))
         assertTrue(ui.contains("heightIn(min = 104.dp)"))
-        assertTrue(ui.contains("ofPattern(\"dd/MM/yyyy\""))
-        assertTrue(ui.contains("painterResource(vehicleIllustration(null))"))
-        assertTrue(ui.contains("UserAvatar(name = row.name"))
-        assertTrue(ui.contains("UserAvatar(name = vehicle.driver.orEmpty()"))
-        assertFalse(ui.substringAfter("private fun CurrentCapsule(").substringBefore("private fun HistoryVehicleIllustration").contains("HistoryCard("))
+        val compact = ui.replace(Regex("\\s+"), "")
+        assertTrue(compact.contains("ofPattern(\"dd/MM/yyyy\""))
+        assertTrue(ui.contains("painterResource(vehicleIllustration(category))"))
+        assertTrue(compact.contains("UserAvatar(name=row.name"))
+        assertTrue(compact.contains("UserAvatar(name=vehicle.driver.orEmpty()"))
+        // Approved current-use design: one HistoryCard per occupied vehicle.
+        val current = compact.substringAfter("privatefunCurrentCapsule(").substringBefore("privatefunHistoryVehicleIllustration")
+        assertTrue(current.contains("current.occupied.forEach{vehicle->HistoryCard{"))
+        assertTrue(current.contains("illustrations[vehicle.ref]"))
+        assertTrue(current.contains("Modifier.width(66.dp).height(44.dp)"))
+        assertTrue(ui.contains("רכבים בשימוש"))
         assertTrue(ui.contains("טוען מצב רכבים…"))
         assertTrue(ui.contains("כל הרכבים פנויים"))
         assertTrue(ui.contains("אין רכבים בשימוש כרגע"))
         assertTrue(ui.contains("TextButton(onClick = retry)"))
         assertTrue(ui.contains("current.occupied.forEach"))
         assertTrue(ui.contains("items(state.rows, key = { it.sessionRef })"))
-        val shell = File("src/main/java/il/fca/companion/ui/AuthenticatedAppShell.kt").readText()
-        assertTrue(shell.contains("if (!imeVisible && state.category != DashboardCategory.HISTORY && state.category != DashboardCategory.VEHICLES && state.category != DashboardCategory.FAMILY && state.category != DashboardCategory.BOOKING_CENTER && state.category != DashboardCategory.SETTINGS)"))
-        assertTrue(shell.contains("HistoryScreen(history, familyId, state::back)"))
+        val shell = File("src/main/java/il/fca/companion/ui/AuthenticatedAppShell.kt").readText().replace(Regex("\\s+"), "")
+        assertTrue(shell.contains("if(!imeVisible&&state.category!=DashboardCategory.HISTORY&&state.category!=DashboardCategory.VEHICLES&&state.category!=DashboardCategory.FAMILY&&state.category!=DashboardCategory.BOOKING_CENTER&&state.category!=DashboardCategory.SETTINGS)"))
+        assertTrue(shell.contains("HistoryScreen(history,familyId,state::back)"))
     }
     @Test fun usageTimePresentationPreservesLocalZoneAndExplicitMultiDayEndpoints() {
         val zone = java.time.ZoneId.of("Asia/Jerusalem")

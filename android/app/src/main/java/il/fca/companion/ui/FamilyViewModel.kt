@@ -9,6 +9,7 @@ import kotlinx.coroutines.*
 internal data class FamilyIdentity(val owner: String, val family: Long)
 internal enum class AddressStage { VIEW, EDIT, VERIFYING, CONFIRM, SAVING }
 internal data class FamilyState(
+    val memberAddition: Boolean = false,
     val profile: FamilyProfile? = null, val loading: Boolean = true, val loadError: Boolean = false,
     val rolePending: Set<String> = emptySet(), val roleErrors: Set<String> = emptySet(),
     val addressStage: AddressStage = AddressStage.VIEW, val draft: String = "", val candidate: ResolvedAddress? = null,
@@ -31,16 +32,39 @@ internal class FamilyViewModel(private val api: FamilyGateway, private val ident
     val visibleState get() = if (active != null && active == identity()) state else FamilyState()
     private fun current(who: FamilyIdentity, version: Long) = active == who && identity() == who && generation == version
     private fun launch(block: suspend () -> Unit) = CoroutineScope(scope.coroutineContext + checkNotNull(root)).launch { block() }
-    private fun manager(): FamilyIdentity? = active?.takeIf { it == identity() && state.profile?.canManage == true }
+    private fun manager(): FamilyIdentity? = active?.takeIf {
+        it == identity() && !state.loading && !state.loadError && root?.isActive == true && state.profile?.canManage == true
+    }
     fun start() {
         val who = identity() ?: return
         if (active == who && root?.isActive == true) return
-        stop(); active = who; root = SupervisorJob(scope.coroutineContext[Job]); load()
+        if (active != who) stop()
+        active = who; root = SupervisorJob(scope.coroutineContext[Job]); load()
     }
     fun stop() { generation++; root?.cancel(); root = null; active = null; state = FamilyState() }
     override fun onCleared() { stop() }
-    fun retry() { if (!state.loading && state.profile == null) load() }
+    fun reconcileIdentity() { if (active != null && active != identity()) stop() }
+    fun pause() {
+        val profile = visibleState.profile
+        generation++; root?.cancel(); root = null
+        state = FamilyState(profile = profile)
+        if (active != identity()) stop()
+    }
+    fun openMemberAddition(): String? {
+        if (state.loading || state.loadError || root?.isActive != true) return null
+        val code = visibleState.profile?.code ?: return null
+        if (state.memberAddition || state.codePending) return null
+        state = state.copy(memberAddition = true)
+        return code
+    }
+    fun closeMemberAddition() {
+        if (!visibleState.memberAddition) return
+        state = state.copy(memberAddition = false)
+        if (!state.loading) load()
+    }
+    fun retry() { if (!state.loading && (state.profile == null || state.loadError)) load() }
     private fun load() {
+        if (root?.isActive != true) return
         val who = active ?: return
         val version = generation
         state = state.copy(loading = true, loadError = false)

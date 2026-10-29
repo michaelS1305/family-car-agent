@@ -25,7 +25,10 @@ internal data class VehiclesState(
 /** Owner/family-scoped, memory-only flow. Retries never replace a submitted payload or UUID. */
 internal class VehiclesViewModel(private val api: VehiclesGateway, private val identity: () -> VehiclesIdentity?,
     private val testScope: CoroutineScope? = null) : ViewModel() {
-    var state by mutableStateOf(VehiclesState()); private set
+    private var stored by mutableStateOf(VehiclesState())
+    var state: VehiclesState
+        get() { val snapshot = stored; return if (active != null && active == identity()) snapshot else VehiclesState() }
+        private set(value) { stored = value }
     private val scope get() = testScope ?: viewModelScope
     private var active: VehiclesIdentity? = null
     private var epoch = 0L
@@ -38,30 +41,43 @@ internal class VehiclesViewModel(private val api: VehiclesGateway, private val i
     fun start() {
         val next = identity()
         if (root?.isActive == true && active == next) return
-        stop()
+        if (active != next) stop()
         if (next == null) return
         active = next; root = SupervisorJob(scope.coroutineContext[Job]); refresh()
     }
     fun stop() {
         epoch++; root?.cancel(); root = null; active = null; submissionJob = null; state = VehiclesState()
     }
+    /** Keep read-only display data, never drafts, pending submissions or permission authority. */
+    fun pause() {
+        val snapshot = state
+        epoch++; root?.cancel(); root = null; submissionJob = null
+        state = VehiclesState(rows = snapshot.rows, loaded = snapshot.loaded,
+            manufacturers = snapshot.manufacturers, catalogLoaded = snapshot.catalogLoaded)
+        if (active != identity()) stop()
+    }
     override fun onCleared() { stop() }
+    fun reconcileIdentity() { if (active != null && active != identity()) stop() }
     fun refresh() {
+        if (root?.isActive != true) return
         val owner = active ?: return
         if (state.loading) return
         val version = epoch
         state = state.copy(loading = true, loadError = false, canCreate = false)
         launch {
             try {
-                val rows = api.vehicles(owner.owner)
-                val canCreate = api.canCreate(owner.owner)
+                val (rows, canCreate) = coroutineScope {
+                    val vehicles = async { api.vehicles(owner.owner) }
+                    val permission = async { api.canCreate(owner.owner) }
+                    vehicles.await() to permission.await()
+                }
                 if (valid(owner, version)) state = state.copy(rows = rows, loaded = true, loading = false, canCreate = canCreate)
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { if (valid(owner, version)) state = state.copy(loading = false, loadError = true) }
         }
     }
     fun add() {
-        if (!state.canCreate || state.page != VehiclesPage.LIST || identity() != active) return
+        if (!state.canCreate || state.loading || state.loadError || state.page != VehiclesPage.LIST || identity() != active) return
         state = state.copy(page = VehiclesPage.ADD, draft = VehicleDraft(), pending = null, submitError = null)
         loadManufacturers()
     }

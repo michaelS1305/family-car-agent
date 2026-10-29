@@ -28,7 +28,11 @@ class SettingsCapabilitiesTest {
         assertEquals(CapabilityStatus.MISSING, notificationStatus(false, true, NotificationManager.IMPORTANCE_LOW))
         assertEquals(CapabilityStatus.MISSING, notificationStatus(true, false, NotificationManager.IMPORTANCE_LOW))
         assertEquals(CapabilityStatus.MISSING, notificationStatus(true, true, NotificationManager.IMPORTANCE_NONE))
-        assertEquals(CapabilityStatus.UNKNOWN, notificationStatus(true, true, null))
+        // Before first authenticated entry the channel need not exist yet.
+        // This selector reports OS permission, not FCM registration/readiness.
+        assertEquals(CapabilityStatus.READY, notificationStatus(true, true, null))
+        assertEquals(CapabilityStatus.MISSING, notificationStatus(false, true, null))
+        assertEquals(CapabilityStatus.MISSING, notificationStatus(true, false, null))
         assertEquals(CapabilityStatus.MISSING, notificationStatus(false, false, null))
     }
 

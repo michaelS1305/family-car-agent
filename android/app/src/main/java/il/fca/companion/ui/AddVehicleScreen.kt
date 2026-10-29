@@ -39,7 +39,7 @@ internal fun AddVehicleScreen(model: VehiclesViewModel) {
                 VehicleCategory.entries.forEach { category ->
                     val selected = draft.category == category
                     Column(Modifier.weight(1f).height(86.dp).clip(RoundedCornerShape(18.dp))
-                        .background(if (selected) Color(0xFFE6EDF4) else Color.White.copy(alpha = .6f))
+                        .background(if (selected) fcaColor(Color(0xFFE6EDF4), FcaColorRole.ELEVATED) else fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .6f))
                         .border(if (selected) 2.dp else 1.dp, if (selected) VehicleInk else VehicleBorder, RoundedCornerShape(18.dp))
                         .selectable(selected, enabled = editable, role = Role.RadioButton) { model.edit(draft.copy(category = category)) }
                         .padding(2.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -59,7 +59,7 @@ internal fun AddVehicleScreen(model: VehiclesViewModel) {
                 TextButton(onClick = model::loadManufacturers) { Text("נסה שוב") }
             }
             state.catalogLoaded && showManufacturerSuggestions(draft.manufacturerQuery, draft.manufacturer) -> {
-                if (state.matchingManufacturers.isEmpty()) Text("לא נמצאו יצרנים", color = Color(0xFF788699))
+                if (state.matchingManufacturers.isEmpty()) Text("לא נמצאו יצרנים", color = fcaColor(Color(0xFF788699), FcaColorRole.SECONDARY))
                 else Column(Modifier.fillMaxWidth().heightIn(max = 144.dp).verticalScroll(rememberScrollState())
                     .border(1.dp, VehicleBorder, RoundedCornerShape(16.dp))) {
                     state.matchingManufacturers.forEach { manufacturer ->
@@ -77,7 +77,7 @@ internal fun AddVehicleScreen(model: VehiclesViewModel) {
         Button(onClick = model::submit, enabled = draft.valid && !state.submitting,
             modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(20.dp),
             colors = ButtonDefaults.buttonColors(containerColor = VehicleInk)) {
-            if (state.submitting) CircularProgressIndicator(Modifier.size(22.dp), color = Color.White, strokeWidth = 2.dp)
+            if (state.submitting) CircularProgressIndicator(Modifier.size(22.dp), color = fcaColor(Color.White, FcaColorRole.ON_ACTION), strokeWidth = 2.dp)
             else Text(if (state.pending != null) "נסה שוב" else "הוספת רכב", fontSize = 20.sp)
         }
         Spacer(Modifier.height(8.dp))
@@ -90,8 +90,8 @@ private fun VehicleField(label: String, value: String, hint: String, icon: Int, 
         Text(label, color = VehicleInk)
         OutlinedTextField(value, change, enabled = enabled, modifier = Modifier.fillMaxWidth(), singleLine = true,
             placeholder = { Text(hint, fontSize = 14.sp) }, shape = RoundedCornerShape(20.dp),
-            leadingIcon = { Image(painterResource(icon), null, Modifier.size(24.dp)) },
+            leadingIcon = { Image(painterResource(icon), null, Modifier.size(24.dp), colorFilter = fcaControlIconFilter()) },
             colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = VehicleBorder,
-                focusedBorderColor = VehicleInk, unfocusedContainerColor = Color.White.copy(alpha = .65f)))
+                focusedBorderColor = VehicleInk, unfocusedContainerColor = fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .65f)))
     }
 }

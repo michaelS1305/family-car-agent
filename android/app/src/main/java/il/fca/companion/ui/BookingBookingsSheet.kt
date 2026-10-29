@@ -49,7 +49,7 @@ internal fun BookingBookingsSheet(
                     .width(38.dp)
                     .height(4.dp)
                     .background(
-                        Color(0xFFBFC7D0),
+                        fcaColor(Color(0xFFBFC7D0), FcaColorRole.BORDER),
                         RoundedCornerShape(4.dp)
                     )
             )
@@ -108,7 +108,7 @@ internal fun BookingBookingsSheet(
                 } else {
                     "טוען הזמנות…"
                 },
-                color = Color(0xFF738197),
+                color = fcaColor(Color(0xFF738197), FcaColorRole.SECONDARY),
                 fontSize = 12.sp
             )
         }

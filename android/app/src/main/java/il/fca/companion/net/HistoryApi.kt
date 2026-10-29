@@ -24,6 +24,7 @@ data class HistoryFilters(val vehicleRef: String? = null, val memberRef: String?
 interface HistoryGateway {
     suspend fun page(owner: String, filters: HistoryFilters, cursor: String?): HistoryPage
     suspend fun vehicles(owner: String): List<FamilyVehicle>
+    suspend fun illustrations(owner: String): Map<String, VehicleCategory?>
     suspend fun members(owner: String): List<HistoryMember>
 }
 
@@ -34,6 +35,8 @@ class HistoryApi(private val api: FcaApi) : HistoryGateway {
     override suspend fun vehicles(owner: String) = withContext(Dispatchers.IO) {
         parseVehicles(api.call(owner, "/api/vehicles"))
     }
+    override suspend fun illustrations(owner: String): Map<String, VehicleCategory?> =
+        VehiclesApi(api).vehicles(owner).associate { it.ref to it.category }
     override suspend fun members(owner: String) = withContext(Dispatchers.IO) {
         parseMembers(api.call(owner, "/api/family"))
     }

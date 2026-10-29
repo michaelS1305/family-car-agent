@@ -46,8 +46,10 @@ internal fun dashboardGreeting(name: String): String {
     return if (firstName.isEmpty()) "היי" else "היי, $firstName"
 }
 
-private val DashboardInk = Color(0xFF243341)
-private val DashboardBackground = Color(0xFFF6F7F7)
+private val DashboardInk: Color
+    @Composable get() = fcaColor(Color(0xFF243341), FcaColorRole.TEXT)
+private val DashboardBackground: Color
+    @Composable get() = fcaColor(Color(0xFFF6F7F7), FcaColorRole.BACKGROUND)
 
 @Composable
 internal fun DashboardScreen(name: String, openCategory: (DashboardCategory) -> Unit,
@@ -56,11 +58,12 @@ internal fun DashboardScreen(name: String, openCategory: (DashboardCategory) -> 
         val compact = maxHeight < 540.dp
         Column(Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally) {
-            Image(painterResource(R.drawable.fca_header_wordmark), "Family Car Agent",
+            val wordmarkBlend = if (LocalFcaDark.current) BlendMode.SrcOver else BlendMode.Multiply
+            Image(painterResource(if (LocalFcaDark.current) R.drawable.family_car_agent_road_logo_1__dark else R.drawable.fca_header_wordmark), "Family Car Agent",
                 Modifier.widthIn(max = 255.dp).fillMaxWidth().height(if (compact) 64.dp else 85.dp)
                     .scale(.9f).graphicsLayer {
                         compositingStrategy = CompositingStrategy.Offscreen
-                        blendMode = BlendMode.Multiply
+                        blendMode = wordmarkBlend
                     })
             Text(dashboardGreeting(name), color = DashboardInk,
                 fontSize = if (compact) 24.sp else 28.sp, fontWeight = FontWeight.Bold,
@@ -79,9 +82,9 @@ internal fun DashboardScreen(name: String, openCategory: (DashboardCategory) -> 
                         }
                         TextButton(onClick = logout, enabled = !logoutBusy,
                             modifier = Modifier.widthIn(min = 144.dp).height(48.dp)
-                                .background(Color.White.copy(alpha = .65f), RoundedCornerShape(50))
-                                .border(1.dp, Color.White, RoundedCornerShape(50))) {
-                            Image(painterResource(R.drawable.logout_icon), null, Modifier.size(36.dp))
+                                .background(fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .65f), RoundedCornerShape(50))
+                                .border(1.dp, fcaColor(Color.White, FcaColorRole.SURFACE), RoundedCornerShape(50))) {
+                            Image(painterResource(R.drawable.logout_icon), null, Modifier.size(36.dp), colorFilter = fcaControlIconFilter())
                             Spacer(Modifier.width(4.dp))
                             Text("התנתקות", color = DashboardInk, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                         }
@@ -94,6 +97,7 @@ internal fun DashboardScreen(name: String, openCategory: (DashboardCategory) -> 
 
 @Composable
 private fun DashboardWheel(diameter: Dp, openCategory: (DashboardCategory) -> Unit) {
+    val palette = fcaPalette()
     Box(Modifier.size(diameter).drawWithCache {
         val center = Offset(size.width / 2f, size.height / 2f)
         val radius = size.minDimension * .46f
@@ -106,29 +110,29 @@ private fun DashboardWheel(diameter: Dp, openCategory: (DashboardCategory) -> Un
                 close()
             }
         }
-        val body = Brush.linearGradient(listOf(Color.White.copy(alpha = .9f), Color(0xFFE4EBEF),
-            Color.White.copy(alpha = .8f)), Offset.Zero, Offset(size.width, size.height))
-        val depth = Brush.radialGradient(listOf(Color(0xFF637B97).copy(alpha = .16f), Color.Transparent),
+        val body = Brush.linearGradient(listOf(palette.resolve(Color.White, FcaColorRole.SURFACE).copy(alpha = .9f), palette.resolve(Color(0xFFE4EBEF), FcaColorRole.ELEVATED),
+            palette.resolve(Color.White, FcaColorRole.SURFACE).copy(alpha = .8f)), Offset.Zero, Offset(size.width, size.height))
+        val depth = Brush.radialGradient(listOf(palette.resolve(Color(0xFF637B97), FcaColorRole.SECONDARY).copy(alpha = .16f), Color.Transparent),
             center + Offset(0f, radius * .06f), radius * 1.1f)
-        val hubFill = Brush.linearGradient(listOf(Color.White, Color(0xFFE4EBEF)),
+        val hubFill = Brush.linearGradient(listOf(palette.resolve(Color.White, FcaColorRole.SURFACE), palette.resolve(Color(0xFFE4EBEF), FcaColorRole.ELEVATED)),
             center - Offset(hub, hub), center + Offset(hub, hub))
         onDrawBehind {
             drawCircle(depth, radius * 1.1f, center + Offset(0f, radius * .06f))
             drawCircle(body, radius)
             sectors.forEachIndexed { index, path ->
-                drawPath(path, Color.White.copy(alpha = if (index % 2 == 0) .12f else .04f))
+                drawPath(path, palette.resolve(Color.White, FcaColorRole.SURFACE).copy(alpha = if (index % 2 == 0) .12f else .04f))
             }
             repeat(5) { index ->
                 val angle = Math.toRadians((-126.0 + index * 72.0))
                 val vector = Offset(cos(angle).toFloat(), sin(angle).toFloat())
-                drawLine(Color.White.copy(alpha = .8f), center + vector * hub,
+                drawLine(palette.resolve(Color.White, FcaColorRole.SURFACE).copy(alpha = .8f), center + vector * hub,
                     center + vector * radius, strokeWidth = 1.dp.toPx())
             }
-            drawCircle(Color.White.copy(alpha = .7f), radius, style = Stroke(radius * .012f))
-            drawCircle(Color.White.copy(alpha = .45f), radius * 1.05f, style = Stroke(1.dp.toPx()))
-            drawCircle(Color(0xFF637B97).copy(alpha = .1f), hub * 1.15f, center + Offset(0f, hub * .07f))
+            drawCircle(palette.resolve(Color.White, FcaColorRole.SURFACE).copy(alpha = .7f), radius, style = Stroke(radius * .012f))
+            drawCircle(palette.resolve(Color.White, FcaColorRole.SURFACE).copy(alpha = .45f), radius * 1.05f, style = Stroke(1.dp.toPx()))
+            drawCircle(palette.resolve(Color(0xFF637B97), FcaColorRole.SECONDARY).copy(alpha = .1f), hub * 1.15f, center + Offset(0f, hub * .07f))
             drawCircle(hubFill, hub)
-            drawCircle(Color.White.copy(alpha = .85f), hub, style = Stroke(hub * .12f))
+            drawCircle(palette.resolve(Color.White, FcaColorRole.SURFACE).copy(alpha = .85f), hub, style = Stroke(hub * .12f))
         }
     }) {
         val targetWidth = (diameter * .25f).coerceAtLeast(48.dp)
@@ -149,14 +153,14 @@ private fun DashboardIcon(category: DashboardCategory, visibleSize: Dp, onClick:
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     Box(Modifier.fillMaxSize().background(
-        if (pressed) Color.White.copy(alpha = .4f) else Color.Transparent, CircleShape)
+        if (pressed) fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .4f) else Color.Transparent, CircleShape)
         .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
         .semantics { contentDescription = category.label }, contentAlignment = Alignment.Center) {
         // Preserve the complete square PNG, including its transparent margins.
         // Only transparent padding extends beyond the non-overlapping touch target.
         Image(painterResource(category.asset), null,
             Modifier.requiredSize(visibleSize).offset(y = -visibleSize * .07f)
-                .graphicsLayer { alpha = if (pressed) .82f else 1f })
+                .graphicsLayer { alpha = if (pressed) .82f else 1f }, colorFilter = fcaControlIconFilter())
     }
 }
 
@@ -165,7 +169,7 @@ internal fun DashboardCategoryPlaceholder(category: DashboardCategory, back: () 
     Column(Modifier.fillMaxSize().background(DashboardBackground).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Text(category.label, color = DashboardInk, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
-        Text("בקרוב", color = Color(0xFF637B97), fontSize = 16.sp)
+        Text("בקרוב", color = fcaColor(Color(0xFF637B97), FcaColorRole.SECONDARY), fontSize = 16.sp)
         TextButton(onClick = back) { Text("חזרה לדשבורד", color = DashboardInk) }
     }
 }

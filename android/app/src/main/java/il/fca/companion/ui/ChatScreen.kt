@@ -62,7 +62,7 @@ internal fun ChatScreen(
     reloadHistory: () -> Unit,
     userName: String,
 ) {
-    val ink = Color(0xFF243341)
+    val ink = fcaColor(Color(0xFF243341), FcaColorRole.TEXT)
     val density = LocalDensity.current
     val scroll = rememberScrollState()
     val scrollPolicy = remember { ChatScrollPolicy() }
@@ -165,6 +165,7 @@ internal fun ChatScreen(
             // The top space is inside the scrollable content rather than
             // being a separate header row, so messages can move behind the
             // fixed wordmark/header treatment while scrolling.
+            val viewportBackground = fcaColor(Color(0xFFF6F7F7), FcaColorRole.BACKGROUND)
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -178,7 +179,7 @@ internal fun ChatScreen(
                             size.height / 2f
                         )
 
-                        val background = Color(0xFFF6F7F7)
+                        val background = viewportBackground
 
                         if (fade > 0f) {
                             drawRect(
@@ -267,9 +268,9 @@ internal fun ChatScreen(
                                 .background(
                                     color =
                                         if (message.fromUser) {
-                                            ink
+                                            fcaColor(Color(0xFF243341), FcaColorRole.CHAT_OUTGOING)
                                         } else {
-                                            Color(0xFFE9EEF0)
+                                            fcaColor(Color(0xFFE9EEF0), FcaColorRole.CHAT_INCOMING)
                                         },
                                     shape = RoundedCornerShape(
                                         18.dp
@@ -281,7 +282,7 @@ internal fun ChatScreen(
                                 ),
                             color =
                                 if (message.fromUser) {
-                                    Color.White
+                                    fcaColor(Color.White, FcaColorRole.TEXT)
                                 } else {
                                     ink
                                 },
@@ -323,7 +324,7 @@ internal fun ChatScreen(
                                                 26.dp
                                             )
                                             .background(
-                                                Color.White,
+                                                fcaColor(Color.White, FcaColorRole.SURFACE),
                                                 CircleShape
                                             )
                                     )
@@ -341,9 +342,7 @@ internal fun ChatScreen(
                                         5.dp
                                     ),
                                     fontSize = 10.sp,
-                                    color = Color(
-                                        0xFF637B97
-                                    )
+                                    color = fcaColor(Color(0xFF637B97), FcaColorRole.SECONDARY)
                                 )
                             }
                         }
@@ -372,7 +371,7 @@ internal fun ChatScreen(
                                 max = 264.dp
                             )
                             .background(
-                                Color(0xFFE9EEF0),
+                                fcaColor(Color(0xFFE9EEF0), FcaColorRole.CHAT_INCOMING),
                                 RoundedCornerShape(
                                     18.dp
                                 )
@@ -463,15 +462,13 @@ internal fun ChatScreen(
                                             )
                                         )
                                         .background(
-                                            Color.White.copy(
+                                            fcaColor(Color.White, FcaColorRole.SURFACE).copy(
                                                 alpha = 0.65f
                                             )
                                         )
                                         .border(
                                             width = 1.dp,
-                                            color = Color(
-                                                0xFFD9DEE7
-                                            ),
+                                            color = fcaColor(Color(0xFFD9DEE7), FcaColorRole.BORDER),
                                             shape =
                                                 RoundedCornerShape(
                                                     15.dp
@@ -535,7 +532,7 @@ internal fun ChatScreen(
                             52.dp
                         )
                         .background(
-                            Color.White.copy(
+                            fcaColor(Color.White, FcaColorRole.SURFACE).copy(
                                 alpha = 0.9f
                             ),
                             RoundedCornerShape(
@@ -544,9 +541,7 @@ internal fun ChatScreen(
                         )
                         .border(
                             width = 1.dp,
-                            color = Color(
-                                0xFFE0E5E7
-                            ),
+                            color = fcaColor(Color(0xFFE0E5E7), FcaColorRole.BORDER),
                             shape =
                                 RoundedCornerShape(
                                     28.dp
@@ -581,9 +576,7 @@ internal fun ChatScreen(
                                     Text(
                                         text =
                                             "איך אפשר לעזור..",
-                                        color = Color(
-                                            0xFF7B8995
-                                        ),
+                                        color = fcaColor(Color(0xFF7B8995), FcaColorRole.SECONDARY),
                                         fontSize =
                                             15.sp
                                     )
@@ -636,9 +629,10 @@ internal fun ChatScreen(
                         ),
                         contentDescription =
                             "שליחה",
-                        modifier = Modifier.size(
-                            28.dp
-                        )
+                        modifier = Modifier.size(28.dp),
+                        colorFilter = if (LocalFcaDark.current) androidx.compose.ui.graphics.ColorFilter.tint(
+                            if (state.canSend(draft)) LocalFcaColors.current.onSelected else LocalFcaColors.current.onDisabled
+                        ) else null
                     )
                 }
             }
@@ -664,9 +658,10 @@ internal fun ChatScreen(
             contentAlignment =
                 Alignment.Center
         ) {
+            val wordmarkBlend = if (LocalFcaDark.current) BlendMode.SrcOver else BlendMode.Multiply
             Image(
                 painter = painterResource(
-                    R.drawable.fca_header_wordmark
+                    if (LocalFcaDark.current) R.drawable.family_car_agent_road_logo_1__dark else R.drawable.fca_header_wordmark
                 ),
                 contentDescription =
                     "Family Car Agent",
@@ -685,18 +680,18 @@ internal fun ChatScreen(
                         compositingStrategy =
                             CompositingStrategy.Offscreen
                         blendMode =
-                            BlendMode.Multiply
+                            wordmarkBlend
                     }
             )
         }
     }
 }
 
-private val ChatSendInactive =
-    Color(0xFFDDE5EA)
+private val ChatSendInactive: Color
+    @Composable get() = fcaColor(Color(0xFFDDE5EA), FcaColorRole.ELEVATED)
 
-private val ChatSendActive =
-    Color(0xFFB6C7D3)
+private val ChatSendActive: Color
+    @Composable get() = fcaColor(Color(0xFFB6C7D3), FcaColorRole.ACTION)
 
 // Two separable nine-tap Gaussian-like passes. The radius varies smoothly per
 // pixel: 0 at the wordmark bottom, 16dp at the window top. This is a sampled

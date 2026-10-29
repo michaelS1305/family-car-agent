@@ -38,13 +38,33 @@ internal fun FamilyScreen(
         model.start()
 
         onDispose {
-            model.stop()
+            model.pause()
         }
     }
 
     BackHandler(onBack = back)
 
     val state = model.visibleState
+
+    val context = LocalContext.current
+    val invitationLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { model.closeMemberAddition() }
+    val shareInvitation: () -> Unit = {
+        if (!model.visibleState.memberAddition) {
+            val code = model.openMemberAddition()
+            if (code == null) {
+                android.widget.Toast.makeText(context, "הקוד המשפחתי אינו זמין כרגע. נסו שוב.", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                try {
+                    invitationLauncher.launch(familyInvitationChooser(code))
+                } catch (_: Exception) {
+                    model.closeMemberAddition()
+                    android.widget.Toast.makeText(context, "לא ניתן לפתוח שיתוף כרגע. נסו שוב.", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     if (blockingInitialLoadError(state.loading, state.loadError, state.profile != null)) {
         FcaErrorScreen("לא ניתן לטעון את פרטי המשפחה", model::retry, "חזרה לדשבורד", back)
@@ -57,7 +77,7 @@ internal fun FamilyScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .background(Color(0xFFF6F7F7))
+                .background(fcaColor(Color(0xFFF6F7F7), FcaColorRole.BACKGROUND))
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -89,13 +109,13 @@ internal fun FamilyScreen(
                             .requiredSize(200.dp)
                             .offset(y = (-15).dp),
                         contentScale = ContentScale.Fit
-                    )
+                    , colorFilter = fcaControlIconFilter())
                 }
 
                 val profile = state.profile
 
                 when {
-                    state.loading -> {
+                    state.loading && profile == null -> {
                         CircularProgressIndicator(
                             Modifier.padding(24.dp)
                         )
@@ -131,9 +151,7 @@ internal fun FamilyScreen(
                                     fontWeight = FontWeight.Bold
                                 )
 
-                                // Deliberately inert V1 placeholder:
-                                // no invitation or feedback action.
-                                FamilyIconAction(R.drawable.ic_add, "הוספה", {})
+                                FamilyIconAction(R.drawable.ic_add, "הוספה", shareInvitation)
                             }
 
                             profile.members.forEach { member ->
@@ -228,14 +246,15 @@ private fun FamilyIconAction(
         modifier = Modifier
             .size(48.dp)
             .background(
-                Color(0xFFF1F5F9),
+                fcaColor(Color(0xFFF1F5F9), FcaColorRole.ELEVATED),
                 CircleShape
             )
     ) {
         Image(
             painter = painterResource(asset),
             contentDescription = description,
-            modifier = Modifier.size(24.dp)
+            modifier = Modifier.size(24.dp),
+            colorFilter = fcaControlIconFilter()
         )
     }
 }
@@ -256,7 +275,7 @@ private fun FamilyMemberCard(
         Modifier
             .fillMaxWidth()
             .background(
-                Color.White.copy(alpha = .85f),
+                fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .85f),
                 RoundedCornerShape(18.dp)
             )
             .border(
@@ -291,7 +310,7 @@ private fun FamilyMemberCard(
                 if (member.admin) {
                     Text(
                         "מנהל המשפחה",
-                        color = Color(0xFF637B97),
+                        color = fcaColor(Color(0xFF637B97), FcaColorRole.SECONDARY),
                         fontSize = 12.sp
                     )
                 }
@@ -467,6 +486,8 @@ private fun FamilyAddress(
                     state.candidate?.display.orEmpty(),
                     color = VehicleInk
                 )
+
+                VerifiedAddressMap(state.candidate?.location, Modifier.fillMaxWidth().height(180.dp))
 
                 Row {
                     TextButton(

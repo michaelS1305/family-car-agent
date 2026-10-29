@@ -49,7 +49,8 @@ class FamilyTest {
             calls += "role:$owner:$ref"; return roleAction(role)
         }
         override suspend fun resolve(owner: String, draft: String): ResolvedAddress {
-            calls += "resolve:$owner:$draft"; return ResolvedAddress("normalized", "display", "test-token")
+            calls += "resolve:$owner:$draft"; return ResolvedAddress("normalized", "display", "test-token",
+                VerifiedLocation.from(JSONObject().put("latitude", 31.0).put("longitude", 35.0)))
         }
         override suspend fun address(owner: String, candidate: ResolvedAddress): String {
             calls += "save:$owner:${candidate.token}"; return save()
@@ -59,6 +60,110 @@ class FamilyTest {
     private suspend fun settle() { repeat(8) { yield() } }
     private fun vm(api: Gateway, scope: CoroutineScope, identity: () -> FamilyIdentity? = { FamilyIdentity("A", 1) }) =
         FamilyViewModel(api, identity, scope)
+
+    @Test fun revisitDisplaysSnapshotButBlocksWritesAndSharingUntilFreshProfile() = runBlocking {
+        var who: FamilyIdentity? = FamilyIdentity("A", 1)
+        val api = Gateway()
+        val model = vm(api, this) { who }
+        val gate = CompletableDeferred<FamilyProfile>()
+        try {
+            model.start(); settle(); model.pause()
+            api.read = { gate.await() }; model.start(); model.start(); settle()
+            assertEquals(profile(), model.visibleState.profile)
+            assertTrue(model.visibleState.loading)
+            model.editAddress(); model.role(member.ref, FamilyRole.NONE); model.askRegenerate()
+            assertNull(model.openMemberAddition())
+            assertEquals(AddressStage.VIEW, model.visibleState.addressStage)
+            assertFalse(model.visibleState.codeConfirmation); assertEquals(listOf("read:A", "read:A"), api.calls)
+            gate.complete(profile(false)); settle()
+            model.editAddress(); assertEquals(AddressStage.VIEW, model.visibleState.addressStage)
+            assertEquals("abc123", model.openMemberAddition())
+            who = null; model.reconcileIdentity(); who = FamilyIdentity("A", 1)
+            assertNull(model.visibleState.profile)
+        } finally { gate.complete(profile()); model.stop() }
+    }
+
+    @Test fun memberAdditionUsesExistingCodeForAdminAndMemberAndRefreshesOnce() = runBlocking {
+        for (admin in listOf(false, true)) {
+            val api = Gateway().apply { data = profile(admin) }
+            val model = vm(api, this)
+            try {
+                assertNull(model.openMemberAddition()); assertFalse(model.visibleState.memberAddition)
+                model.start(); settle()
+                assertEquals("abc123", model.openMemberAddition()); assertNull(model.openMemberAddition())
+                assertTrue(model.visibleState.memberAddition)
+                assertEquals("abc123", model.visibleState.profile!!.code)
+                assertEquals(listOf("read:A"), api.calls)
+                api.data = api.data.copy(members = api.data.members + member.copy(ref = "00000000-0000-0000-0000-000000000002"))
+                model.closeMemberAddition(); model.closeMemberAddition(); settle()
+                assertFalse(model.visibleState.memberAddition)
+                assertEquals(2, model.visibleState.profile!!.members.size)
+                assertEquals(listOf("read:A", "read:A"), api.calls)
+            } finally { model.stop() }
+        }
+    }
+
+    @Test fun memberAdditionRefreshFailureKeepsProfileAndCanRetry() = runBlocking {
+        val api = Gateway()
+        val model = vm(api, this)
+        try {
+            model.start(); settle(); model.openMemberAddition()
+            api.read = { error("offline") }
+            model.closeMemberAddition(); settle()
+            assertTrue(model.visibleState.loadError)
+            assertNotNull(model.visibleState.profile)
+            api.read = { profile().copy(code = "new456") }
+            model.retry(); settle()
+            assertFalse(model.visibleState.loadError)
+            assertEquals("new456", model.visibleState.profile!!.code)
+        } finally { model.stop() }
+    }
+
+    @Test fun memberAdditionCannotRevealOldFamilyOrApplyLateRefresh() = runBlocking {
+        var who: FamilyIdentity? = FamilyIdentity("A", 1)
+        val api = Gateway()
+        val model = vm(api, this, { who })
+        val deferred = CompletableDeferred<FamilyProfile>()
+        try {
+            model.start(); settle(); model.openMemberAddition()
+            api.read = { withContext(NonCancellable) { deferred.await() } }
+            model.closeMemberAddition(); settle()
+            who = FamilyIdentity("B", 2)
+            assertFalse(model.visibleState.memberAddition)
+            assertNull(model.visibleState.profile)
+            assertNull(model.openMemberAddition())
+            api.read = { profile().copy(code = "new456") }
+            model.start(); settle()
+            deferred.complete(profile()); settle()
+            assertEquals("new456", model.visibleState.profile!!.code)
+            assertFalse(model.visibleState.memberAddition)
+        } finally { deferred.complete(profile()); model.stop() }
+    }
+
+    @Test fun invitationUsesNativeChooserAndApprovedTextWithoutInventedUrl() {
+        val chooser = familyInvitationChooser("abc123")
+        assertEquals(android.content.Intent.ACTION_CHOOSER, chooser.action)
+        val send = chooser.getParcelableExtra(android.content.Intent.EXTRA_INTENT, android.content.Intent::class.java)!!
+        assertEquals(android.content.Intent.ACTION_SEND, send.action)
+        assertEquals("text/plain", send.type)
+        val text = send.getStringExtra(android.content.Intent.EXTRA_TEXT)!!
+        assertTrue(text.contains("abc123"))
+        assertTrue(text.contains(FAMILY_INVITATION_APP_LINK))
+        assertTrue(text.contains("נא לשמור עליו ולא להעביר אותו לאנשים מחוץ למשפחה."))
+        assertFalse(text.contains("https://"))
+        assertTrue(runCatching { familyInvitationChooser("") }.isFailure)
+    }
+
+    @Test fun addressPreviewUsesCandidateAndClearsAcrossFamilyChanges() = runBlocking {
+        var identity = FamilyIdentity("A", 1)
+        val model = vm(Gateway(), this) { identity }
+        try {
+            model.start(); settle(); model.editAddress(); model.verifyAddress(); settle()
+            assertEquals(31.0, model.visibleState.candidate!!.location!!.latitude, 0.0)
+            identity = FamilyIdentity("B", 2)
+            assertNull(model.visibleState.candidate)
+        } finally { model.stop() }
+    }
 
     @Test fun canonicalAdminAndNullRoleParsing() {
         val row = JSONObject().put("member_ref", member.ref).put("name", member.name)
@@ -144,18 +249,37 @@ class FamilyTest {
         try {
             model.start(); settle(); assertTrue(model.state.loading); assertFalse(model.state.loadError); assertNull(model.state.profile)
             identity = FamilyIdentity("B", 2); assertNull(model.visibleState.profile)
+            assertNull(model.openMemberAddition())
             api.read = { profile(false).copy(code = "bbb123") }; model.start(); settle()
             gate.complete(Unit); settle(); assertEquals("bbb123", model.visibleState.profile!!.code)
             model.stop(); assertNull(model.visibleState.profile)
         } finally { gate.complete(Unit); model.stop() }
     }
+    @Test fun addressResolutionRejectsMissingFieldsAndBlankTokensForBothEndpoints() = runBlocking {
+        fun response() = JSONObject().put("normalized_address", "normalized")
+            .put("display_address", "display").put("resolution_token", "fixture-token")
+        for (create in listOf(false, true)) {
+            for (field in listOf("normalized_address", "display_address", "resolution_token")) {
+                val invalid = response().also { it.remove(field) }
+                assertTrue(runCatching {
+                    AddressVerification.resolve("draft", create) { _, _ -> invalid }
+                }.isFailure)
+            }
+            for (token in listOf("", "   ")) {
+                assertTrue(runCatching {
+                    AddressVerification.resolve("draft", create) { _, _ -> response().put("resolution_token", token) }
+                }.isFailure)
+            }
+        }
+    }
+
     @Test fun sharedAddressResolverKeepsPurposeSpecificContracts() = runBlocking {
         for (create in listOf(true, false)) {
             val result = AddressVerification.resolve("draft", create) { path, body ->
                 assertEquals(if (create) "/api/onboarding/create-family/address" else "/api/family/address/resolve", path)
                 assertEquals("draft", body.getString("home_address"))
                 JSONObject().put("normalized_address", "normalized").put("display_address", "display")
-                    .put("resolution_token", "token").apply { if (create) { put("latitude", 0); put("longitude", 0) } }
+                    .put("resolution_token", "token")
             }
             assertEquals("token", result.token); assertEquals("display", result.display)
         }
@@ -174,13 +298,13 @@ class FamilyTest {
             settle(); assertEquals(profile(), model.state.profile)
         } finally { model.stop() }
     }
-    @Test fun screenWiresExactAssetsInertAddAndCopyFeedback() {
+    @Test fun screenWiresExactAssetsMemberAdditionAndCopyFeedback() {
         val source = java.io.File("src/main/java/il/fca/companion/ui/FamilyScreen.kt").readText()
         for (asset in listOf("family_icon", "ic_add", "ic_edit", "ic_copy"))
             assertTrue(source.contains("R.drawable.$asset"))
         assertTrue(source.contains("VehicleProductHeader(back)"))
         assertTrue(source.contains("BackHandler(onBack = back)"))
-        assertTrue(source.contains("FamilyIconAction(R.drawable.ic_add, \"הוספה\", {})"))
+        assertTrue(source.contains("FamilyIconAction(R.drawable.ic_add, \"הוספה\", shareInvitation)"))
         assertTrue(source.contains("הקוד הועתק"))
         assertTrue(source.contains("ClipDescription.EXTRA_IS_SENSITIVE"))
     }

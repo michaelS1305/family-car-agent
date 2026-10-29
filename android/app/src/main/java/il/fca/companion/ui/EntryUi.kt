@@ -25,12 +25,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import il.fca.companion.R
 
-private val Navy = Color(0xFF112642)
-private val Primary = Color(0xFF243341)
-private val Secondary = Color(0xFF637B97)
-private val Outline = Color(0xFFD7D9DC)
+private val Navy: Color
+    @Composable get() = fcaColor(Color(0xFF112642), FcaColorRole.TEXT)
+private val Primary: Color
+    @Composable get() = fcaColor(Color(0xFF243341), FcaColorRole.TEXT)
+private val Secondary: Color
+    @Composable get() = fcaColor(Color(0xFF637B97), FcaColorRole.SECONDARY)
+private val Outline: Color
+    @Composable get() = fcaColor(Color(0xFFD7D9DC), FcaColorRole.BORDER)
 private val Shape = RoundedCornerShape(16.dp)
-private const val ADDRESS_HELP = "יש להזין את הכתובת כפי שהיא מופיעה ב-Google Maps.\nיש לכתוב: עיר, רחוב, מספר בית."
+private const val ADDRESS_HELP = "אפשר להזין עיר, רחוב ומספר בית גם ללא פסיקים.\nבשלב הבא יש לבדוק ולאשר את הכתובת שנמצאה."
 internal const val DRIVING_CONSENT = "אני עומד/ת בדרישות החוק החלות על נהג פעיל ברכב זה. בישראל, ההנחה למוצר היא גיל מינימלי של 16 שנים ו־9 חודשים לרישיון B. אם אני קטין/ה, השימוש הוא באחריות ובאישור הורה או אפוטרופוס. ידוע לי שהאפליקציה אינה בודקת תוקף רישיון או כשירות חוקית לנהיגה."
 
 @Composable
@@ -38,15 +42,19 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
             booking: BookingViewModel,
             login: () -> Unit, next: () -> Unit,
             back: () -> Unit, changeAddress: () -> Unit, retryBootstrap: () -> Unit, enteredApp: () -> Unit,
-            logout: () -> Unit, account: AccountSettingsModel? = null) {
-    SideEffect { account?.reconcile() }
+            logout: () -> Unit, account: AccountSettingsModel? = null,
+            firstVehicleSetup: FirstVehicleSetupState? = null, setupIdentity: () -> VehiclesIdentity? = { null }) {
+    SideEffect {
+        account?.reconcile()
+        history.reconcileIdentity()
+        vehicles.reconcileIdentity()
+        family.reconcileIdentity()
+    }
     var legal by remember { mutableStateOf<LegalCopy?>(null) }
     LaunchedEffect(chat.ownerGeneration, model.authenticatedFamilyId, model.screen) {
         booking.activate(chat.ownerGeneration, model.authenticatedFamilyId)
     }
-    MaterialTheme(colorScheme = lightColorScheme(primary = Primary, onPrimary = Color.White,
-        secondary = Secondary, background = Color.White, surface = Color.White, onSurface = Navy,
-        onSurfaceVariant = Secondary, outline = Outline, surfaceTint = Color.Transparent)) {
+    FcaTheme {
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             BackHandler(model.screen == EntryScreen.LOGIN || model.screen == EntryScreen.ONBOARDING || model.busy) { back() }
             if (model.screen == EntryScreen.AUTHENTICATED_APP) LaunchedEffect(Unit) { enteredApp() }
@@ -56,7 +64,8 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                     LaunchedEffect(chat.ownerGeneration) { chat.enter() }
                     key(chat.ownerGeneration) {
                         AuthenticatedAppShell(chat, model.authenticatedName, logout, model.busy, model.error,
-                            history, model.authenticatedFamilyId, vehicles, family, booking, account)
+                            history, model.authenticatedFamilyId, vehicles, family, booking, account,
+                            firstVehicleSetup, setupIdentity())
                     }
                     account?.let { AccountDeletionDialog(it, logout, model.busy, model.error) }
                 } else if (model.screen == EntryScreen.BOOTSTRAP) {
@@ -104,14 +113,13 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                                         StepHeading("זו הכתובת הנכונה?"); Gap(10)
                                         StepSupporting("בדקו את הפרטים לפני שממשיכים."); Gap(if (compact) 12 else 20)
                                         OutlinedCard(Modifier.fillMaxWidth(), shape = Shape, border = BorderStroke(1.dp, Outline),
-                                            colors = CardDefaults.outlinedCardColors(containerColor = Color.White)) {
+                                            colors = CardDefaults.outlinedCardColors(containerColor = fcaColor(Color.White, FcaColorRole.SURFACE))) {
                                             Text(model.resolvedAddress, Modifier.fillMaxWidth().padding(12.dp),
                                                 textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold)
                                         }
                                         Gap(10)
-                                        // Neutral reservation only: no fabricated map, location or SDK.
-                                        Box(Modifier.fillMaxWidth().height(if (compact) 72.dp else 100.dp)
-                                            .background(Color(0xFFF1F3F3), Shape).border(1.dp, Outline, Shape))
+                                        VerifiedAddressMap(model.addressLocation,
+                                            Modifier.fillMaxWidth().height(if (compact) 150.dp else 180.dp))
                                     }
                                     model.step == 4 && model.route == LoginRoute.JOIN_FAMILY -> {
                                         StepHeading("קוד המשפחה"); Gap(if (compact) 24 else 46)
@@ -122,7 +130,7 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                                         StepHeading("איך קוראים לך?"); Gap(if (compact) 16 else 24)
                                         Field("השם שלך", "הקלד את שמך", model.userName, !model.busy) { model.userName = it }; Gap(10)
                                         OutlinedCard(Modifier.fillMaxWidth(), shape = Shape, border = BorderStroke(1.dp, Outline),
-                                            colors = CardDefaults.outlinedCardColors(containerColor = Color.White)) {
+                                            colors = CardDefaults.outlinedCardColors(containerColor = fcaColor(Color.White, FcaColorRole.SURFACE))) {
                                             Row(Modifier.padding(4.dp), verticalAlignment = Alignment.Top) {
                                                 Checkbox(model.consent, { model.consent = it }, enabled = !model.busy,
                                                     modifier = Modifier.semantics { contentDescription = DRIVING_CONSENT })
@@ -206,7 +214,7 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
 }
 @Composable private fun Action(text: String, enabled: Boolean, action: () -> Unit) {
     Button(onClick = action, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
-        shape = Shape, colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = Color.White)) {
+        shape = Shape, colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = fcaColor(Color.White, FcaColorRole.ON_ACTION))) {
         Text(text, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
     }
 }
@@ -214,11 +222,11 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                               keyboard: KeyboardType = KeyboardType.Text, change: (String) -> Unit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
         Text(label, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        OutlinedTextField(value, change, placeholder = { Text(placeholder, color = Color(0xFF96A3B5)) },
+        OutlinedTextField(value, change, placeholder = { Text(placeholder, color = fcaColor(Color(0xFF96A3B5), FcaColorRole.SECONDARY)) },
             enabled = enabled, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = keyboard),
             modifier = Modifier.fillMaxWidth().semantics { contentDescription = label }, shape = Shape,
             colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = Outline, focusedBorderColor = Primary,
-                unfocusedContainerColor = Color.White, focusedContainerColor = Color.White))
+                unfocusedContainerColor = fcaColor(Color.White, FcaColorRole.SURFACE), focusedContainerColor = fcaColor(Color.White, FcaColorRole.SURFACE)))
     }
 }
 @Composable private fun Feedback(model: OnboardingModel) {

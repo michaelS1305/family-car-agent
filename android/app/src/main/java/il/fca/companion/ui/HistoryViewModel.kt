@@ -15,6 +15,7 @@ internal data class CurrentVehicleState(val status: CurrentUseStatus = CurrentUs
     val allAvailable get() = status == CurrentUseStatus.READY && occupied.isEmpty()
 }
 internal data class HistoryState(
+    val illustrations: Map<String, VehicleCategory?> = emptyMap(),
     val rows: List<HistoryUsage> = emptyList(), val loaded: Boolean = false,
     val loading: Boolean = false, val pageError: Boolean = false,
     val hasMore: Boolean = false, val nextCursor: String? = null,
@@ -32,7 +33,10 @@ internal class HistoryViewModel(
     private val broadcasts: (HistoryIdentity) -> Flow<BroadcastSignal>,
     private val testScope: CoroutineScope? = null,
 ) : ViewModel() {
-    var state by mutableStateOf(HistoryState()); private set
+    private var stored by mutableStateOf(HistoryState())
+    var state: HistoryState
+        get() { val snapshot = stored; return if (active != null && active == identity()) snapshot else HistoryState() }
+        private set(value) { stored = value }
     private val scope get() = testScope ?: viewModelScope
     private var active: HistoryIdentity? = null
     private var epoch = 0L
@@ -45,6 +49,7 @@ internal class HistoryViewModel(
     private var optionsJob: Job? = null
     private var refreshPending = false
     private var connected: Boolean? = null
+    private var replacing = false
     private fun valid(expected: HistoryIdentity, version: Long) =
         active == expected && identity() == expected && epoch == version
     private fun launch(block: suspend CoroutineScope.() -> Unit): Job =
@@ -53,21 +58,33 @@ internal class HistoryViewModel(
     fun start() {
         val next = identity()
         if (root?.isActive == true && active == next) return
-        stop()
+        if (active != next) stop()
         if (next == null) return
         active = next
         root = SupervisorJob(scope.coroutineContext[Job])
-        state = HistoryState()
-        loadPage(); refreshCurrent(); loadOptions(); subscribe()
+        loadPage(replace = true); refreshCurrent(); loadOptions(); loadIllustrations(); subscribe()
     }
     fun stop() {
         epoch++; currentEpoch++; filterEpoch++
         root?.cancel(); root = null; active = null
         pageJob = null; currentJob = null; subscription = null; optionsJob = null
         refreshPending = false; connected = null
+        replacing = false
         state = HistoryState()
     }
     override fun onCleared() { stop() }
+    fun reconcileIdentity() { if (active != null && active != identity()) stop() }
+
+    fun pause() {
+        val snapshot = state
+        epoch++; currentEpoch++; filterEpoch++
+        root?.cancel(); root = null
+        pageJob = null; currentJob = null; subscription = null; optionsJob = null
+        refreshPending = false; connected = null
+        state = snapshot.copy(loading = false, optionsLoading = false, sheet = false,
+            draft = snapshot.applied, current = CurrentVehicleState())
+        if (active != identity()) stop()
+    }
 
     fun openFilters() { state = state.copy(sheet = true, draft = state.applied, rangeError = false) }
     fun dismissFilters() { state = state.copy(sheet = false, draft = state.applied, rangeError = false) }
@@ -80,6 +97,7 @@ internal class HistoryViewModel(
     fun clearFilters() { resetPages(HistoryFilters()) }
     private fun resetPages(filters: HistoryFilters) {
         filterEpoch++; pageJob?.cancel(); pageJob = null
+        replacing = false
         state = state.copy(rows = emptyList(), loaded = false, loading = false, pageError = false,
             hasMore = false, nextCursor = null, applied = filters, draft = filters, rangeError = false)
         loadPage()
@@ -88,14 +106,16 @@ internal class HistoryViewModel(
         if (state.pageError || !state.loaded || !state.hasMore || state.nextCursor == null) return
         loadPage()
     }
-    fun retryPage() { loadPage() }
-    private fun loadPage() {
+    fun retryPage() { loadPage(replace = replacing) }
+    private fun loadPage(replace: Boolean = false) {
+        if (root?.isActive != true) return
         val expected = active ?: return
-        if (state.loading || (state.loaded && !state.hasMore)) return
+        if (state.loading || (!replace && state.loaded && !state.hasMore)) return
         val version = epoch
         val filters = filterEpoch
         val query = state.applied
-        val cursor = if (state.loaded) state.nextCursor ?: return else null
+        val cursor = if (state.loaded && !replace) state.nextCursor ?: return else null
+        replacing = replace
         state = state.copy(loading = true, pageError = false)
         pageJob = launch {
             try {
@@ -103,7 +123,8 @@ internal class HistoryViewModel(
                 if (!valid(expected, version) || filters != filterEpoch) return@launch
                 // A repeated cursor would make the end-of-list observer loop forever.
                 check(!page.hasMore || (page.nextCursor != null && page.nextCursor != cursor))
-                state = state.copy(rows = (state.rows + page.rows).distinctBy { it.sessionRef },
+                replacing = false
+                state = state.copy(rows = ((if (replace) emptyList() else state.rows) + page.rows).distinctBy { it.sessionRef },
                     loaded = true, loading = false, hasMore = page.hasMore, nextCursor = page.nextCursor)
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) {
@@ -112,7 +133,23 @@ internal class HistoryViewModel(
             }
         }
     }
+    private fun loadIllustrations() {
+        if (root?.isActive != true) return
+        val expected = active ?: return
+        val version = epoch
+        launch {
+            try {
+                val illustrations = gateway.illustrations(expected.owner)
+                if (valid(expected, version)) state = state.copy(illustrations = illustrations)
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                // Optional artwork metadata must never block history or current-use loading.
+            }
+        }
+    }
+
     fun loadOptions() {
+        if (root?.isActive != true) return
         val expected = active ?: return
         if (optionsJob?.isActive == true) return
         val version = epoch
@@ -129,6 +166,7 @@ internal class HistoryViewModel(
     }
     fun retryCurrent() { subscribe(); refreshCurrent() }
     private fun subscribe() {
+        if (root?.isActive != true) return
         val expected = active ?: return
         val version = epoch
         subscription?.cancel()
@@ -156,6 +194,7 @@ internal class HistoryViewModel(
         }
     }
     fun refreshCurrent() {
+        if (root?.isActive != true) return
         val expected = active ?: return
         if (currentJob?.isActive == true) { refreshPending = true; return }
         val version = epoch

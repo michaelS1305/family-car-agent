@@ -62,6 +62,8 @@ object Http {
         require(origin.scheme == "https" && origin.host != null && origin.userInfo == null &&
             origin.rawQuery == null && origin.rawFragment == null)
         val connection = URI(base.trimEnd('/') + path).toURL().openConnection() as HttpURLConnection
+        val started = System.nanoTime()
+        var responseStatus = 0
         try {
             connection.instanceFollowRedirects = false
             connection.requestMethod = method
@@ -76,8 +78,25 @@ object Http {
                 connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             }
             val status = connection.responseCode
+            responseStatus = status
             if (status !in 200..299) throw error(connection, status)
             return connection.inputStream.bufferedReader().use { it.readText() }
-        } finally { connection.disconnect() }
+        } finally {
+            connection.disconnect()
+            if (il.fca.companion.BuildConfig.DEBUG) {
+                // Fixed categories only: never log URLs, identifiers, headers or exception text.
+                val operation = when {
+                    path == "/api/me" -> "bootstrap"
+                    path.startsWith("/auth/v1/") -> "auth"
+                    path.startsWith("/api/vehicles") -> "vehicles"
+                    path.startsWith("/api/family") -> "family"
+                    path.startsWith("/api/car/history") -> "history"
+                    path.startsWith("/api/reservations") -> "bookings"
+                    path.startsWith("/api/chat") -> "chat"
+                    else -> "other"
+                }
+                android.util.Log.d("FCA_LOADING", "operation=$operation status=$responseStatus duration_ms=${(System.nanoTime() - started) / 1_000_000}")
+            }
+        }
     }
 }

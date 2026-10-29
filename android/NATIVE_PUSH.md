@@ -1,4 +1,4 @@
-# Native Android Push A1 + A2 (Dev only)
+# Native Android Push A1 + A2
 
 No backend changes or live-delivery tests are part of this implementation.
 
@@ -6,16 +6,28 @@ No backend changes or live-delivery tests are part of this implementation.
 
 Dev uses the existing ignored `app/src/dev/google-services.json`, Google Services
 plugin 4.4.4 and Firebase Messaging 24.1.2 (non-KTX). The SDK and messaging service
-are Dev-source-set only. Runtime token access requires Firebase project
+remain in the Dev source set. Runtime token access requires Firebase project
 `family-car-agent-dev`; the Google Services task matches the Dev application ID.
-Prod has a no-op platform implementation, no Messaging SDK, no service, no Google
-Services processing and no invented Firebase configuration. Existing backend URLs
+Prod now has its own Messaging SDK dependency, service and platform implementation.
+Google Services reads only the ignored `app/src/prod/google-services.json`; build
+validation requires project `family-car-agent-dev`, sender `452367109329`, package
+`il.fca.companion` and App ID `1:452367109329:android:c5a668180a0a8b84bdc9f0`.
+Runtime token access and service callbacks validate the same identity and the
+existing Production backend/Supabase endpoints. These public identifiers are not
+credentials or cryptographic client attestation. Existing backend URLs
 and credentials continue to come from the existing flavor configuration.
 
 Auto-init, analytics collection and notification delegation are disabled in Dev's
-manifest. Token retrieval is explicit after authenticated app entry. Do not enable
+manifest and in the new Prod manifest. Token retrieval is explicit after authenticated app entry. Do not enable
 Firebase auto-init or server notification payloads as a workaround for background
 restrictions. The backend protocol is data-only.
+
+Production sending on Render is not enabled by this client integration. Before
+installing/signing in for an approved end-to-end test, verify the Production
+backend isolation configuration (`prod`, package `il.fca.companion`), separate
+database, service-account file and encryption keys, and package-restricted FCM
+challenge/refresh delivery. Never test Production tokens against Render Dev.
+Local ProdDebug builds are not release-signing or store-distribution validation.
 
 ## Identity and private state
 
