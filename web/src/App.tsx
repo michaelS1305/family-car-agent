@@ -1,3 +1,4 @@
+import { isValidAddress } from './onboarding/addressInput'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import './App.css'
@@ -60,10 +61,6 @@ const initialForm: FormData = {
   addressResolutionToken: '',
 }
 
-function isValidAddress(address: string) {
-  const parts = address.split(',').map((part) => part.trim())
-  return parts.length === 3 && parts.every(Boolean) && /\d/.test(parts[2])
-}
 
 function WelcomeScreen({ onChoose }: { onChoose: (flow: Exclude<Flow, 'welcome'>) => void }) {
   return (
@@ -395,7 +392,7 @@ function FlowScreen(props: FlowScreenProps) {
       content = (
         <TextStep
           title="מה כתובת הבית?"
-          description="הכתובת נדרשת לאימות המשפחה ולבדיקת ניתוק אופציונלית בקרבת הבית. יש להזין את הכתובת כפי שהיא מופיעה ב-Google Maps. יש לכתוב: עיר, רחוב, מספר בית."
+          description="הכתובת נדרשת לאימות המשפחה ולבדיקת ניתוק אופציונלית בקרבת הבית. אפשר להזין עיר, רחוב ומספר בית גם ללא פסיקים. יש לבדוק ולאשר את ההצעה בשלב הבא."
           label="כתובת הבית"
           value={form.address}
           placeholder="תל אביב, דיזנגוף, 120"
@@ -452,7 +449,7 @@ function FlowScreen(props: FlowScreenProps) {
     content = (
       <TextStep
         title="מה כתובת הבית?"
-        description="הכתובת נדרשת לאימות המשפחה ולבדיקת ניתוק אופציונלית בקרבת הבית. יש להזין את הכתובת כפי שהיא מופיעה ב-Google Maps. יש לכתוב: עיר, רחוב, מספר בית."
+        description="הכתובת נדרשת לאימות המשפחה ולבדיקת ניתוק אופציונלית בקרבת הבית. אפשר להזין עיר, רחוב ומספר בית גם ללא פסיקים. יש לבדוק ולאשר את ההצעה בשלב הבא."
         label="כתובת הבית"
         value={form.address}
         placeholder="תל אביב, דיזנגוף, 120"
@@ -1039,7 +1036,7 @@ function App() {
       if (flow === 'create' && field === 'address') {
         registerValidationFailure(
           'address',
-          'כתובת לא נכתבה בפורמט הנכון. יש לכתוב: עיר, רחוב, מספר בית.',
+          'יש להזין כתובת הכוללת עיר, רחוב ומספר בית, עד 200 תווים.',
         )
         return
       }
@@ -1056,11 +1053,11 @@ function App() {
       if (flow === 'create') {
         registerValidationFailure(
           'address',
-          'כתובת לא נכתבה בפורמט הנכון. יש לכתוב: עיר, רחוב, מספר בית.',
+          'יש להזין כתובת הכוללת עיר, רחוב ומספר בית, עד 200 תווים.',
         )
         return
       }
-      setError('כתובת לא נכתבה בפורמט הנכון. יש לכתוב: עיר, רחוב, מספר בית.')
+      setError('יש להזין כתובת הכוללת עיר, רחוב ומספר בית, עד 200 תווים.')
       return
     }
 
