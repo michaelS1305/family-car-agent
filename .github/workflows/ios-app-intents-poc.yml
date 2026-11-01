@@ -1,0 +1,58 @@
+name: iOS App Intents Metadata PoC
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    if: github.ref == 'refs/heads/develop'
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect runner Xcode and generate disposable app target
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fca-intents-evidence"
+          {
+            xcode-select -p
+            xcodebuild -version
+            xcrun swift --version
+            xcrun --sdk iphoneos --show-sdk-version
+          } | tee "$RUNNER_TEMP/fca-intents-evidence/toolchain.log"
+          python3 ios/Checks/app-intents-poc.py generate "$GITHUB_WORKSPACE/ios" "$RUNNER_TEMP/fca-intents-wrapper"
+          plutil -lint "$RUNNER_TEMP/fca-intents-wrapper/FCAIntentPoC.xcodeproj/project.pbxproj"
+          cp "$RUNNER_TEMP/fca-intents-wrapper/source-manifest.json" "$RUNNER_TEMP/fca-intents-evidence/"
+      - name: Build real FCA app for iPhone without signing
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project "$RUNNER_TEMP/fca-intents-wrapper/FCAIntentPoC.xcodeproj" \
+            -target FamilyCarAgent -configuration Debug -sdk iphoneos \
+            SYMROOT="$RUNNER_TEMP/fca-intents-products" \
+            OBJROOT="$RUNNER_TEMP/fca-intents-intermediates" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build \
+            2>&1 | tee "$RUNNER_TEMP/fca-intents-evidence/build.log"
+      - name: Verify packaged metadata and Dev identity
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/fca-intents-products/Debug-iphoneos/FamilyCarAgent.app"
+          # Preserve the unsigned app even when the metadata assertion fails.
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/fca-intents-evidence/FCA-Dev-Debug-UNSIGNED.zip"
+          python3 ios/Checks/app-intents-poc.py verify "$app" "$RUNNER_TEMP/fca-intents-evidence/metadata-report.json"
+      - name: Upload unsigned app and diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fca-app-intents-poc-${{ github.run_id }}
+          path: ${{ runner.temp }}/fca-intents-evidence/
+          if-no-files-found: warn
+          retention-days: 7
