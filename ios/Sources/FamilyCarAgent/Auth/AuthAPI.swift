@@ -62,11 +62,43 @@ struct JoinState: Decodable, Sendable {
     let family_name: String?
     let normalized_address: String?
     let resolved_address: String?
+    let location: VerifiedLocation?
+    private enum CodingKeys: String, CodingKey { case step, family_name, normalized_address, resolved_address }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        step = try c.decode(String.self, forKey: .step)
+        family_name = try c.decodeIfPresent(String.self, forKey: .family_name)
+        normalized_address = try c.decodeIfPresent(String.self, forKey: .normalized_address)
+        resolved_address = try c.decodeIfPresent(String.self, forKey: .resolved_address)
+        location = VerifiedLocation.decode(from: decoder)
+    }
 }
 struct AddressResult: Decodable, Sendable {
     let display_address: String
     let normalized_address: String
     let resolution_token: String
+    let location: VerifiedLocation?
+    private enum CodingKeys: String, CodingKey { case display_address, normalized_address, resolution_token }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        display_address = try c.decode(String.self, forKey: .display_address)
+        normalized_address = try c.decode(String.self, forKey: .normalized_address)
+        resolution_token = try c.decode(String.self, forKey: .resolution_token)
+        location = VerifiedLocation.decode(from: decoder)
+    }
+}
+/// Optional presentation data only: never authorizes address confirmation or saving.
+struct VerifiedLocation: Equatable, Hashable, Sendable {
+    let latitude: Double
+    let longitude: Double
+    private enum CodingKeys: String, CodingKey { case latitude, longitude }
+    static func decode(from decoder: Decoder) -> Self? {
+        guard let c = try? decoder.container(keyedBy: CodingKeys.self),
+              let lat = try? c.decode(Double.self, forKey: .latitude),
+              let lon = try? c.decode(Double.self, forKey: .longitude),
+              lat.isFinite, lon.isFinite, (-90...90).contains(lat), (-180...180).contains(lon) else { return nil }
+        return Self(latitude: lat, longitude: lon)
+    }
 }
 struct CreatedResult: Decodable, Sendable { let created: Bool }
 struct FamilyCode: Decodable, Sendable { let family_code: String }
@@ -91,10 +123,11 @@ private final class NoRedirect: NSObject, URLSessionTaskDelegate, Sendable {
 }
 
 /// No shared cookies/cache, redirects, raw errors, token logging, or arbitrary destinations.
-final class AuthAPI: AuthTransport, BackendTransport, Sendable {
+final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTransport, VehiclesTransport, VehicleDetailsTransport, HistoryTransport, Sendable {
     let environment: AppEnvironment
     private let publicKey: String
     private let http: URLSession
+    private let chatHTTP: URLSession
     init(environment: AppEnvironment, publicKey: String) throws {
         guard Self.validPublicKey(publicKey) else { throw AuthFailure.configuration }
         self.environment = environment; self.publicKey = publicKey
@@ -102,6 +135,137 @@ final class AuthAPI: AuthTransport, BackendTransport, Sendable {
         configuration.httpCookieStorage = nil; configuration.urlCache = nil
         configuration.timeoutIntervalForRequest = 20; configuration.timeoutIntervalForResource = 30
         self.http = URLSession(configuration: configuration, delegate: NoRedirect(), delegateQueue: nil)
+        self.chatHTTP = URLSession(configuration: Self.chatConfiguration(), delegate: NoRedirect(), delegateQueue: nil)
+    }
+    static func chatConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil; configuration.urlCache = nil
+        configuration.timeoutIntervalForRequest = 90
+        configuration.timeoutIntervalForResource = 90
+        return configuration
+    }
+    /// Fixed destinations only; never use the Supabase public key on Backend requests.
+    func makeChatRequest(token: String, id: UUID?, message: String?) throws -> URLRequest {
+        guard (id == nil) == (message == nil) else { throw AuthFailure.configuration }
+        var components = URLComponents(url: environment.backendURL.appendingPathComponent(
+            id == nil ? "api/chat/history" : "api/chat"), resolvingAgainstBaseURL: false)!
+        if id == nil { components.queryItems = [URLQueryItem(name: "limit", value: "30")] }
+        guard let url = components.url else { throw AuthFailure.configuration }
+        var request = URLRequest(url: url)
+        request.httpMethod = id == nil ? "GET" : "POST"
+        request.timeoutInterval = id == nil ? 15 : 90
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let id, let message {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(["request_id": id.uuidString.lowercased(), "message": message])
+        }
+        return request
+    }
+    func chat(token: String, id: UUID?, message: String?) async throws -> Data {
+        let request = try makeChatRequest(token: token, id: id, message: message)
+        let data: Data; let response: URLResponse
+        do { (data, response) = try await chatHTTP.data(for: request) }
+        catch { throw ChatFailure.uncertain } // Cancellation cannot establish server-side cancellation.
+        guard let response = response as? HTTPURLResponse else { throw ChatFailure.uncertain }
+        guard (200..<300).contains(response.statusCode) else {
+            throw ChatFailure.parse(status: response.statusCode, data: data,
+                                    retryHeader: response.value(forHTTPHeaderField: "Retry-After"))
+        }
+        guard data.count <= 1_048_576 else { throw ChatFailure.uncertain }
+        return data
+    }
+    func family(token: String, operation: FamilyOperation) async throws -> FamilyReply {
+        let url = environment.backendURL.appendingPathComponent(String(operation.path.dropFirst()))
+        let body = try operation.body()
+        func load<T: Decodable & Sendable>(_ type: T.Type) async throws -> T {
+            try await send(type, url: url, method: operation.method, body: body, token: token, auth: false)
+        }
+        switch operation {
+        case .profile: return .profile(try await load(FamilyProfile.self).validated())
+        case .role(let id, _):
+            let member = try await load(FamilyMember.self)
+            guard member.id == id else { throw AuthFailure.invalidResponse }
+            return .member(member)
+        case .resolve:
+            let value = try await load(AddressResult.self)
+            guard [value.display_address, value.normalized_address, value.resolution_token].allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { throw AuthFailure.invalidResponse }
+            return .candidate(value)
+        case .address:
+            let value = try await load(FamilyAddressUpdate.self)
+            guard !value.home_address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AuthFailure.invalidResponse }
+            return .address(value.home_address)
+        case .regenerate:
+            let value = try await load(FamilyCode.self)
+            guard FamilyInvitation.validCode(value.family_code) else { throw AuthFailure.invalidResponse }
+            return .code(value.family_code)
+        }
+    }
+    func history(token: String, operation: HistoryOperation) async throws -> HistoryReply {
+        if case .page(let filters, _) = operation, !filters.valid { throw AuthFailure.configuration }
+        var components = URLComponents(url: environment.backendURL.appendingPathComponent(String(operation.path.dropFirst())), resolvingAgainstBaseURL: false)!
+        components.queryItems = operation.query.isEmpty ? nil : operation.query
+        guard let url = components.url else { throw AuthFailure.configuration }
+        func load<T: Decodable & Sendable>(_ type: T.Type) async throws -> T {
+            try await send(type, url: url, method: "GET", body: nil, token: token, auth: false)
+        }
+        switch operation {
+        case .page: return .page(try await load(HistoryPage.self))
+        case .current:
+            let values = try await load([HistoryVehicle].self)
+            guard Set(values.map(\.id)).count == values.count else { throw AuthFailure.invalidResponse }
+            return .current(values)
+        case .members:
+            let values = try await load(HistoryMembers.self).members
+            guard Set(values.map(\.id)).count == values.count else { throw AuthFailure.invalidResponse }
+            return .members(values)
+        }
+    }
+    func vehiclesURL(_ operation: VehiclesOperation) -> URL {
+        environment.backendURL.appendingPathComponent(String(operation.path.dropFirst())).appending(queryItems: operation.query)
+    }
+    func vehicles(token: String, operation: VehiclesOperation) async throws -> VehiclesReply {
+        let body = try operation.body()
+        func load<T: Decodable & Sendable>(_ type: T.Type) async throws -> T {
+            try await send(type, url: vehiclesURL(operation), method: operation.method, body: body, token: token, auth: false)
+        }
+        switch operation {
+        case .list:
+            let rows = try await load([ManagedVehicle].self)
+            guard Set(rows.map(\.id)).count == rows.count else { throw AuthFailure.invalidResponse }
+            return .list(rows)
+        case .permission: return .permission(try await load(VehiclePermission.self).can_edit_roles)
+        case .manufacturers:
+            let rows = try await load([VehicleManufacturer].self)
+            guard rows.allSatisfy({ $0.id > 0 }), Set(rows.map(\.id)).count == rows.count else { throw AuthFailure.invalidResponse }
+            return .manufacturers(rows)
+        case .create: return .created(try await load(ManagedVehicle.self))
+        }
+    }
+    func vehicleDetails(token: String, id: UUID, operation: VehicleDetailsOperation) async throws -> VehicleDetailsReply {
+        let url = environment.backendURL.appendingPathComponent(String(operation.path(id).dropFirst()))
+        let body = try operation.body()
+        func load<T: Decodable & Sendable>(_ type: T.Type) async throws -> T {
+            try await send(type, url: url, method: operation.method, body: body, token: token, auth: false)
+        }
+        switch operation {
+        case .detail:
+            let value = try await load(VehicleDetail.self)
+            guard value.vehicle.id == id else { throw AuthFailure.invalidResponse }
+            return .detail(value)
+        case .maintenance:
+            let values = try await load([VehicleMaintenance].self)
+            guard Set(values.map(\.id)).count == values.count else { throw AuthFailure.invalidResponse }
+            return .maintenance(values)
+        case .edit, .retire:
+            let value = try await load(ManagedVehicle.self)
+            guard value.id == id else { throw AuthFailure.invalidResponse }
+        case .add: _ = try await load(VehicleMaintenance.self)
+        case .update(let item, _), .complete(let item):
+            guard try await load(VehicleMaintenance.self).id == item else { throw AuthFailure.invalidResponse }
+        case .delete: _ = try await load(VehicleDeletionReceipt.self)
+        }
+        return .saved
     }
     static func validPublicKey(_ key: String) -> Bool {
         // Publishable only: never accept service-role, secret keys or arbitrary JWTs.
@@ -137,6 +301,11 @@ final class AuthAPI: AuthTransport, BackendTransport, Sendable {
         guard let response = response as? HTTPURLResponse, data.count <= 1_048_576 else { throw AuthFailure.invalidResponse }
         guard (200..<300).contains(response.statusCode) else {
             throw Self.failure(status: response.statusCode, data: data, path: url.path)
+        }
+        // Only the maintenance DELETE contract accepts an empty 204 response.
+        if type == VehicleDeletionReceipt.self {
+            guard method == "DELETE", response.statusCode == 204, data.isEmpty else { throw AuthFailure.invalidResponse }
+            return VehicleDeletionReceipt() as! T
         }
         do { return try JSONDecoder().decode(type, from: data) }
         catch { throw AuthFailure.invalidResponse }

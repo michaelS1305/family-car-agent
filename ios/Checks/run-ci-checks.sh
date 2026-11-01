@@ -6,10 +6,24 @@ export SWIFT_BIN="${SWIFT_BIN:-$(command -v swiftc)}"
 out=$(mktemp -d "${TMPDIR:-/tmp}/fca-ios-ci.XXXXXX")
 trap 'rm -rf "$out"' EXIT
 bash Checks/run-auth-checks.sh
+bash Checks/run-chat-checks.sh
+bash Checks/run-dashboard-checks.sh
+bash Checks/run-family-checks.sh
+bash Checks/run-vehicles-checks.sh
+bash Checks/run-vehicle-details-checks.sh
+bash Checks/run-history-checks.sh
 python3 Checks/check-entry-resources.py
+python3 Checks/check-chat-resources.py
+python3 Checks/check-navigation-assets.py
+python3 Checks/check-dashboard-resources.py
+python3 Checks/check-family-resources.py
+python3 Checks/check-vehicles-resources.py
+python3 Checks/check-history-resources.py
 base=(Sources/FamilyCarAgent/Config/AppEnvironment.swift
       Sources/FamilyCarAgent/Auth/AuthCore.swift
-      Sources/FamilyCarAgent/Auth/AuthAPI.swift)
+      Sources/FamilyCarAgent/Vehicles/VehiclesCore.swift Sources/FamilyCarAgent/Family/FamilyCore.swift
+      Sources/FamilyCarAgent/Chat/ChatCore.swift
+      Sources/FamilyCarAgent/History/HistoryCore.swift Sources/FamilyCarAgent/Auth/AuthAPI.swift)
 for mode in debug release; do
   # Keep the array nonempty for macOS's Bash 3.2 with nounset enabled.
   flags=(-Onone)
@@ -31,7 +45,7 @@ done
 "$SWIFT_BIN" -D DEBUG -swift-version 6 -warnings-as-errors "${base[@]}" \
   Sources/FamilyCarAgent/Auth/OnboardingValidation.swift \
   Sources/FamilyCarAgent/Auth/EntryModel.swift \
-  Checks/EntryChecks.swift Checks/EntryUIChecks.swift Checks/AuthCheck.swift \
+  Checks/EntryChecks.swift Checks/EntryUIChecks.swift Checks/ChatSessionChecks.swift Checks/FamilySessionChecks.swift Checks/VehiclesSessionChecks.swift Checks/HistorySessionChecks.swift Checks/AuthCheck.swift \
   -o "$out/auth-debug"
 "$out/auth-debug" > "$out/auth-debug.log"
 echo 'PASS: DEBUG authentication and route checks'

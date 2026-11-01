@@ -3,13 +3,20 @@ import Foundation
 import Combine
 #endif
 
-@MainActor final class EntryModel: ObservableObject {
+@MainActor final class EntryModel: ObservableObject, ChatGateway, FamilyGateway, VehicleDetailsGateway, HistoryGateway {
     enum Screen { case intro, login, bootstrap, onboarding, success, ready }
     @Published private(set) var screen = Screen.intro
     @Published private(set) var busy = false
+    // Presentation only: do not briefly reveal Intro before checking the saved session.
+    @Published private(set) var restoring = true
     @Published private(set) var error: String?
     @Published private(set) var me: Me?
     @Published private(set) var step = 1
+    var totalSteps: Int { route == .create ? 4 : 5 }
+    @Published private var editingJoinName = false
+    var displayStep: Int { editingJoinName ? 1 : step }
+    var canGoBack: Bool { !busy && !completed && !(route == .join && step == 5) }
+    @Published private(set) var addressLocation: VerifiedLocation?
     @Published var route = LoginRoute.existing
     @Published var familyName = ""
     @Published var address = ""
@@ -26,6 +33,108 @@ import Combine
     private var sessions: SessionManager?
     private var providers: (any NativeAuthProvider)?
     private var checkingApple = false
+
+    var chatIdentity: ChatIdentity? {
+        guard screen == .ready, let sessions, let session = sessions.session, session.activated,
+              let me, me.user_id > 0, me.family_id > 0 else { return nil }
+        return ChatIdentity(owner: session.owner, user: me.user_id, family: me.family_id,
+                            generation: sessions.generation, version: version)
+    }
+    var vehiclesIdentity: ChatIdentity? { chatIdentity }
+    func historyRequest(identity: ChatIdentity, operation: HistoryOperation) async throws -> HistoryReply {
+        guard let transport = api as? any HistoryTransport, let sessions else { throw AuthFailure.configuration }
+        func check() throws {
+            try Task.checkCancellation()
+            guard chatIdentity == identity else { throw AuthFailure.stale }
+        }
+        func attempt(force: Bool) async throws -> HistoryReply {
+            try check()
+            let token = try await sessions.access(owner: identity.owner, force: force)
+            try check()
+            let reply = try await transport.history(token: token, operation: operation)
+            try check(); return reply
+        }
+        do { return try await attempt(force: false) }
+        catch AuthFailure.rejected(401, _) { try check(); return try await attempt(force: true) }
+    }
+    func vehiclesRequest(identity: ChatIdentity, operation: VehiclesOperation) async throws -> VehiclesReply {
+        guard let transport = api as? any VehiclesTransport, let sessions else { throw AuthFailure.configuration }
+        func check() throws {
+            try Task.checkCancellation()
+            guard vehiclesIdentity == identity else { throw AuthFailure.stale }
+        }
+        func attempt(force: Bool) async throws -> VehiclesReply {
+            try check()
+            let token = try await sessions.access(owner: identity.owner, force: force)
+            try check()
+            let reply = try await transport.vehicles(token: token, operation: operation)
+            try check()
+            return reply
+        }
+        do { return try await attempt(force: false) }
+        catch AuthFailure.rejected(401, _) { try check(); return try await attempt(force: true) }
+    }
+    func vehicleDetailsRequest(identity: ChatIdentity, id: UUID, operation: VehicleDetailsOperation) async throws -> VehicleDetailsReply {
+        guard let transport = api as? any VehicleDetailsTransport, let sessions else { throw AuthFailure.configuration }
+        func check() throws {
+            try Task.checkCancellation()
+            guard vehiclesIdentity == identity else { throw AuthFailure.stale }
+        }
+        func attempt(force: Bool) async throws -> VehicleDetailsReply {
+            try check()
+            let token = try await sessions.access(owner: identity.owner, force: force)
+            try check()
+            let reply = try await transport.vehicleDetails(token: token, id: id, operation: operation)
+            try check(); return reply
+        }
+        do { return try await attempt(force: false) }
+        // An explicit 401 is a rejected request, not an uncertain transport outcome.
+        catch AuthFailure.rejected(401, _) { try check(); return try await attempt(force: true) }
+    }
+    var familyIdentity: ChatIdentity? { chatIdentity }
+    func familyRequest(identity: ChatIdentity, operation: FamilyOperation) async throws -> FamilyReply {
+        guard let transport = api as? any FamilyTransport, let sessions else { throw AuthFailure.configuration }
+        func check() throws {
+            try Task.checkCancellation()
+            guard familyIdentity == identity else { throw AuthFailure.stale }
+        }
+        func attempt(force: Bool) async throws -> FamilyReply {
+            try check()
+            let token = try await sessions.access(owner: identity.owner, force: force)
+            try check()
+            let reply = try await transport.family(token: token, operation: operation)
+            try check()
+            return reply
+        }
+        do { return try await attempt(force: false) }
+        catch AuthFailure.rejected(401, _) {
+            try check()
+            return try await attempt(force: true)
+        }
+    }
+    private func chatRequest(identity: ChatIdentity, id: UUID?, message: String?) async throws -> Data {
+        guard let transport = api as? any ChatTransport, let sessions else { throw AuthFailure.configuration }
+        func check() throws { guard chatIdentity == identity else { throw AuthFailure.stale } }
+        func attempt(force: Bool) async throws -> Data {
+            try check()
+            let token = try await sessions.access(owner: identity.owner, force: force)
+            try check()
+            let data = try await transport.chat(token: token, id: id, message: message)
+            try check()
+            return data
+        }
+        do { return try await attempt(force: false) }
+        catch let failure as ChatFailure where failure.status == 401 {
+            try check()
+            return try await attempt(force: true)
+        }
+    }
+    func chatHistory(identity: ChatIdentity) async throws -> [ChatMessage] {
+        try ChatCodec.history(await chatRequest(identity: identity, id: nil, message: nil))
+    }
+    func chatSend(identity: ChatIdentity, id: UUID, message: String) async throws -> ChatMessage {
+        try ChatCodec.reply(await chatRequest(identity: identity, id: id, message: message), expected: id)
+    }
 
     init(sessions: SessionManager, api: any BackendTransport, providers: any NativeAuthProvider) {
         self.sessions = sessions; self.api = api; self.providers = providers
@@ -47,6 +156,7 @@ import Combine
     private func resetPrivate() {
         me = nil; familyName = ""; address = ""; userName = ""; familyCode = ""
         consent = false; resolutionToken = nil; resolvedAddress = ""; createdCode = ""; completed = false; step = 1
+        addressLocation = nil; editingJoinName = false
     }
     func logout() {
         version += 1; providers?.cancel(); resetPrivate(); screen = .intro; busy = false; error = nil
@@ -66,14 +176,17 @@ import Combine
                 logout(); if self.error == nil { self.error = failure.message }
             default:
                 self.error = failure.message
-                if failure == .rejected(409, "ADDRESS_RESOLUTION_EXPIRED") { resolutionToken = nil; step = 2 }
-                if failure == .rejected(400, "INVALID_FAMILY_NAME") { step = 1 }
+                if failure == .rejected(409, "ADDRESS_RESOLUTION_EXPIRED") { clearAddress(); step = 2 }
+                if failure == .rejected(400, "INVALID_FAMILY_NAME") {
+                    if route == .create { step = 1 } else { editingJoinName = true }
+                }
                 if failure == .rejected(400, "INVALID_USER_NAME") { step = route == .create ? 4 : 5 }
             }
         }
     }
     func start() async {
         guard !started else { return }; started = true
+        defer { restoring = false }
         await perform {
             try sessions?.restore()
             guard sessions?.session != nil else { return }
@@ -103,8 +216,7 @@ import Combine
         default: break
         }
     }
-    // The entry UI stops before any onboarding API operation. Existing domain checks
-    // may still exercise the previously implemented onboarding flow independently.
+    // Preview is retained for isolated checks; the application uses the server-backed flow.
     func login(apple: Bool, previewOnboarding: Bool = false) async {
         await perform {
             #if DEBUG
@@ -159,7 +271,7 @@ import Combine
         guard profile.family_id > 0, profile.user_id > 0, let owner = sessions?.session?.owner else { throw AuthFailure.invalidResponse }
         if !existing && route == .create { createdCode = try await request(FamilyCode.self, "/api/family").family_code }
         try sessions?.activate(owner: owner)
-        me = profile; resolutionToken = nil; familyCode = ""
+        me = profile; resolutionToken = nil; familyCode = ""; addressLocation = nil
         screen = existing ? .ready : .success
     }
     private func bootstrap() async throws {
@@ -172,10 +284,30 @@ import Combine
     }
     func retry() async { await perform { try await bootstrap() } }
     func enter() { guard screen == .success else { return }; screen = .ready }
+    private func clearAddress() { resolutionToken = nil; resolvedAddress = ""; addressLocation = nil }
+    func backOnboarding() async {
+        guard screen == .onboarding, canGoBack else { return }
+        if displayStep == 1 { backFromEntry(); return }
+        if route == .create {
+            error = nil
+            if step == 3 { clearAddress() }
+            step -= 1
+        } else if step == 2 {
+            // Edit presentation only; the authoritative server step stays at address.
+            error = nil; editingJoinName = true
+        } else {
+            await changeAddress() // Server explicitly rolls address confirmation/code back to address.
+        }
+    }
+    func next(from expectedStep: Int) async {
+        guard screen == .onboarding, displayStep == expectedStep else { return }
+        await next()
+    }
     private func apply(_ state: JoinState) throws {
         let steps = ["family_name": 1, "address": 2, "address_confirmed": 3, "family_code": 4, "user_name": 5]
         guard let value = steps[state.step] else { throw AuthFailure.invalidResponse }
-        step = value; screen = .onboarding
+        step = value; screen = .onboarding; editingJoinName = false
+        addressLocation = value == 3 ? state.location : nil
         familyName = state.family_name ?? ""; resolvedAddress = state.resolved_address ?? ""
         if address.isEmpty { address = state.normalized_address ?? "" }
     }
@@ -183,16 +315,20 @@ import Combine
         try apply(await request(JoinState.self, "/api/onboarding/join-family/start", [:]))
     }
     func changeAddress() async {
+        guard screen == .onboarding, !completed, !(route == .join && step == 5) else { return }
         await perform {
             if route == .join {
-                try apply(await request(JoinState.self, "/api/onboarding/join-family/address-confirmation", ["confirmed": .flag(false)]))
-            } else { resolutionToken = nil; step = 2 }
+                do {
+                    try apply(await request(JoinState.self, "/api/onboarding/join-family/address-confirmation", ["confirmed": .flag(false)]))
+                } catch AuthFailure.rejected(409, "INVALID_JOIN_STEP") { try await loadJoin() }
+            } else { clearAddress(); step = 2 }
         }
     }
     func next() async {
         await perform {
             if completed { try await finish(existing: false); return }
             guard screen == .onboarding else { return }
+            let step = displayStep
             let last = route == .create ? 4 : 5
             if step == 1 && !OnboardingValidation.validName(familyName) { throw AuthFailure.rejected(400, "INVALID_FAMILY_NAME") }
             if step == 2 && (address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || address.unicodeScalars.count > 200) {
@@ -204,12 +340,14 @@ import Combine
             }
             if route == .create {
                 switch step {
-                case 1: step = 2
+                case 1: self.step = 2
                 case 2:
+                    clearAddress()
                     let value = try await request(AddressResult.self, "/api/onboarding/create-family/address", ["home_address": .text(address)])
                     guard !value.resolution_token.isEmpty, !value.display_address.isEmpty else { throw AuthFailure.invalidResponse }
-                    resolutionToken = value.resolution_token; resolvedAddress = value.display_address; step = 3
-                case 3: step = 4
+                    resolutionToken = value.resolution_token; resolvedAddress = value.display_address
+                    addressLocation = value.location; self.step = 3
+                case 3: self.step = 4
                 case 4:
                     guard let token = resolutionToken else { throw AuthFailure.rejected(409, "ADDRESS_RESOLUTION_EXPIRED") }
                     let result = try await request(CreatedResult.self, "/api/onboarding/create-family",
@@ -219,6 +357,7 @@ import Combine
                 default: throw AuthFailure.invalidResponse
                 }
             } else {
+                if step == 1 || step == 2 { addressLocation = nil }
                 let suffix: String; let fields: [String: Field]
                 switch step {
                 case 1: suffix = "family-name"; fields = ["family_name": .text(familyName)]

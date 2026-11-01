@@ -100,7 +100,7 @@ struct IntroScreen: View {
     }
 }
 
-private struct EntryBackHeader: View {
+struct EntryBackHeader: View {
     let title: String
     let back: () -> Void
     var body: some View {

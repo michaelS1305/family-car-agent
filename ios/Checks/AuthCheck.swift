@@ -175,6 +175,10 @@ actor TestTransport: AuthTransport {
         await rejects("cancel fences in-flight login", .stale) { try await signingIn.value }
         check(loginVault.value == nil, "late exchange cannot persist")
         try await runEntryChecks()
+        try await runChatSessionChecks()
+        try await runFamilySessionChecks()
+        try await runVehiclesSessionChecks()
+        try await runHistorySessionChecks()
         try await runEntryUIChecks()
         print("Auth checks passed: \(checks). Mock identities only; no provider/device claims.")
     }
