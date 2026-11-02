@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/ios-compiler-isolation.yml
       - ios/Sources/FamilyCarAgent/Vehicles/AddVehicleScreen.swift
+      - ios/Sources/FamilyCarAgent/Vehicles/VehicleDetailsScreen.swift
 
 permissions:
   contents: read

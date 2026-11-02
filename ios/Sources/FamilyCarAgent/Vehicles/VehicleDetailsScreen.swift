@@ -230,7 +230,7 @@ private struct VehicleDetailsEditor: View {
                     }.disabled(!model.canWrite).accessibilityLabel(category.label).accessibilityAddTraits(model.draft.category == category ? .isSelected : [])
                 }
             }.environment(\.layoutDirection, .leftToRight)
-            field("יצרן", value: Binding(get: { model.draft.manufacturerQuery }, set: model.query))
+            field("יצרן", value: Binding(get: { model.draft.manufacturerQuery }, set: { value in model.query(value) }))
             if model.catalogLoading { ProgressView("טוען יצרנים…") }
             if model.catalogError { Button("טעינת יצרנים מחדש", action: model.loadCatalog) }
             if model.catalogLoaded && !model.draft.manufacturerQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.draft.manufacturer == nil {
