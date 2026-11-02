@@ -2,6 +2,10 @@ name: iOS App Intents Metadata PoC
 
 on:
   workflow_dispatch:
+  push:
+    branches: [develop]
+    paths:
+      - .github/workflows/ios-app-intents-poc.yml
 
 permissions:
   contents: read
