@@ -45,12 +45,12 @@ def generate(ios: Path, output: Path):
     resource_refs = [file(ios / "Sources/FamilyCarAgent" / p, "folder") for p in resources]
     build_sources = [obj("build" + r, "PBXBuildFile", fileRef=r) for r in source_refs]
     build_resources = [obj("build" + r, "PBXBuildFile", fileRef=r) for r in resource_refs]
-    phases = [obj("sources", "PBXSourcesBuildPhase", buildActionMask=2147483647,
-                  files=build_sources, runOnlyForDeploymentPostprocessing=0),
-              obj("frameworks", "PBXFrameworksBuildPhase", buildActionMask=2147483647,
-                  files=[], runOnlyForDeploymentPostprocessing=0),
-              obj("resources", "PBXResourcesBuildPhase", buildActionMask=2147483647,
-                  files=build_resources, runOnlyForDeploymentPostprocessing=0)]
+    phases = [obj("sources", "PBXSourcesBuildPhase", buildActionMask="2147483647",
+                  files=build_sources, runOnlyForDeploymentPostprocessing="0"),
+              obj("frameworks", "PBXFrameworksBuildPhase", buildActionMask="2147483647",
+                  files=[], runOnlyForDeploymentPostprocessing="0"),
+              obj("resources", "PBXResourcesBuildPhase", buildActionMask="2147483647",
+                  files=build_resources, runOnlyForDeploymentPostprocessing="0")]
     product = obj("product", "PBXFileReference", explicitFileType="wrapper.application",
                   path="FamilyCarAgent.app", sourceTree="BUILT_PRODUCTS_DIR")
     products = obj("products", "PBXGroup", name="Products", children=[product], sourceTree="<group>")
@@ -59,7 +59,7 @@ def generate(ios: Path, output: Path):
     def configs(key, settings):
         debug = obj(key + "debug", "XCBuildConfiguration", name="Debug", buildSettings=settings)
         return obj(key + "configs", "XCConfigurationList", buildConfigurations=[debug],
-                   defaultConfigurationIsVisible=0, defaultConfigurationName="Debug")
+                   defaultConfigurationIsVisible="0", defaultConfigurationName="Debug")
 
     target_config = configs("target", {
         "PRODUCT_NAME": "FamilyCarAgent", "PRODUCT_MODULE_NAME": "FamilyCarAgent",
@@ -82,7 +82,7 @@ def generate(ios: Path, output: Path):
     xcodeproj = output / "FCAIntentPoC.xcodeproj"
     xcodeproj.mkdir()
     with (xcodeproj / "project.pbxproj").open("wb") as f:
-        plistlib.dump(dict(archiveVersion=1, classes={}, objectVersion=56, objects=objects, rootObject=project), f)
+        plistlib.dump(dict(archiveVersion="1", classes={}, objectVersion="56", objects=objects, rootObject=project), f)
     (output / "source-manifest.json").write_text(json.dumps({str(p.relative_to(ios)): hashlib.sha256(p.read_bytes()).hexdigest()
                                                           for p in sources}, indent=2))
 
