@@ -54,9 +54,9 @@ jobs:
           echo "Architecture: arm64"
           echo "Log: $LOG"
 
-          EXTRA_FLAGS=""
-          if [ "${{ matrix.mode }}" = "no-batch" ]; then
-            EXTRA_FLAGS="-disable-batch-mode"
+          COMPILATION_MODE="singlefile"
+          if [ "${{ matrix.mode }}" = "batch" ]; then
+            COMPILATION_MODE="incremental"
           fi
 
           set +e
@@ -68,7 +68,7 @@ jobs:
             ARCHS=arm64 \
             EXCLUDED_ARCHS=x86_64 \
             ONLY_ACTIVE_ARCH=YES \
-            OTHER_SWIFT_FLAGS="$EXTRA_FLAGS" \
+            SWIFT_COMPILATION_MODE="$COMPILATION_MODE" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build > "$LOG" 2>&1
@@ -109,8 +109,8 @@ jobs:
               exit 1
             fi
           else
-            if ! grep -q -- '-disable-batch-mode' "$LOG"; then
-              echo "::error::Disable-batch flag did not reach the build command."
+            if grep -q -- '-enable-batch-mode' "$LOG"; then
+              echo "::error::Batch mode is still enabled."
               exit 1
             fi
           fi
