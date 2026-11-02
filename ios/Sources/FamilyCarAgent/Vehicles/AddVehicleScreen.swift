@@ -22,7 +22,7 @@ struct AddVehicleScreen: View {
                         categoryPicker
                         fieldError(.category)
                         field("יצרן", hint: "בחרו יצרן", icon: "manufacturer_icon.png", focus: .manufacturer,
-                              value: Binding(get: { model.draft.manufacturerQuery }, set: model.queryManufacturer))
+                              value: Binding(get: { model.draft.manufacturerQuery }, set: { value in model.queryManufacturer(value) }))
                         Text("יש לבחור יצרן מתוך הרשימה").font(.footnote).foregroundStyle(ChatStyle.secondary)
                         if model.catalogLoading { ProgressView("טוען יצרנים…") }
                         if model.catalogError {

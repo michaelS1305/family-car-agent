@@ -5,6 +5,7 @@ on:
     branches: [develop]
     paths:
       - .github/workflows/ios-compiler-isolation.yml
+      - ios/Sources/FamilyCarAgent/Vehicles/AddVehicleScreen.swift
 
 permissions:
   contents: read
