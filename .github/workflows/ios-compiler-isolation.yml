@@ -54,9 +54,14 @@ jobs:
           echo "Architecture: arm64"
           echo "Log: $LOG"
 
-          COMPILATION_MODE="singlefile"
-          if [ "${{ matrix.mode }}" = "batch" ]; then
-            COMPILATION_MODE="incremental"
+          COMPILATION_MODE="incremental"
+          ENABLE_BATCH="YES"
+          EXTRA_FLAGS=""
+
+          if [ "${{ matrix.mode }}" = "no-batch" ]; then
+            COMPILATION_MODE="singlefile"
+            ENABLE_BATCH="NO"
+            EXTRA_FLAGS="-disable-batch-mode"
           fi
 
           set +e
@@ -69,6 +74,8 @@ jobs:
             EXCLUDED_ARCHS=x86_64 \
             ONLY_ACTIVE_ARCH=YES \
             SWIFT_COMPILATION_MODE="$COMPILATION_MODE" \
+            SWIFT_ENABLE_BATCH_MODE="$ENABLE_BATCH" \
+            OTHER_SWIFT_FLAGS="$EXTRA_FLAGS" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build > "$LOG" 2>&1
@@ -85,6 +92,10 @@ jobs:
           grep -E -- '-target (arm64|x86_64)-apple-ios' "$LOG" \
             | cut -c 1-1000 | head -20 || true
 
+          echo "=== Batch mode flag evidence ==="
+          grep -E -- '-enable-batch-mode|-disable-batch-mode' "$LOG" \
+            | cut -c 1-5000 | head -20 || true
+
           echo "=== Relevant diagnostics ==="
           grep -E -i \
             'error:|fatal error|stack dump|IRGenRequest|while emitting IR|signal |BUILD FAILED|BUILD SUCCEEDED' \
@@ -94,7 +105,7 @@ jobs:
           tail -40 "$LOG"
 
           if grep -q -- '-target x86_64-apple-ios' "$LOG"; then
-            echo "::error::x86_64 compiler target detected; architecture isolation is invalid."
+            echo "::error::x86_64 compiler target detected."
             exit 1
           fi
 
@@ -103,17 +114,55 @@ jobs:
             exit 1
           fi
 
-          if [ "${{ matrix.mode }}" = "batch" ]; then
-            if ! grep -q -- '-enable-batch-mode' "$LOG"; then
-              echo "::error::Batch mode not verified."
-              exit 1
-            fi
-          else
-            if grep -q -- '-enable-batch-mode' "$LOG"; then
-              echo "::error::Batch mode is still enabled."
-              exit 1
-            fi
-          fi
+          echo "=== Validate effective batch flag ==="
+          export COMPILER_LOG="$LOG"
+          export EXPECTED_MODE="${{ matrix.mode }}"
+
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          with open(os.environ["COMPILER_LOG"], errors="replace") as f:
+              lines = f.readlines()
+
+          commands = [
+              line for line in lines
+              if "swiftc" in line
+              and "-module-name FamilyCarAgent" in line
+              and "-target arm64-apple-ios" in line
+          ]
+
+          if not commands:
+              print("ERROR: No matching Swift driver command found.")
+              sys.exit(1)
+
+          expected = (
+              "-disable-batch-mode"
+              if os.environ["EXPECTED_MODE"] == "no-batch"
+              else "-enable-batch-mode"
+          )
+
+          for index, command in enumerate(commands, 1):
+              flags = re.findall(
+                  r"(?<!\S)-(?:enable|disable)-batch-mode(?=\s|$)",
+                  command
+              )
+              if not flags:
+                  print(f"ERROR: Command {index}: no batch mode flag.")
+                  sys.exit(1)
+
+              effective = flags[-1]
+              print(f"Command {index}: flags={flags}, effective={effective}")
+
+              if effective != expected:
+                  print(
+                      f"ERROR: Expected {expected}, got {effective}."
+                  )
+                  sys.exit(1)
+
+          print(f"PASS: Driver flags match {os.environ['EXPECTED_MODE']}.")
+          PY
 
           if [ "$RESULT" -ne 0 ]; then
             echo "::error::Build failed in mode ${{ matrix.mode }} (exit $RESULT)."
