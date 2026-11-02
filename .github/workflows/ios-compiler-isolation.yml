@@ -1,0 +1,130 @@
+
+name: iOS Compiler Isolation PoC
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - .github/workflows/ios-compiler-isolation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  compiler-isolation:
+    name: "Compiler test - ${{ matrix.mode }}"
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        mode: [batch, no-batch]
+
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+
+    defaults:
+      run:
+        working-directory: ios
+        shell: bash
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify toolchain
+        run: |
+          xcodebuild -version
+          xcrun swift --version
+
+      - name: Resolve package
+        run: swift package resolve
+
+      - name: Build and collect diagnostics
+        id: compile
+        run: |
+          LOG="$RUNNER_TEMP/compiler-${{ matrix.mode }}.log"
+          DERIVED="$RUNNER_TEMP/derived-${{ matrix.mode }}"
+
+          echo "Mode: ${{ matrix.mode }}"
+          echo "Architecture: arm64"
+          echo "Log: $LOG"
+
+          EXTRA_FLAGS=""
+          if [ "${{ matrix.mode }}" = "no-batch" ]; then
+            EXTRA_FLAGS="-disable-batch-mode"
+          fi
+
+          set +e
+          xcodebuild \
+            -scheme FamilyCarAgent \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            -derivedDataPath "$DERIVED" \
+            ARCHS=arm64 \
+            EXCLUDED_ARCHS=x86_64 \
+            ONLY_ACTIVE_ARCH=YES \
+            OTHER_SWIFT_FLAGS="$EXTRA_FLAGS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build > "$LOG" 2>&1
+          RESULT=$?
+          set -e
+
+          echo "build_exit_code=$RESULT" >> "$GITHUB_OUTPUT"
+
+          echo "=== Compiler driver commands ==="
+          grep -E 'builtin-SwiftDriver --|swiftc -module-name' "$LOG" \
+            | cut -c 1-5000 | head -20 || true
+
+          echo "=== Compiler architecture evidence ==="
+          grep -E -- '-target (arm64|x86_64)-apple-ios' "$LOG" \
+            | cut -c 1-1000 | head -20 || true
+
+          echo "=== Relevant diagnostics ==="
+          grep -E -i \
+            'error:|fatal error|stack dump|IRGenRequest|while emitting IR|signal |BUILD FAILED|BUILD SUCCEEDED' \
+            "$LOG" | tail -60 || true
+
+          echo "=== Final log lines ==="
+          tail -40 "$LOG"
+
+          if grep -q -- '-target x86_64-apple-ios' "$LOG"; then
+            echo "::error::x86_64 compiler target detected; architecture isolation is invalid."
+            exit 1
+          fi
+
+          if ! grep -q -- '-target arm64-apple-ios' "$LOG"; then
+            echo "::error::arm64 compiler target not verified."
+            exit 1
+          fi
+
+          if [ "${{ matrix.mode }}" = "batch" ]; then
+            if ! grep -q -- '-enable-batch-mode' "$LOG"; then
+              echo "::error::Batch mode not verified."
+              exit 1
+            fi
+          else
+            if ! grep -q -- '-disable-batch-mode' "$LOG"; then
+              echo "::error::Disable-batch flag did not reach the build command."
+              exit 1
+            fi
+          fi
+
+          if [ "$RESULT" -ne 0 ]; then
+            echo "::error::Build failed in mode ${{ matrix.mode }} (exit $RESULT)."
+            exit "$RESULT"
+          fi
+
+      - name: Upload compiler log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-${{ matrix.mode }}-logs
+          path: ${{ runner.temp }}/compiler-${{ matrix.mode }}.log
+          if-no-files-found: warn
+          retention-days: 7
