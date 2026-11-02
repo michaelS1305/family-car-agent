@@ -111,7 +111,7 @@ struct FamilyScreen: View {
                 Text(profile.home_address).font(.system(size: 20)).frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14).overlay(RoundedRectangle(cornerRadius: 16).stroke(ChatStyle.border))
             } else if model.stage == .edit || model.stage == .verifying {
-                TextField("עיר, רחוב ומספר בית", text: Binding(get: { model.draft }, set: model.changeDraft), axis: .vertical)
+                TextField("עיר, רחוב ומספר בית", text: Binding(get: { model.draft }, set: { value in model.changeDraft(value) }), axis: .vertical)
                     .multilineTextAlignment(.trailing).environment(\.layoutDirection, .leftToRight)
                     .padding(12).frame(minHeight: 54)
                     .overlay(RoundedRectangle(cornerRadius: 16).stroke(ChatStyle.border))
