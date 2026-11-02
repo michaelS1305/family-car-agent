@@ -19,21 +19,7 @@ struct AddVehicleScreen: View {
                         field("שם הרכב", hint: "לדוגמה: הרכב של אבא", icon: "single_car_icon.png", focus: .name,
                               value: binding(\.name))
                         Text("סוג רכב").id(Field.category)
-                        HStack(spacing: 4) {
-                            ForEach(VehicleCategory.allCases, id: \.self) { category in
-                                Button {
-                                    var draft = model.draft; draft.category = category; model.edit(draft)
-                                } label: {
-                                    VStack(spacing: 2) {
-                                        AppAssetImage(path: category.asset).frame(height: 44)
-                                        Text(category.label).font(.system(size: 5)).lineSpacing(2).lineLimit(2)
-                                    }.padding(2).frame(maxWidth: .infinity).frame(height: 86)
-                                        .background(model.draft.category == category ? ChatStyle.selected : .white.opacity(0.6), in: RoundedRectangle(cornerRadius: 18))
-                                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(model.fieldErrors[.category] != nil ? .red : model.draft.category == category ? ChatStyle.ink : ChatStyle.border, lineWidth: model.draft.category == category ? 2 : 1))
-                                }.buttonStyle(.plain).disabled(!model.editable)
-                                    .accessibilityLabel(category.label).accessibilityAddTraits(model.draft.category == category ? .isSelected : [])
-                            }
-                        }.environment(\.layoutDirection, .leftToRight)
+                        categoryPicker
                         fieldError(.category)
                         field("יצרן", hint: "בחרו יצרן", icon: "manufacturer_icon.png", focus: .manufacturer,
                               value: Binding(get: { model.draft.manufacturerQuery }, set: model.queryManufacturer))
@@ -59,7 +45,7 @@ struct AddVehicleScreen: View {
                         field("דגם", hint: "דגם", icon: "single_car_icon.png", focus: .model, value: binding(\.model))
                         field("מספר רכב", hint: "לדוגמה: 123-45-678", icon: "license_plate.png", focus: .plate, value: binding(\.plate))
                         if let error = model.submitError { Text(error).foregroundStyle(.red) }
-                        if !model.canCreate { Text("אין הרשאה להוספת רכב").foregroundStyle(.red) }
+                        else if !model.canCreate { Text("אין הרשאה להוספת רכב").foregroundStyle(.red) }
                         Button {
                             focused = nil; model.submit()
                             if let first = model.firstInvalidField {
@@ -82,6 +68,23 @@ struct AddVehicleScreen: View {
                 }
             }
         }.modifier(VehiclesAppearance())
+    }
+    private var categoryPicker: some View {
+        HStack(spacing: 4) {
+            ForEach(VehicleCategory.allCases, id: \.self) { category in
+                Button {
+                    var draft = model.draft; draft.category = category; model.edit(draft)
+                } label: {
+                    VStack(spacing: 2) {
+                        AppAssetImage(path: category.asset).frame(height: 44)
+                        Text(category.label).font(.system(size: 5)).lineSpacing(2).lineLimit(2)
+                    }.padding(2).frame(maxWidth: .infinity).frame(height: 86)
+                        .background(model.draft.category == category ? ChatStyle.selected : .white.opacity(0.6), in: RoundedRectangle(cornerRadius: 18))
+                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(model.fieldErrors[.category] != nil ? .red : model.draft.category == category ? ChatStyle.ink : ChatStyle.border, lineWidth: model.draft.category == category ? 2 : 1))
+                }.buttonStyle(.plain).disabled(!model.editable)
+                    .accessibilityLabel(category.label).accessibilityAddTraits(model.draft.category == category ? .isSelected : [])
+            }
+        }.environment(\.layoutDirection, .leftToRight)
     }
     private func binding(_ key: WritableKeyPath<VehicleDraft, String>) -> Binding<String> {
         Binding(get: { model.draft[keyPath: key] }, set: { value in

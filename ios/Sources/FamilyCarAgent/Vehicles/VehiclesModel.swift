@@ -41,7 +41,7 @@ import Combine
     var active: [ManagedVehicle] { visibleRows.filter { !$0.retired } }
     var retired: [ManagedVehicle] { visibleRows.filter(\.retired) }
     var mayAdd: Bool { current && canCreate && !loading && !loadError }
-    var editable: Bool { current && destination == .add && pending == nil && !submitting }
+    var editable: Bool { maySubmit && pending == nil }
     var matchingManufacturers: [VehicleManufacturer] {
         current ? manufacturers.filter { $0.name_he.range(of: draft.manufacturerQuery, options: .caseInsensitive) != nil } : []
     }
@@ -146,8 +146,13 @@ import Combine
             } catch {
                 guard let self, self.valid(version), self.pending == request else { return }
                 self.submitting = false; self.submissionTask = nil
-                if case AuthFailure.rejected(403, _) = error { self.submitError = "אין הרשאה להוספת רכב" }
-                else { self.submitError = "לא ניתן לאשר את הוספת הרכב. נסו שוב עם אותם הפרטים." }
+                if case AuthFailure.rejected(403, _) = error {
+                    self.canCreate = false
+                    self.pending = nil
+                    self.submitError = "אין הרשאה להוספת רכב"
+                } else {
+                    self.submitError = "לא ניתן לאשר את הוספת הרכב. נסו שוב עם אותם הפרטים."
+                }
             }
         }
     }

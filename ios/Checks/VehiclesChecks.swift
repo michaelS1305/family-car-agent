@@ -115,6 +115,7 @@ protocol ObservableObject: AnyObject {}
         check(api.requests.count == 1 && model.pending != nil && model.submitError != nil, "duplicate taps blocked")
         check(model.fieldErrors.isEmpty && model.submitError != nil, "server error separate from fields")
         let pending = model.pending!
+        check(model.maySubmit, "ambiguous network failure allows retry")
         model.edit(VehicleDraft()); model.queryManufacturer("changed")
         check(model.draft == pending.draft && !model.editable, "uncertain submission locks payload")
         model.submit(); await settle()
@@ -125,10 +126,18 @@ protocol ObservableObject: AnyObject {}
         check(api.calls.filter { $0 == "catalog" }.count == 1, "catalog reused")
         model.edit(draft()); api.failures = ["create"]; api.forbidden = true; model.submit(); await settle()
         check(model.submitError == "אין הרשאה להוספת רכב", "403 exact message")
+        let deniedCount = api.requests.count
+        model.edit(VehicleDraft()); model.submit(); model.submit(); await settle()
+        check(!model.maySubmit && !model.editable && model.pending == nil && model.draft == draft(), "403 locks current form")
+        check(api.requests.count == deniedCount, "403 prevents further POSTs")
+        api.allowed = false
         let beforeBack = api.calls.filter { $0 == "list" }.count
         model.pop(); await settle()
         check(api.calls.filter { $0 == "list" }.count == beforeBack + 1 && model.pending == nil, "uncertain back refresh")
         api.failures = []; api.forbidden = false
+        model.add()
+        check(!model.mayAdd && model.destination == nil, "refreshed denial prevents re-entry")
+        api.allowed = true; model.refresh(); await settle()
         model.add(); await settle(); model.edit(draft()); api.pause = "create"; model.submit(); await settle()
         check(api.continuation != nil, "create paused")
         model.pop(); api.release(); await settle()
