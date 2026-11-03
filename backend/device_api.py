@@ -1,4 +1,5 @@
-"""JWT-authenticated Android installation/binding/TAKE surface."""
+"""JWT-authenticated native installation/binding/event surface."""
+from typing import Literal
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, UUID4
@@ -17,6 +18,7 @@ router = APIRouter(prefix='/api/devices', tags=['devices'])
 class Registration(BaseModel):
     model_config = ConfigDict(extra='forbid')
     request_id: UUID4
+    platform: Literal['android', 'ios'] = 'android'
 
 
 class Take(BaseModel):
@@ -49,13 +51,14 @@ def run(pool, response, operation):
 @router.post('')
 def register(body: Registration, response: Response, user: CurrentUser = Depends(get_current_user),
              pool=Depends(vehicle_pool)):
-    return run(pool, response, lambda c: lifecycle.register_device(c, user, {'platform': 'android'},
+    return run(pool, response, lambda c: lifecycle.register_device(c, user, {'platform': body.platform},
                                                                   request_id=body.request_id))
 
 
 @router.get('')
-def devices(response: Response, user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):
-    return run(pool, response, lambda c: [d for d in lifecycle.list_devices(c, user) if d.platform == 'android'])
+def devices(response: Response, user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool),
+            platform: Literal['android', 'ios'] = 'android'):
+    return run(pool, response, lambda c: [d for d in lifecycle.list_devices(c, user) if d.platform == platform])
 
 
 @router.get('/{device_ref}/vehicle-bindings')

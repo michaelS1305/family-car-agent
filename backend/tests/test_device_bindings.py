@@ -1,4 +1,4 @@
-"""Android authorization contracts; PostgreSQL fixtures are LOCAL-only."""
+"""Native authorization contracts; PostgreSQL fixtures are LOCAL-only."""
 import os
 import sys
 import types
@@ -46,6 +46,43 @@ class DeviceApiTests(unittest.TestCase):
             self.assertEqual(self.client.post('/api/devices', json={'request_id': str(key)}).status_code, 200)
             self.assertEqual(register.call_args.args[1:], (self.user, {'platform': 'android'}))
             self.assertEqual(register.call_args.kwargs, {'request_id': key})
+
+    def test_explicit_platform_registration_and_invalid_platforms(self):
+        key = uuid4()
+        with patch.object(api.lifecycle, 'register_device', return_value={}) as register:
+            for platform in ('android', 'ios'):
+                self.assertEqual(self.client.post('/api/devices', json={
+                    'request_id': str(key), 'platform': platform}).status_code, 200)
+                self.assertEqual(register.call_args.args[1:], (self.user, {'platform': platform}))
+                self.assertEqual(register.call_args.kwargs, {'request_id': key})
+            register.reset_mock()
+            for platform in ('web', 'IOS', '', None, 1):
+                self.assertEqual(self.client.post('/api/devices', json={
+                    'request_id': str(key), 'platform': platform}).status_code, 422)
+            register.assert_not_called()
+
+    def test_listing_defaults_to_android_and_filters_ios(self):
+        rows = [lifecycle.DeviceView(device_ref=uuid4(), platform=p, revoked_at=None)
+                for p in ('android', 'ios')]
+        with patch.object(api.lifecycle, 'list_devices', return_value=rows) as listing:
+            for suffix, index in (('', 0), ('?platform=android', 0), ('?platform=ios', 1)):
+                response = self.client.get('/api/devices' + suffix)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), [rows[index].model_dump(mode='json')])
+                self.assertEqual(listing.call_args.args[1], self.user)
+            listing.reset_mock()
+            self.assertEqual(self.client.get('/api/devices?platform=web').status_code, 422)
+            listing.assert_not_called()
+
+    def test_native_platform_allowlist_fails_closed(self):
+        for platform in ('android', 'ios', 'web', None):
+            row = (1, uuid4(), platform, None)
+            with patch.object(lifecycle, '_device', return_value=row):
+                if platform in ('android', 'ios'):
+                    self.assertEqual(bindings._native(None, self.user, row[1]), row)
+                else:
+                    with self.assertRaises(VehicleIdentityError):
+                        bindings._native(None, self.user, row[1])
 
     def test_take_rejects_identity_and_invalid_envelope(self):
         payload = {'event_id': str(uuid4()), 'vehicle_ref': str(uuid4()), 'device_sequence': 1,
@@ -293,3 +330,21 @@ class BindingPostgresTests(unittest.TestCase):
         d = self.device(); self.bind(d, v)
         self.query('DELETE FROM vehicles WHERE vehicle_ref=%s', (v.vehicle_ref,))
         self.assertEqual(self.query('SELECT * FROM registered_device_vehicle_bindings'), [])
+
+
+class IOSBindingPostgresTests(BindingPostgresTests):
+    """Run the same authorization, sequencing and RETURN regressions for iOS."""
+
+    def device(self, user=None):
+        return self.call(lifecycle.register_device, {'platform': 'ios'}, user=user)
+
+    def test_ios_registration_idempotency_and_platform_conflict(self):
+        key = uuid4()
+        with self.connection() as conn:
+            first = lifecycle.register_device(conn, self.current, {'platform': 'ios'}, request_id=key)
+            self.assertEqual(first.platform, 'ios')
+            self.assertEqual(lifecycle.register_device(
+                conn, self.current, {'platform': 'ios'}, request_id=key), first)
+            with self.assertRaises(VehicleIdentityError):
+                lifecycle.register_device(conn, self.current, {'platform': 'android'}, request_id=key)
+        self.assertEqual(self.query('SELECT count(*) FROM registered_devices'), [(1,)])
