@@ -17,6 +17,51 @@ sign_spec.loader.exec_module(sign_probe)
 
 
 class MetadataPoCTests(unittest.TestCase):
+    def test_signing_identity_failure_classifications_are_private(self):
+        first = '1) ' + 'A' * 40 + ' "PRIVATE_CERTIFICATE_NAME"\n'
+        second = '2) ' + 'B' * 40 + ' "PRIVATE_SECOND_NAME"\n'
+        cases = (
+            ("no_codesigning_identity", "0 valid identities found", "0 identities found",
+             "all_count=0 valid_count=0 invalid_count=0"),
+            ("identity_not_valid_for_codesigning", "0 valid identities found",
+             first + "CSSMERR_TP_CERT_EXPIRED", "all_count=1 valid_count=0 invalid_count=1"),
+            ("valid_identity_regex_mismatch", first, first + first,
+             "all_count=1 valid_count=1 invalid_count=0"),
+            ("multiple_identities", first + second, first + second + first + second,
+             "all_count=2 valid_count=2 invalid_count=0"),
+            ("multiple_identities", "0 valid identities found", first + second,
+             "all_count=2 valid_count=0 invalid_count=2"),
+            ("identity_output_unrecognized", "PRIVATE_UNKNOWN", "PRIVATE_UNKNOWN",
+             "all_count=0 valid_count=0 invalid_count=0"),
+        )
+        for classification, valid, all_output, counts in cases:
+            with self.subTest(classification=classification), \
+                 patch.object(sign_probe, "command", side_effect=[valid.encode(), all_output.encode()]) as command:
+                with self.assertRaises(sign_probe.ProbeError) as caught:
+                    sign_probe.signing_identity(Path("temporary.keychain"))
+                message = str(caught.exception)
+                self.assertIn("classification=" + classification, message)
+                self.assertIn(counts, message)
+                self.assertIn("regex_match_count=0", message)
+                for private in ("PRIVATE", "A" * 40, "B" * 40, "CSSMERR"):
+                    self.assertNotIn(private, message)
+                self.assertEqual(command.call_args_list[0].args[1:],
+                                 ("security", "find-identity", "-v", "-p", "codesigning", "temporary.keychain"))
+                self.assertEqual(command.call_args_list[1].args[1:],
+                                 ("security", "find-identity", "-p", "codesigning", "temporary.keychain"))
+
+    def test_signing_identity_preserves_strict_selection(self):
+        row = '1) ' + 'A' * 40 + ' "Apple Development: PRIVATE_NAME (' + sign_probe.TEAM + ')"\n'
+        with patch.object(sign_probe, "command", return_value=row.encode()) as command:
+            self.assertEqual(sign_probe.signing_identity(Path("temporary.keychain")), "A" * 40)
+            command.assert_called_once()
+        with patch.object(sign_probe, "command", side_effect=[
+            (row + row.replace("A" * 40, "B" * 40)).encode(),
+            (row + row.replace("A" * 40, "B" * 40)).encode(),
+        ]):
+            with self.assertRaisesRegex(sign_probe.ProbeError, "classification=multiple_identities.*regex_match_count=2"):
+                sign_probe.signing_identity(Path("temporary.keychain"))
+
     def test_probe_wrapper_is_standalone_and_debug(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "wrapper"

@@ -35,6 +35,37 @@ def command(label, *args):
     return result.stdout
 
 
+def signing_identity(keychain):
+    valid = command("Signing identity lookup", "security", "find-identity", "-v", "-p",
+                    "codesigning", str(keychain)).decode()
+    matches = re.findall(r'\b([0-9A-Fa-f]{40})\s+"Apple Development:[^"\n]*\(' + TEAM + r'\)"', valid)
+    if len(matches) == 1:
+        return matches[0].upper()
+
+    all_identities = command("All signing identities lookup", "security", "find-identity", "-p",
+                             "codesigning", str(keychain)).decode()
+    # Without -v, security repeats valid identities in a second section.
+    # Count distinct fingerprints internally; never emit fingerprints or names.
+    row = r'^\s*\d+\)\s+([0-9A-Fa-f]{40})\s+"'
+    all_hashes = {h.upper() for h in re.findall(row, all_identities, re.MULTILINE)}
+    valid_hashes = {h.upper() for h in re.findall(row, valid, re.MULTILINE)}
+    if len(all_hashes) > 1 or len(valid_hashes) > 1 or len(matches) > 1:
+        classification = "multiple_identities"
+    elif all_hashes and not valid_hashes:
+        classification = "identity_not_valid_for_codesigning"
+    elif valid_hashes:
+        classification = "valid_identity_regex_mismatch"
+    elif re.search(r'\b0 identities found\b', all_identities):
+        classification = "no_codesigning_identity"
+    else:
+        classification = "identity_output_unrecognized"
+    raise ProbeError(
+        f"Signing identity classification={classification} "
+        f"all_count={len(all_hashes)} valid_count={len(valid_hashes)} "
+        f"invalid_count={len(all_hashes - valid_hashes)} regex_match_count={len(matches)}"
+    )
+
+
 def validate_profile(profile, now=None):
     now = now or datetime.datetime.now(datetime.timezone.utc)
     require(profile.get("Name") == PROFILE_NAME, "Unexpected profile name")
@@ -118,11 +149,7 @@ def sign(app, evidence):
                 "-P", password, "-T", "/usr/bin/codesign")
         command("Key access", "security", "set-key-partition-list", "-S", "apple-tool:,apple:",
                 "-s", "-k", key_password, str(keychain))
-        identities = command("Signing identity lookup", "security", "find-identity", "-v", "-p",
-                             "codesigning", str(keychain)).decode()
-        matches = re.findall(r'\b([0-9A-Fa-f]{40})\s+"Apple Development:[^"\n]*\(' + TEAM + r'\)"', identities)
-        require(len(matches) == 1, "Expected exactly one valid Apple Development identity for the probe team")
-        identity = matches[0].upper()
+        identity = signing_identity(keychain)
         certificates = profile["DeveloperCertificates"]
         require(identity in {hashlib.sha1(c).hexdigest().upper() for c in certificates},
                 "Signing certificate is not authorized by the profile")
