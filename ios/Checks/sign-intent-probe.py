@@ -42,7 +42,7 @@ def validate_profile(profile, now=None):
     expiry = profile.get("ExpirationDate")
     require(isinstance(expiry, datetime.datetime), "Missing profile expiry")
     require(expiry.replace(tzinfo=datetime.timezone.utc) > now, "Profile expired")
-    require(profile.get("Platform") == ["iOS"], "Expected an iOS profile")
+    require("iOS" in profile.get("Platform", []), "Expected an iOS-compatible profile")
     require(len(profile.get("ProvisionedDevices", [])) == 1, "Expected one registered device")
     require(not profile.get("ProvisionsAllDevices"), "Enterprise profile is not allowed")
     allowed = profile.get("Entitlements", {})

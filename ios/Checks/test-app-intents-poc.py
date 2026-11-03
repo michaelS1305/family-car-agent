@@ -51,6 +51,14 @@ class MetadataPoCTests(unittest.TestCase):
                              "com.apple.developer.team-identifier": sign_probe.TEAM, "get-task-allow": True},
         }
         self.assertEqual(sign_probe.validate_profile(profile, now), profile["Entitlements"])
+
+        # Apple's development profile may include additional Apple platforms.
+        multi_platform = dict(profile, Platform=["iOS", "xrOS", "visionOS"])
+        self.assertEqual(
+            sign_probe.validate_profile(multi_platform, now),
+            profile["Entitlements"]
+        )
+
         for key, value in (("Name", "Other"), ("TeamIdentifier", ["OTHER"]),
                            ("ExpirationDate", now - datetime.timedelta(days=1)),
                            ("ProvisionedDevices", []), ("ProvisionsAllDevices", True),
