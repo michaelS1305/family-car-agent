@@ -313,6 +313,14 @@ def sign(app, evidence):
             str(keychain),
         )
 
+        # Make the temporary signing keychain available to macOS.
+        command(
+            "Keychain search list",
+            "security", "list-keychains",
+            "-d", "user",
+            "-s", str(keychain),
+        )
+
         # Select the identity by certificate SHA-1, not its name.
         identity = signing_identity(
             keychain,
