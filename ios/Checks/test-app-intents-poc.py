@@ -4,13 +4,92 @@ from pathlib import Path
 import plistlib
 import tempfile
 import unittest
+import datetime
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("poc", Path(__file__).with_name("app-intents-poc.py"))
 poc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(poc)
+sign_spec = importlib.util.spec_from_file_location("sign_probe", Path(__file__).with_name("sign-intent-probe.py"))
+sign_probe = importlib.util.module_from_spec(sign_spec)
+sign_spec.loader.exec_module(sign_probe)
 
 
 class MetadataPoCTests(unittest.TestCase):
+    def test_probe_wrapper_is_standalone_and_debug(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "wrapper"
+            poc.generate(Path(__file__).resolve().parents[1], output, probe=True)
+            objects = plistlib.loads((output / "FCAIntentPoC.xcodeproj/project.pbxproj").read_bytes())["objects"].values()
+            settings = next(o["buildSettings"] for o in objects if o.get("buildSettings", {}).get("SDKROOT"))
+            self.assertEqual(settings["PRODUCT_BUNDLE_IDENTIFIER"], poc.PROBE_ID)
+            self.assertEqual(settings["SWIFT_ACTIVE_COMPILATION_CONDITIONS"], "DEBUG")
+            self.assertEqual(plistlib.loads(Path(settings["CODE_SIGN_ENTITLEMENTS"]).read_bytes()), {})
+            info = plistlib.loads(Path(settings["INFOPLIST_FILE"]).read_bytes())
+            self.assertEqual(info["CFBundleDisplayName"], "FCA Intent Probe")
+            self.assertNotIn("CFBundleURLTypes", info)
+            swift_names = {Path(o["path"]).name for o in objects if o.get("lastKnownFileType") == "sourcecode.swift"}
+            self.assertEqual(swift_names, {"FCAConnectionTestIntent.swift", "ProbeApp.swift", "PackageResourceAccessor.swift"})
+            metadata = output / "Metadata.appintents"
+            metadata.mkdir()
+            (metadata / "extract.actionsdata").write_text('{"intent":"FCAConnectionTestIntent"}')
+            info["CFBundleIdentifier"] = poc.PROBE_ID
+            (output / "Info.plist").write_bytes(plistlib.dumps(info))
+            poc.verify(output, output / "report.json", probe=True)
+            with self.assertRaises(ValueError):
+                poc.verify(output, output / "report.json")
+
+    def test_development_profile_is_exact_and_unexpired(self):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        profile = {
+            "Name": sign_probe.PROFILE_NAME, "TeamIdentifier": [sign_probe.TEAM],
+            "ExpirationDate": now + datetime.timedelta(days=1), "Platform": ["iOS"],
+            "ProvisionedDevices": ["SYNTHETIC_DEVICE"], "ApplicationIdentifierPrefix": [sign_probe.TEAM],
+            "DeveloperCertificates": [b"SYNTHETIC_CERTIFICATE"],
+            "Entitlements": {"application-identifier": sign_probe.TEAM + "." + sign_probe.BUNDLE,
+                             "com.apple.developer.team-identifier": sign_probe.TEAM, "get-task-allow": True},
+        }
+        self.assertEqual(sign_probe.validate_profile(profile, now), profile["Entitlements"])
+        for key, value in (("Name", "Other"), ("TeamIdentifier", ["OTHER"]),
+                           ("ExpirationDate", now - datetime.timedelta(days=1)),
+                           ("ProvisionedDevices", []), ("ProvisionsAllDevices", True),
+                           ("DeveloperCertificates", []), ("Platform", ["macOS"])):
+            with self.subTest(key=key), self.assertRaises(sign_probe.ProbeError):
+                sign_probe.validate_profile(dict(profile, **{key: value}), now)
+        for key, value in (("application-identifier", sign_probe.TEAM + ".*"),
+                           ("application-identifier", sign_probe.TEAM + ".com.familycaragent.app.dev"),
+                           ("get-task-allow", False), ("com.apple.developer.team-identifier", "OTHER")):
+            modified = dict(profile, Entitlements=dict(profile["Entitlements"], **{key: value}))
+            with self.subTest(key=key, value=value), self.assertRaises(sign_probe.ProbeError):
+                sign_probe.validate_profile(modified, now)
+
+    def test_private_tool_output_is_suppressed(self):
+        with patch.object(sign_probe.subprocess, "run") as run:
+            run.return_value.returncode = 1
+            run.return_value.stderr = b"PRIVATE_SENTINEL"
+            with self.assertRaises(sign_probe.ProbeError) as caught:
+                sign_probe.command("Import", "security", "PRIVATE_SENTINEL")
+            self.assertNotIn("PRIVATE_SENTINEL", str(caught.exception))
+
+    def test_failure_cleans_up_signing_workspace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            work = Path(temp) / "signing"
+            with patch.object(sign_probe, "workspace", return_value=work), \
+                 patch.object(sign_probe.sys, "platform", "darwin"), \
+                 patch.dict(sign_probe.os.environ, {"GITHUB_EVENT_NAME": "workflow_dispatch",
+                            "GITHUB_REF": "refs/heads/develop", "FCA_PROBE_P12_BASE64": ""}):
+                with self.assertRaises(sign_probe.ProbeError):
+                    sign_probe.sign(Path(temp), Path(temp))
+                self.assertFalse(work.exists())
+
+    def test_signing_rejects_non_manual_or_non_develop(self):
+        for event, ref in (("pull_request", "refs/heads/develop"), ("push", "refs/heads/develop"),
+                           ("workflow_dispatch", "refs/heads/main")):
+            with patch.object(sign_probe.sys, "platform", "darwin"), \
+                 patch.dict(sign_probe.os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref}):
+                with self.assertRaises(sign_probe.ProbeError):
+                    sign_probe.sign(Path("unused"), Path("unused"))
+
     def test_wrapper_references_real_sources_and_resources(self):
         ios = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temp:

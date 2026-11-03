@@ -7,7 +7,11 @@ import plistlib
 import re
 
 
-def generate(ios: Path, output: Path):
+PROBE_ID = "com.familycaragent.intentprobe"
+PROBE_NAME = "FCA Intent Probe"
+
+
+def generate(ios: Path, output: Path, probe=False):
     ios = ios.resolve()
     output = output.resolve()
     if output == ios or ios in output.parents:
@@ -30,6 +34,31 @@ def generate(ios: Path, output: Path):
     output.mkdir(parents=True, exist_ok=False)
     accessor = output / "PackageResourceAccessor.swift"
     accessor.write_text("import Foundation\nextension Bundle { static var module: Bundle { .main } }\n")
+    info_path = ios / config["infoPath"]
+    entitlements_path = ios / config["entitlementsPath"]
+    source_manifest = {str(p.relative_to(ios)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}
+    if probe:
+        config["bundleID"] = PROBE_ID
+        info_path = output / "Probe-Info.plist"
+        info_path.write_bytes(plistlib.dumps({
+            "CFBundleDisplayName": PROBE_NAME,
+            "FCAEnvironment": "intentprobe",
+            "UILaunchScreen": {},
+        }))
+        entitlements_path = output / "Probe.entitlements"
+        entitlements_path.write_bytes(plistlib.dumps({}))
+        entry = output / "ProbeApp.swift"
+        entry.write_text('import SwiftUI\n@main struct ProbeApp: App {\n'
+                         '    var body: some Scene { WindowGroup {\n'
+                         '        VStack(spacing: 16) {\n'
+                         '            Text("FCA Intent Probe").font(.title)\n'
+                         '            Text("Run FCA Test Connection in Shortcuts.").multilineTextAlignment(.center)\n'
+                         '        }.padding()\n'
+                         '    } }\n}\n')
+        intent = next(p for p in sources if p.name == "FCAConnectionTestIntent.swift")
+        source_manifest = {str(intent.relative_to(ios)): hashlib.sha256(intent.read_bytes()).hexdigest()}
+        sources = [intent, entry]
+        resources = []
     objects = {}
 
     def obj(key, isa, **values):
@@ -64,8 +93,8 @@ def generate(ios: Path, output: Path):
     target_config = configs("target", {
         "PRODUCT_NAME": "FamilyCarAgent", "PRODUCT_MODULE_NAME": "FamilyCarAgent",
         "PRODUCT_BUNDLE_IDENTIFIER": config["bundleID"],
-        "INFOPLIST_FILE": str(ios / config["infoPath"]), "GENERATE_INFOPLIST_FILE": "YES",
-        "CODE_SIGN_ENTITLEMENTS": str(ios / config["entitlementsPath"]),
+        "INFOPLIST_FILE": str(info_path), "GENERATE_INFOPLIST_FILE": "YES",
+        "CODE_SIGN_ENTITLEMENTS": str(entitlements_path),
         "CODE_SIGNING_ALLOWED": "NO", "CODE_SIGNING_REQUIRED": "NO",
         "SWIFT_VERSION": "6.0", "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG",
         "SWIFT_OPTIMIZATION_LEVEL": "-Onone", "IPHONEOS_DEPLOYMENT_TARGET": "17.0",
@@ -83,23 +112,23 @@ def generate(ios: Path, output: Path):
     xcodeproj.mkdir()
     with (xcodeproj / "project.pbxproj").open("wb") as f:
         plistlib.dump(dict(archiveVersion="1", classes={}, objectVersion="56", objects=objects, rootObject=project), f)
-    (output / "source-manifest.json").write_text(json.dumps({str(p.relative_to(ios)): hashlib.sha256(p.read_bytes()).hexdigest()
-                                                          for p in sources}, indent=2))
+    (output / "source-manifest.json").write_text(json.dumps(source_manifest, indent=2))
 
 
-def verify(app: Path, report: Path):
+def verify(app: Path, report: Path, probe=False):
     metadata = app / "Metadata.appintents"
     files = sorted(p for p in metadata.rglob("*") if p.is_file()) if metadata.is_dir() else []
     nonempty = [p for p in files if p.stat().st_size]
     matches = [str(p.relative_to(app)) for p in nonempty if b"FCAConnectionTestIntent" in p.read_bytes()]
     with (app / "Info.plist").open("rb") as f:
         info = plistlib.load(f)
-    result = {"bundle_id_matches_dev": info.get("CFBundleIdentifier") == "com.familycaragent.app.dev",
-              "environment_is_development": info.get("FCAEnvironment") == "development",
+    result = {"bundle_id_matches_expected": info.get("CFBundleIdentifier") == (PROBE_ID if probe else "com.familycaragent.app.dev"),
+              "environment_matches_expected": info.get("FCAEnvironment") == ("intentprobe" if probe else "development"),
+              "display_name_matches": not probe or info.get("CFBundleDisplayName") == PROBE_NAME,
               "metadata_files": [str(p.relative_to(app)) for p in nonempty],
               "intent_metadata_matches": matches, "device_discovery_verified": False}
     report.write_text(json.dumps(result, indent=2) + "\n")
-    if not (result["bundle_id_matches_dev"] and result["environment_is_development"] and matches):
+    if not (result["bundle_id_matches_expected"] and result["environment_matches_expected"] and result["display_name_matches"] and matches):
         raise ValueError("App Intents metadata/Dev identity check failed; inspect metadata-report.json")
 
 
@@ -108,5 +137,6 @@ if __name__ == "__main__":
     parser.add_argument("mode", choices=["generate", "verify"])
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--probe", action="store_true")
     args = parser.parse_args()
-    (generate if args.mode == "generate" else verify)(args.source, args.output)
+    (generate if args.mode == "generate" else verify)(args.source, args.output, args.probe)

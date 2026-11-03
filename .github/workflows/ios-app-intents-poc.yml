@@ -1,19 +1,14 @@
-name: iOS App Intents Metadata PoC
+name: iOS Signed Intent Probe
 
 on:
   workflow_dispatch:
-  push:
-    branches: [develop]
-    paths:
-      - .github/workflows/ios-app-intents-poc.yml
-      - ios/Checks/app-intents-poc.py
 
 permissions:
   contents: read
 
 jobs:
   metadata:
-    if: github.ref == 'refs/heads/develop'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop'
     runs-on: macos-26
     timeout-minutes: 30
     env:
@@ -28,6 +23,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check probe wrapper and signing safeguards with synthetic fixtures
+        run: python3 -B ios/Checks/test-app-intents-poc.py
+
       - name: Inspect runner Xcode and generate disposable app target
         run: |
           set -euo pipefail
@@ -41,14 +39,14 @@ jobs:
 
           python3 ios/Checks/app-intents-poc.py generate \
             "$GITHUB_WORKSPACE/ios" \
-            "$RUNNER_TEMP/fca-intents-wrapper"
+            "$RUNNER_TEMP/fca-intents-wrapper" --probe
 
           plutil -lint "$RUNNER_TEMP/fca-intents-wrapper/FCAIntentPoC.xcodeproj/project.pbxproj"
 
           cp "$RUNNER_TEMP/fca-intents-wrapper/source-manifest.json" \
             "$RUNNER_TEMP/fca-intents-evidence/"
 
-      - name: Build real FCA app for iPhone without signing
+      - name: Build DEBUG probe for iPhone without signing
         run: |
           set -euo pipefail
 
@@ -66,24 +64,49 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             build 2>&1 | tee "$RUNNER_TEMP/fca-intents-evidence/build.log"
 
-      - name: Verify packaged metadata and Dev identity
+      - name: Verify packaged metadata and probe identity
         run: |
           set -euo pipefail
 
           app="$RUNNER_TEMP/fca-intents-products/Debug-iphoneos/FamilyCarAgent.app"
 
-          ditto -c -k --keepParent "$app" \
-            "$RUNNER_TEMP/fca-intents-evidence/FCA-Dev-Debug-UNSIGNED.zip"
-
           python3 ios/Checks/app-intents-poc.py verify \
             "$app" \
-            "$RUNNER_TEMP/fca-intents-evidence/metadata-report.json"
+            "$RUNNER_TEMP/fca-intents-evidence/metadata-report.json" --probe
 
-      - name: Upload unsigned app and diagnostic evidence
+      - name: Sign and verify standalone development probe
+        env:
+          FCA_PROBE_P12_BASE64: ${{ secrets.FCA_PROBE_P12_BASE64 }}
+          FCA_PROBE_P12_PASSWORD: ${{ secrets.FCA_PROBE_P12_PASSWORD }}
+          FCA_PROBE_PROFILE_BASE64: ${{ secrets.FCA_PROBE_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          python3 ios/Checks/sign-intent-probe.py sign \
+            "$RUNNER_TEMP/fca-intents-products/Debug-iphoneos/FamilyCarAgent.app" \
+            "$RUNNER_TEMP/fca-intents-evidence"
+
+      - name: Clean temporary signing material
+        if: always()
+        run: python3 ios/Checks/sign-intent-probe.py cleanup
+
+      - name: Upload verified signed probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: fca-intent-probe-development-${{ github.run_id }}
+          path: ${{ runner.temp }}/fca-intents-evidence/FCA-Intent-Probe-Development.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: fca-app-intents-poc-${{ github.run_id }}
-          path: ${{ runner.temp }}/fca-intents-evidence/
+          path: |
+            ${{ runner.temp }}/fca-intents-evidence/toolchain.log
+            ${{ runner.temp }}/fca-intents-evidence/build.log
+            ${{ runner.temp }}/fca-intents-evidence/source-manifest.json
+            ${{ runner.temp }}/fca-intents-evidence/metadata-report.json
+            ${{ runner.temp }}/fca-intents-evidence/signing-report.json
           if-no-files-found: warn
           retention-days: 7
