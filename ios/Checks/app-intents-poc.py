@@ -47,17 +47,11 @@ def generate(ios: Path, output: Path, probe=False):
         }))
         entitlements_path = output / "Probe.entitlements"
         entitlements_path.write_bytes(plistlib.dumps({}))
-        entry = output / "ProbeApp.swift"
-        entry.write_text('import SwiftUI\n@main struct ProbeApp: App {\n'
-                         '    var body: some Scene { WindowGroup {\n'
-                         '        VStack(spacing: 16) {\n'
-                         '            Text("FCA Intent Probe").font(.title)\n'
-                         '            Text("Run FCA Test Connection in Shortcuts.").multilineTextAlignment(.center)\n'
-                         '        }.padding()\n'
-                         '    } }\n}\n')
         intent = next(p for p in sources if p.name == "FCAConnectionTestIntent.swift")
-        source_manifest = {str(intent.relative_to(ios)): hashlib.sha256(intent.read_bytes()).hexdigest()}
-        sources = [intent, entry]
+        sources = [intent] + sorted((ios / "IntentProbe").glob("*.swift"))
+        if len(sources) != 4:
+            raise ValueError("Expected the three isolated probe sources")
+        source_manifest = {str(p.relative_to(ios)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}
         resources = []
     objects = {}
 
@@ -120,15 +114,17 @@ def verify(app: Path, report: Path, probe=False):
     files = sorted(p for p in metadata.rglob("*") if p.is_file()) if metadata.is_dir() else []
     nonempty = [p for p in files if p.stat().st_size]
     matches = [str(p.relative_to(app)) for p in nonempty if b"FCAConnectionTestIntent" in p.read_bytes()]
+    offline_matches = [str(p.relative_to(app)) for p in nonempty if b"FCATestOfflineUploadIntent" in p.read_bytes()]
     with (app / "Info.plist").open("rb") as f:
         info = plistlib.load(f)
     result = {"bundle_id_matches_expected": info.get("CFBundleIdentifier") == (PROBE_ID if probe else "com.familycaragent.app.dev"),
               "environment_matches_expected": info.get("FCAEnvironment") == ("intentprobe" if probe else "development"),
               "display_name_matches": not probe or info.get("CFBundleDisplayName") == PROBE_NAME,
               "metadata_files": [str(p.relative_to(app)) for p in nonempty],
-              "intent_metadata_matches": matches, "device_discovery_verified": False}
+              "intent_metadata_matches": matches, "offline_intent_metadata_matches": offline_matches,
+              "device_discovery_verified": False}
     report.write_text(json.dumps(result, indent=2) + "\n")
-    if not (result["bundle_id_matches_expected"] and result["environment_matches_expected"] and result["display_name_matches"] and matches):
+    if not (result["bundle_id_matches_expected"] and result["environment_matches_expected"] and result["display_name_matches"] and matches and (not probe or offline_matches)):
         raise ValueError("App Intents metadata/Dev identity check failed; inspect metadata-report.json")
 
 

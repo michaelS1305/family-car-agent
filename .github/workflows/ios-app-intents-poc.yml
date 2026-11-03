@@ -33,6 +33,16 @@ jobs:
       - name: Check probe wrapper and signing safeguards with synthetic fixtures
         run: python3 -B ios/Checks/test-app-intents-poc.py
 
+      - name: Check offline upload with local synthetic events and a fake session
+        run: |
+          set -euo pipefail
+          xcrun swiftc -swift-version 6 -D DEBUG -parse-as-library \
+            ios/IntentProbe/OfflineUploadCore.swift \
+            ios/IntentProbe/OfflineUpload.swift \
+            ios/Checks/OfflineUploadProbeChecks.swift \
+            -o "$RUNNER_TEMP/offline-upload-checks"
+          "$RUNNER_TEMP/offline-upload-checks"
+
       - name: Inspect runner Xcode and generate disposable app target
         run: |
           set -euo pipefail

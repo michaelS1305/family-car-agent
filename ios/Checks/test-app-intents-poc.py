@@ -181,6 +181,8 @@ class MetadataPoCTests(unittest.TestCase):
                 {
                     "FCAConnectionTestIntent.swift",
                     "ProbeApp.swift",
+                    "OfflineUpload.swift",
+                    "OfflineUploadCore.swift",
                     "PackageResourceAccessor.swift",
                 },
             )
@@ -188,13 +190,17 @@ class MetadataPoCTests(unittest.TestCase):
             metadata = output / "Metadata.appintents"
             metadata.mkdir()
             (metadata / "extract.actionsdata").write_text(
-                '{"intent":"FCAConnectionTestIntent"}'
+                '{"intents":["FCAConnectionTestIntent","FCATestOfflineUploadIntent"]}'
             )
 
             info["CFBundleIdentifier"] = poc.PROBE_ID
             (output / "Info.plist").write_bytes(plistlib.dumps(info))
 
             poc.verify(output, output / "report.json", probe=True)
+
+            (metadata / "extract.actionsdata").write_text('{"intent":"FCAConnectionTestIntent"}')
+            with self.assertRaises(ValueError):
+                poc.verify(output, output / "report.json", probe=True)
 
             with self.assertRaises(ValueError):
                 poc.verify(output, output / "report.json")
