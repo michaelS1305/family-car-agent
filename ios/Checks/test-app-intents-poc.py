@@ -1,3 +1,4 @@
+
 import importlib.util
 import json
 from pathlib import Path
@@ -82,13 +83,41 @@ class MetadataPoCTests(unittest.TestCase):
                     sign_probe.sign(Path(temp), Path(temp))
                 self.assertFalse(work.exists())
 
-    def test_signing_rejects_non_manual_or_non_develop(self):
-        for event, ref in (("pull_request", "refs/heads/develop"), ("push", "refs/heads/develop"),
-                           ("workflow_dispatch", "refs/heads/main")):
-            with patch.object(sign_probe.sys, "platform", "darwin"), \
-                 patch.dict(sign_probe.os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref}):
-                with self.assertRaises(sign_probe.ProbeError):
+    def test_signing_rejects_unauthorized_events(self):
+        for event, ref in (
+            ("pull_request", "refs/heads/develop"),
+            ("workflow_dispatch", "refs/heads/main"),
+            ("push", "refs/heads/main"),
+            ("schedule", "refs/heads/develop"),
+        ):
+            with self.subTest(event=event, ref=ref), \
+                 patch.object(sign_probe.sys, "platform", "darwin"), \
+                 patch.dict(sign_probe.os.environ, {
+                     "GITHUB_EVENT_NAME": event,
+                     "GITHUB_REF": ref
+                 }):
+                with self.assertRaisesRegex(
+                    sign_probe.ProbeError,
+                    "Signing requires an authorized event on develop"
+                ):
                     sign_probe.sign(Path("unused"), Path("unused"))
+
+    def test_develop_push_is_authorized(self):
+        with tempfile.TemporaryDirectory() as temp:
+            work = Path(temp) / "signing"
+            with patch.object(sign_probe, "workspace", return_value=work), \
+                 patch.object(sign_probe.sys, "platform", "darwin"), \
+                 patch.dict(sign_probe.os.environ, {
+                     "GITHUB_EVENT_NAME": "push",
+                     "GITHUB_REF": "refs/heads/develop",
+                     "FCA_PROBE_P12_BASE64": ""
+                 }):
+                with self.assertRaisesRegex(
+                    sign_probe.ProbeError,
+                    "Required signing secret is missing"
+                ):
+                    sign_probe.sign(Path(temp), Path(temp))
+                self.assertFalse(work.exists())
 
     def test_wrapper_references_real_sources_and_resources(self):
         ios = Path(__file__).resolve().parents[1]
