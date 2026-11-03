@@ -51,8 +51,6 @@ def signing_identity(keychain, certificates):
         str(keychain),
     ).decode()
 
-    # Extract SHA-1 fingerprints from numbered identity rows.
-    # Certificate display names are intentionally ignored.
     row_pattern = r'^\s*\d+\)\s+([0-9A-Fa-f]{40})(?=\s|$)'
 
     valid_hashes = [
@@ -313,7 +311,6 @@ def sign(app, evidence):
             str(keychain),
         )
 
-        # Make the temporary signing keychain available to macOS.
         command(
             "Keychain search list",
             "security", "list-keychains",
@@ -321,7 +318,6 @@ def sign(app, evidence):
             "-s", str(keychain),
         )
 
-        # Select the identity by certificate SHA-1, not its name.
         identity = signing_identity(
             keychain,
             profile["DeveloperCertificates"],
@@ -405,21 +401,19 @@ def sign(app, evidence):
             "the minimal probe entitlements",
         )
 
-        leaf = work / "signer"
+        # Verify the exact leaf signing certificate without
+        # extracting certificate files from the signed app.
+        certificate_requirement = (
+            '=certificate leaf = H"' + identity + '"'
+        )
 
         command(
             "Signer verification",
             "codesign",
-            "-d",
-            "--extract-certificates", str(leaf),
+            "--verify",
+            "--strict",
+            "-R", certificate_requirement,
             str(signed),
-        )
-
-        require(
-            hashlib.sha1(
-                (work / "signer0").read_bytes()
-            ).hexdigest().upper() == identity,
-            "Final signature uses an unexpected certificate",
         )
 
         require(
@@ -478,6 +472,15 @@ def sign(app, evidence):
             "--verify",
             "--deep",
             "--strict",
+            str(packaged),
+        )
+
+        command(
+            "IPA signer verification",
+            "codesign",
+            "--verify",
+            "--strict",
+            "-R", certificate_requirement,
             str(packaged),
         )
 
