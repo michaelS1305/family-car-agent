@@ -1,3 +1,4 @@
+
 name: FCA Dev App Intents Metadata
 
 on:
@@ -64,3 +65,19 @@ jobs:
           name: fca-dev-metadata-report
           path: ${{ runner.temp }}/metadata-report.json
           if-no-files-found: warn
+
+      - name: Package unsigned FCA Dev app
+        shell: bash
+        run: |
+          set -euo pipefail
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$RUNNER_TEMP/fca-dev-products/Debug-iphoneos/FamilyCarAgent.app" \
+            "$RUNNER_TEMP/FCA-Dev-Xcode-Unsigned.zip"
+
+      - name: Upload unsigned FCA Dev app
+        uses: actions/upload-artifact@v4
+        with:
+          name: fca-dev-xcode-unsigned
+          path: ${{ runner.temp }}/FCA-Dev-Xcode-Unsigned.zip
+          if-no-files-found: error
+          retention-days: 7
