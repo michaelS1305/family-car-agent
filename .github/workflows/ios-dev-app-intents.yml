@@ -2,6 +2,10 @@ name: FCA Dev App Intents Metadata
 
 on:
   workflow_dispatch:
+  push:
+    branches: [develop]
+    paths:
+      - .github/workflows/ios-dev-app-intents.yml
 
 permissions:
   contents: read
