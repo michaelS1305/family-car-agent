@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """Sign an existing Xcode-built FCA Dev app on an ephemeral macOS Actions runner.
 
@@ -101,10 +100,16 @@ def signing_identity(keychain, certificates):
         if value.upper() in permitted
     ]
 
+    # Diagnostic counts only. No certificate fingerprints,
+    # signing identities, private keys, or secrets are logged.
     require(
         len(matches) == 1,
-        "Expected exactly one signing certificate "
-        "authorized by FCA Dev profile",
+        (
+            "FCA Dev signing identity mismatch: "
+            f"valid_keychain_identities={len(candidates)}, "
+            f"profile_certificates={len(certificates)}, "
+            f"matching_identities={len(matches)}"
+        ),
     )
 
     return matches[0]
@@ -236,13 +241,11 @@ def verify_profile(profile):
         "Entitlement team does not match",
     )
 
-    # The provisioning profile can omit an explicit default
-    # Keychain access group, or authorize it via a wildcard.
+    # The provisioning profile may omit the default Keychain
+    # access group or authorize it through a wildcard.
     #
-    # In both cases, sign with the concrete group associated
-    # with the installed FCA Dev application identity.
-    #
-    # An explicit incompatible group is not accepted.
+    # Sign with the concrete group belonging to the installed
+    # FCA Dev identity. Reject incompatible explicit groups.
 
     expected_group = expected_app_id
     groups = entitlements.get("keychain-access-groups")
