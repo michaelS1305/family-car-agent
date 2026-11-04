@@ -21,6 +21,7 @@ struct VehicleQueueContext: Equatable, Sendable {
     }
 }
 
+enum ShortcutQueueError: Error { case location, alreadyTaken, noUniqueTake }
 enum VehicleQueueError: Error { case invalidInput, storage, unsupportedSchema, contextUnavailable, conflict, invalidTransition }
 enum VehicleQueueState: String, Codable, Sendable {
     case pending, preparing, registered, awaitingAuthentication, accepted, terminal, blocked
@@ -78,6 +79,9 @@ actor VehicleEventQueue {
 
     init(directory: URL) throws { db = try VehicleQueueDatabase(directory: directory) }
 
+    /// Scheduling/restoration must also respect a frozen partition.
+    func validateActiveContext(_ context: VehicleQueueContext) throws { try require(context) }
+
     /// Call only for a newly registered device whose server cursor is known to be zero.
     /// Reopening an existing partition never resets its sequence or unfreezes it.
     func initializeFreshDevice(_ context: VehicleQueueContext) throws {
@@ -122,8 +126,15 @@ actor VehicleEventQueue {
         try enqueue(context, id: id, vehicle: vehicle, occurredAt: occurredAt, takeID: takeID, location: location)
     }
 
+    func recordShortcut(_ context: VehicleQueueContext, vehicle: UUID, kind: QueuedVehicleEvent.Kind,
+                        time: Date, location: VehicleLocationEvidence?) throws -> QueuedVehicleEvent {
+        guard kind == .take || location != nil else { throw ShortcutQueueError.location }
+        return try enqueue(context, id: UUID(), vehicle: vehicle, occurredAt: time, takeID: nil,
+                           location: location, shortcut: kind)
+    }
+
     private func enqueue(_ context: VehicleQueueContext, id: UUID, vehicle: UUID, occurredAt: Date,
-                         takeID: UUID?, location: VehicleLocationEvidence?) throws -> QueuedVehicleEvent {
+                         takeID: UUID?, location: VehicleLocationEvidence?, shortcut: QueuedVehicleEvent.Kind? = nil) throws -> QueuedVehicleEvent {
         guard id.uuidString.split(separator: "-")[2].first == "4",
               occurredAt.timeIntervalSince1970.isFinite,
               (0...253402300799).contains(occurredAt.timeIntervalSince1970)
@@ -131,6 +142,18 @@ actor VehicleEventQueue {
         try location?.validate(at: occurredAt)
         return try db.transaction {
             try require(context)
+            var takeID = takeID
+            if let shortcut {
+                let rows = try records(context).filter { $0.event.vehicle == vehicle }
+                let paired = Set(rows.compactMap { $0.event.takeID })
+                let open = rows.filter { $0.event.kind == .take && $0.state != .terminal && !paired.contains($0.event.id) }
+                if shortcut == .take {
+                    guard open.isEmpty else { throw ShortcutQueueError.alreadyTaken }
+                } else {
+                    guard open.count == 1 else { throw ShortcutQueueError.noUniqueTake }
+                    takeID = open[0].event.id
+                }
+            }
             if let old = try records(context).first(where: { $0.event.id == id })?.event {
                 guard old.vehicle == vehicle, old.occurredAt == occurredAt,
                       old.takeID == takeID, old.location == location else { throw VehicleQueueError.conflict }

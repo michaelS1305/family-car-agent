@@ -79,6 +79,26 @@ actor TestTransport: AuthTransport {
         let owner = UUID(); let other = UUID()
         let original = AuthSession(owner: owner, accessToken: "test-access", refreshToken: "test-refresh", expires: now, activated: true)
         let refreshed = AuthSession(owner: owner, accessToken: "new-access", refreshToken: "new-refresh", expires: Date().addingTimeInterval(3600))
+        let stored = try JSONEncoder().encode(original)
+        var legacy = true, unlockedOnce = false, unlocked = false, clears = 0, upgrades = 0
+        func readSession(failUpgrade: Bool = false) throws -> AuthSession? {
+            try SessionVaultRead.restore(item: {
+                guard unlocked || (!legacy && unlockedOnce) else { throw AuthFailure.storage }
+                return (stored, legacy)
+            }, upgrade: {
+                upgrades += 1
+                if failUpgrade { throw AuthFailure.storage }
+                legacy = false
+            }, clearCorrupt: { clears += 1 })
+        }
+        await rejects("before first unlock", .storage) { _ = try readSession() }
+        unlocked = true; unlockedOnce = true
+        check(try readSession(failUpgrade: true) == original && legacy, "failed migration retains session")
+        check(try readSession() == original && !legacy, "unlocked migration")
+        unlocked = false
+        check(try readSession() == original && clears == 0 && upgrades == 2, "locked after first unlock, no repeated migration")
+        unlockedOnce = false
+        await rejects("reboot makes migrated item inaccessible until first unlock", .storage) { _ = try readSession() }
         let vault = TestVault(); vault.value = original
         let transport = TestTransport(refreshed)
         let manager = SessionManager(vault: vault, transport: transport)
@@ -106,6 +126,20 @@ actor TestTransport: AuthTransport {
         check(vault.value?.activated == true, "explicit bootstrap activation")
         try manager.clear()
 
+        let scopedVault = TestVault(); scopedVault.value = original
+        let scoped = SessionManager(vault: scopedVault, transport: TestTransport(refreshed))
+        try scoped.restore()
+        let scope = VehicleSessionScope(environment: "synthetic", user: 1, family: 2, device: UUID())
+        let bound = [UUID(): "synthetic vehicle"]
+        try scoped.authorizeVehicleScope(scope, owner: owner, generation: scoped.generation, bindings: bound)
+        _ = try await scoped.access(owner: owner, force: true)
+        let relaunched = SessionManager(vault: scopedVault, transport: TestTransport(refreshed))
+        try relaunched.restore()
+        check(relaunched.session?.vehicleScope == scope && relaunched.session?.boundVehicles == bound, "explicit scope survives refresh and relaunch")
+        var invalidated = false
+        relaunched.onInvalidation = { invalidated = $0?.vehicleScope == scope }
+        try relaunched.verifyVehicleScope(user: 1, family: 3)
+        check(invalidated && scopedVault.value?.vehicleScope == nil && scopedVault.value?.boundVehicles == nil, "family switch invalidates durable scheduling scope")
         let relay = AuthSession(owner: other, accessToken: "relay-access", refreshToken: "relay-refresh", expires: Date().addingTimeInterval(3600))
         let relayManager = SessionManager(vault: vault, transport: TestTransport(relay))
         try await relayManager.login(grant: "id_token", fields: [:], appleUser: "relay-apple-subject")

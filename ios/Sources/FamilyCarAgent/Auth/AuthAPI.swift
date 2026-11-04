@@ -271,6 +271,24 @@ final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTrans
         // Publishable only: never accept service-role, secret keys or arbitrary JWTs.
         key.range(of: "^sb_publishable_[A-Za-z0-9_-]+$", options: .regularExpression) != nil
     }
+    func usableVehicleBindings(device: UUID, token: String) async throws -> [UUID: String] {
+        struct Binding: Decodable { let vehicle_ref: UUID; let display_name: String; let usable: Bool }
+        let url = environment.backendURL.appendingPathComponent("api/devices/\(device.uuidString)/vehicle-bindings")
+        let bindings = try await send([Binding].self, url: url, method: "GET", body: nil, token: token, auth: false)
+        var result: [UUID: String] = [:]
+        for binding in bindings where binding.usable { result[binding.vehicle_ref] = binding.display_name }
+        return result
+    }
+
+    /// Read-only ownership check at explicit opt-in, never on offline enqueue.
+    func permitsVehicleDevice(_ id: UUID, token: String) async throws -> Bool {
+        struct Device: Decodable, Sendable { let device_ref: UUID; let platform: String; let revoked_at: String? }
+        var parts = URLComponents(url: environment.backendURL.appendingPathComponent("api/devices"), resolvingAgainstBaseURL: false)
+        parts?.queryItems = [URLQueryItem(name: "platform", value: "ios")]
+        guard let url = parts?.url else { throw AuthFailure.configuration }
+        let rows = try await send([Device].self, url: url, method: "GET", body: nil, token: token, auth: false)
+        return rows.contains { $0.device_ref == id && $0.platform == "ios" && $0.revoked_at == nil }
+    }
     private func send<T: Decodable & Sendable>(_ type: T.Type, url: URL, method: String,
                                                body: Data?, token: String?, auth: Bool, appleDiagnostic: Bool = false) async throws -> T {
         var request = URLRequest(url: url)

@@ -48,6 +48,19 @@ private func sql(_ directory: URL, _ statement: String) throws {
         try await queue.initializeFreshDevice(context)
         let vehicle = UUID(), otherVehicle = UUID()
         let now = Date(timeIntervalSince1970: 1_800_000_000.125)
+        let shortcutContext = try VehicleQueueContext(environment: .development, identity: identity, device: UUID())
+        try await queue.initializeFreshDevice(shortcutContext)
+        let fix = VehicleLocationEvidence(latitude: 32, longitude: 34, accuracy: 5, measuredAt: now)
+        let a = try await queue.recordShortcut(shortcutContext, vehicle: vehicle, kind: .take, time: now, location: nil)
+        let b = try await queue.recordShortcut(shortcutContext, vehicle: otherVehicle, kind: .take, time: now, location: nil)
+        await fails { _ = try await queue.recordShortcut(shortcutContext, vehicle: vehicle, kind: .take, time: now, location: nil) }
+        await fails { _ = try await queue.recordShortcut(shortcutContext, vehicle: vehicle, kind: .returning, time: now, location: nil) }
+        await fails { _ = try await queue.recordShortcut(shortcutContext, vehicle: vehicle, kind: .returning, time: now.addingTimeInterval(31), location: fix) }
+        let ra = try await queue.recordShortcut(shortcutContext, vehicle: vehicle, kind: .returning, time: now, location: fix)
+        await fails { _ = try await queue.recordShortcut(shortcutContext, vehicle: vehicle, kind: .returning, time: now, location: fix) }
+        let rb = try await queue.recordShortcut(shortcutContext, vehicle: otherVehicle, kind: .returning, time: now, location: fix)
+        precondition([a.sequence, b.sequence, ra.sequence, rb.sequence] == [1,2,3,4])
+        precondition(ra.takeID == a.id && rb.takeID == b.id && ra.location == fix && ra.occurredAt == now)
         let take = try await queue.enqueueTake(context, vehicle: vehicle, occurredAt: now)
         precondition(take.sequence == 1)
         let same = try await queue.enqueueTake(context, id: take.id, vehicle: vehicle, occurredAt: now)

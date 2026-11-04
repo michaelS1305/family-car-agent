@@ -123,8 +123,11 @@ def verify(app: Path, report: Path, probe=False):
               "metadata_files": [str(p.relative_to(app)) for p in nonempty],
               "intent_metadata_matches": matches, "offline_intent_metadata_matches": offline_matches,
               "device_discovery_verified": False}
+    if not probe:
+        actions = [b"FCATakeVehicleIntent", b"FCAReturnVehicleIntent"]
+        result["vehicle_actions_present"] = all(any(action in p.read_bytes() for p in nonempty) for action in actions)
     report.write_text(json.dumps(result, indent=2) + "\n")
-    if not (result["bundle_id_matches_expected"] and result["environment_matches_expected"] and result["display_name_matches"] and matches and (not probe or offline_matches)):
+    if not (result["bundle_id_matches_expected"] and result["environment_matches_expected"] and result["display_name_matches"] and matches and (offline_matches if probe else result["vehicle_actions_present"])):
         raise ValueError("App Intents metadata/Dev identity check failed; inspect metadata-report.json")
 
 

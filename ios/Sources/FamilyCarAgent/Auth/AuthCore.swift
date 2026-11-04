@@ -197,8 +197,32 @@ struct AuthSession: Codable, Equatable, Sendable {
     let accessToken: String
     let refreshToken: String
     let expires: Date
+    var shortcutNamespace: UUID? = nil
+    var boundVehicles: [UUID: String]? = nil
+    var vehicleScope: VehicleSessionScope? = nil
     var activated = false
     var appleUser: String? = nil // credential-state lookup only; not an FCA account identifier
+}
+
+struct VehicleSessionScope: Codable, Equatable, Sendable {
+    let environment: String
+    let user: Int64
+    let family: Int64
+    let device: UUID
+}
+
+/// Only a successfully read, decodable session is eligible for accessibility migration.
+@MainActor enum SessionVaultRead {
+    static func restore(item: () throws -> (Data, legacy: Bool)?, upgrade: () throws -> Void,
+                        clearCorrupt: () throws -> Void) throws -> AuthSession? {
+        guard let (data, legacy) = try item() else { return nil }
+        guard let value = try? JSONDecoder().decode(AuthSession.self, from: data),
+              !value.accessToken.isEmpty, !value.refreshToken.isEmpty else {
+            try clearCorrupt(); throw AuthFailure.signedOut
+        }
+        if legacy { try? upgrade() } // Never delete/re-add a valid legacy item.
+        return value
+    }
 }
 
 @MainActor protocol SessionVault {
@@ -222,6 +246,23 @@ protocol AuthTransport: Sendable {
     init(vault: any SessionVault, transport: any AuthTransport) {
         self.vault = vault; self.transport = transport
     }
+    var onInvalidation: ((AuthSession?) -> Void)?
+    var onVehicleScopeRestored: (() -> Void)?
+    func verifyVehicleScope(user: Int64, family: Int64) throws {
+        guard var current = session, let scope = current.vehicleScope else { return }
+        if scope.user == user && scope.family == family { onVehicleScopeRestored?(); return }
+        onInvalidation?(current)
+        current.shortcutNamespace = nil; current.boundVehicles = nil; current.vehicleScope = nil; session = current
+        try vault.write(current)
+    }
+    func authorizeVehicleScope(_ scope: VehicleSessionScope, owner: UUID, generation expected: Int, bindings: [UUID: String] = [:]) throws {
+        guard generation == expected, var value = session, value.owner == owner, value.activated,
+              value.vehicleScope == nil || value.vehicleScope == scope else { throw AuthFailure.stale }
+        if value.shortcutNamespace == nil { value.shortcutNamespace = UUID() }
+        value.boundVehicles = bindings
+        value.vehicleScope = scope
+        try vault.write(value); session = value
+    }
     func restore() throws {
         guard session == nil else { return }
         let saved = try vault.read()
@@ -229,7 +270,9 @@ protocol AuthTransport: Sendable {
         session = saved
     }
     func clear() throws {
+        let previous = session
         generation += 1; refreshing?.cancel(); refreshing = nil; session = nil
+        onInvalidation?(previous)
         try vault.clear() // caller must not begin another login if erasure fails
     }
     func login(grant: String, fields: [String: String], appleUser: String? = nil) async throws {
@@ -261,7 +304,10 @@ protocol AuthTransport: Sendable {
                 var result = try await transport.exchange(grant: "refresh_token", fields: ["refresh_token": current.refreshToken])
                 guard generation == version, session?.owner == owner else { throw AuthFailure.stale }
                 guard result.owner == owner else { try clear(); throw AuthFailure.signedOut }
-                result.activated = current.activated; result.appleUser = current.appleUser
+                result.shortcutNamespace = session?.shortcutNamespace
+                result.boundVehicles = session?.boundVehicles
+                result.vehicleScope = session?.vehicleScope
+                result.activated = session?.activated ?? false; result.appleUser = current.appleUser
                 try vault.write(result); session = result
                 return result
             } catch {

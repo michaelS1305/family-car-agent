@@ -143,13 +143,9 @@ import Combine
     #if canImport(UIKit)
     init() {
         do {
-            let env = try AppEnvironment.current()
-            guard Bundle.main.object(forInfoDictionaryKey: "FCAEnvironment") as? String == "development",
-                  let key = Bundle.main.object(forInfoDictionaryKey: "FCASupabasePublishableKey") as? String else { throw AuthFailure.configuration }
-            let api = try AuthAPI(environment: env, publicKey: key)
-            self.api = api
-            sessions = SessionManager(vault: KeychainVault(environment: env), transport: api)
-            providers = NativeProviders(environment: env)
+            let runtime = try VehicleSessionRuntime.shared.get()
+            api = runtime.api; sessions = runtime.sessions
+            providers = NativeProviders(environment: runtime.environment)
         } catch { self.error = AuthFailure.configuration.message }
     }
     #endif
@@ -270,6 +266,7 @@ import Combine
         let profile = try await request(Me.self, "/api/me")
         guard profile.family_id > 0, profile.user_id > 0, let owner = sessions?.session?.owner else { throw AuthFailure.invalidResponse }
         if !existing && route == .create { createdCode = try await request(FamilyCode.self, "/api/family").family_code }
+        try sessions?.verifyVehicleScope(user: profile.user_id, family: profile.family_id)
         try sessions?.activate(owner: owner)
         me = profile; resolutionToken = nil; familyCode = ""; addressLocation = nil
         screen = existing ? .ready : .success

@@ -1,0 +1,62 @@
+name: FCA Dev App Intents Metadata
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    if: github.ref == 'refs/heads/develop'
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate FCA Dev Xcode wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ios/Checks/app-intents-poc.py generate \
+            "$GITHUB_WORKSPACE/ios" \
+            "$RUNNER_TEMP/fca-dev-wrapper"
+          plutil -lint "$RUNNER_TEMP/fca-dev-wrapper/FCAIntentPoC.xcodeproj/project.pbxproj"
+
+      - name: Build full FCA Dev app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project "$RUNNER_TEMP/fca-dev-wrapper/FCAIntentPoC.xcodeproj" \
+            -target FamilyCarAgent \
+            -configuration Debug \
+            -sdk iphoneos \
+            SYMROOT="$RUNNER_TEMP/fca-dev-products" \
+            OBJROOT="$RUNNER_TEMP/fca-dev-intermediates" \
+            SWIFT_COMPILATION_MODE=singlefile \
+            SWIFT_ENABLE_BATCH_MODE=NO \
+            OTHER_SWIFT_FLAGS="-disable-batch-mode" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Verify App Intents metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ios/Checks/app-intents-poc.py verify \
+            "$RUNNER_TEMP/fca-dev-products/Debug-iphoneos/FamilyCarAgent.app" \
+            "$RUNNER_TEMP/metadata-report.json"
+
+      - name: Upload metadata report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fca-dev-metadata-report
+          path: ${{ runner.temp }}/metadata-report.json
+          if-no-files-found: warn

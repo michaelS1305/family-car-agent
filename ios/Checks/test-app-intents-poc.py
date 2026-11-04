@@ -430,6 +430,12 @@ class MetadataPoCTests(unittest.TestCase):
                 b'{"intent":"FCAConnectionTestIntent"}'
             )
 
+            with self.assertRaises(ValueError):
+                poc.verify(app, report)
+            data.write_bytes(b'["FCAConnectionTestIntent","FCATakeVehicleIntent"]')
+            with self.assertRaises(ValueError):
+                poc.verify(app, report)
+            data.write_bytes(b'["FCAConnectionTestIntent","FCATakeVehicleIntent","FCAReturnVehicleIntent"]')
             poc.verify(app, report)
 
             self.assertFalse(
