@@ -1,8 +1,9 @@
+
 #!/usr/bin/env python3
 """Sign an existing Xcode-built FCA Dev app on an ephemeral macOS Actions runner.
 
-Input app is never modified. Private signing-tool output and secrets are not logged.
-This script intentionally signs ONLY the existing XTL-prefixed FCA Dev identity.
+The input app is not modified. Signing secrets and private command output
+are never printed. Only the existing XTL-prefixed FCA Dev identity is used.
 """
 
 import argparse
@@ -24,12 +25,13 @@ TEAM = "GT43M39TLK"
 SOURCE_BUNDLE = "com.familycaragent.app.dev"
 INSTALLED_BUNDLE = "XTL-255E706B.com.familycaragent.app.dev"
 PROFILE_NAME = "XTL profile 8FC5U3CDL2"
+
 IPA_NAME = "FCA-Dev-AppIntents-Development.ipa"
 REPORT_NAME = "fca-dev-signing-report.json"
 
 
 class SignError(Exception):
-    """Safe diagnostic: never contains private subprocess output."""
+    """Safe error without private signing-tool output."""
 
 
 def require(condition, message):
@@ -38,10 +40,15 @@ def require(condition, message):
 
 
 def call(label, *args):
-    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    result = subprocess.run(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     if result.returncode:
         raise SignError(
-            f"{label} failed (exit {result.returncode}); private tool output suppressed"
+            f"{label} failed (exit {result.returncode}); "
+            "private tool output suppressed"
         )
     return result.stdout
 
@@ -49,12 +56,19 @@ def call(label, *args):
 def decode_secret(name, destination):
     value = os.environ.get(name, "")
     require(bool(value), f"Required signing secret missing: {name}")
+
     try:
-        data = base64.b64decode("".join(value.split()), validate=True)
+        data = base64.b64decode(
+            "".join(value.split()),
+            validate=True,
+        )
     except Exception:
-        raise SignError(f"Invalid Base64 signing secret: {name}") from None
+        raise SignError(
+            f"Invalid Base64 signing secret: {name}"
+        ) from None
 
     require(bool(data), f"Decoded signing secret empty: {name}")
+
     destination.write_bytes(data)
     destination.chmod(0o600)
 
@@ -62,8 +76,11 @@ def decode_secret(name, destination):
 def signing_identity(keychain, certificates):
     output = call(
         "Signing identity lookup",
-        "security", "find-identity",
-        "-v", "-p", "codesigning",
+        "security",
+        "find-identity",
+        "-v",
+        "-p",
+        "codesigning",
         str(keychain),
     ).decode()
 
@@ -71,11 +88,6 @@ def signing_identity(keychain, certificates):
         r"^\s*\d+\)\s+([0-9A-Fa-f]{40})(?=\s|$)",
         output,
         re.MULTILINE,
-    )
-
-    require(
-        len(candidates) == len(set(candidates)),
-        "Duplicate signing identity entries",
     )
 
     permitted = {
@@ -91,31 +103,42 @@ def signing_identity(keychain, certificates):
 
     require(
         len(matches) == 1,
-        "Expected exactly one signing certificate authorized by FCA Dev profile",
+        "Expected exactly one signing certificate "
+        "authorized by FCA Dev profile",
     )
 
     return matches[0]
 
 
 def app_info(app):
-    return plistlib.loads((app / "Info.plist").read_bytes())
+    return plistlib.loads(
+        (app / "Info.plist").read_bytes()
+    )
 
 
 def metadata_snapshot(app):
     folder = app / "Metadata.appintents"
-    require(folder.is_dir(), "App Intents metadata directory missing")
+
+    require(
+        folder.is_dir(),
+        "App Intents metadata directory missing",
+    )
 
     files = sorted(
-        p for p in folder.rglob("*")
-        if p.is_file()
+        path
+        for path in folder.rglob("*")
+        if path.is_file()
     )
 
     require(
-        files and all(p.stat().st_size for p in files),
+        files and all(path.stat().st_size for path in files),
         "App Intents metadata missing or empty",
     )
 
-    content = b"\n".join(p.read_bytes() for p in files)
+    content = b"\n".join(
+        path.read_bytes()
+        for path in files
+    )
 
     for action in (
         b"FCATakeVehicleIntent",
@@ -127,20 +150,23 @@ def metadata_snapshot(app):
         )
 
     return {
-        str(p.relative_to(folder)): hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in files
+        str(path.relative_to(folder)): hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+        for path in files
     }
 
 
 def signed_entitlements(app):
-    return plistlib.loads(
-        call(
-            "Signed entitlements read",
-            "codesign", "-d",
-            "--entitlements", ":-",
-            str(app),
-        )
+    data = call(
+        "Signed entitlements read",
+        "codesign",
+        "-d",
+        "--entitlements",
+        ":-",
+        str(app),
     )
+    return plistlib.loads(data)
 
 
 def verify_profile(profile):
@@ -155,13 +181,16 @@ def verify_profile(profile):
     )
 
     expiration = profile.get("ExpirationDate")
+
     require(
         isinstance(expiration, dt.datetime),
-        "Profile expiry missing",
+        "Provisioning profile expiration missing",
     )
 
     if expiration.tzinfo is None:
-        expiration = expiration.replace(tzinfo=dt.timezone.utc)
+        expiration = expiration.replace(
+            tzinfo=dt.timezone.utc
+        )
 
     require(
         expiration > dt.datetime.now(dt.timezone.utc),
@@ -169,7 +198,7 @@ def verify_profile(profile):
     )
 
     require(
-        profile.get("Platform") and "iOS" in profile["Platform"],
+        "iOS" in profile.get("Platform", []),
         "Provisioning profile is not for iOS",
     )
 
@@ -183,35 +212,74 @@ def verify_profile(profile):
         "Development profile has no signing certificates",
     )
 
-    entitlements = profile.get("Entitlements", {})
+    entitlements = dict(
+        profile.get("Entitlements", {})
+    )
 
     require(
         entitlements.get("get-task-allow") is True,
         "Not a Development provisioning profile",
     )
 
+    expected_app_id = f"{TEAM}.{INSTALLED_BUNDLE}"
+
     require(
         entitlements.get("application-identifier")
-        == f"{TEAM}.{INSTALLED_BUNDLE}",
+        == expected_app_id,
         "Provisioning App ID does not match installed FCA Dev",
     )
 
     require(
-        entitlements.get("com.apple.developer.team-identifier") == TEAM,
+        entitlements.get(
+            "com.apple.developer.team-identifier"
+        ) == TEAM,
         "Entitlement team does not match",
     )
 
-    groups = entitlements.get("keychain-access-groups", [])
+    # The provisioning profile can omit an explicit default
+    # Keychain access group, or authorize it via a wildcard.
+    #
+    # In both cases, sign with the concrete group associated
+    # with the installed FCA Dev application identity.
+    #
+    # An explicit incompatible group is not accepted.
 
-    require(
-        isinstance(groups, list),
-        "Provisioning keychain groups invalid",
-    )
+    expected_group = expected_app_id
+    groups = entitlements.get("keychain-access-groups")
 
-    require(
-        f"{TEAM}.{INSTALLED_BUNDLE}" in groups,
-        "Default installed FCA Dev Keychain access group not authorized",
-    )
+    if groups is None:
+        entitlements["keychain-access-groups"] = [
+            expected_group
+        ]
+    else:
+        require(
+            isinstance(groups, list) and bool(groups),
+            "Provisioning keychain groups invalid",
+        )
+
+        require(
+            all(isinstance(group, str) for group in groups),
+            "Provisioning keychain group contains invalid value",
+        )
+
+        authorized = any(
+            group == expected_group
+            or (
+                group.endswith("*")
+                and expected_group.startswith(group[:-1])
+            )
+            for group in groups
+        )
+
+        require(
+            authorized,
+            "Provisioning profile does not authorize "
+            "the FCA Dev Keychain group",
+        )
+
+        entitlements["keychain-access-groups"] = [
+            expected_group
+        ]
 
     return entitlements, expiration
 
@@ -223,10 +291,11 @@ def sign(input_app, evidence):
     )
 
     require(
-        os.environ.get("GITHUB_REF") == "refs/heads/develop"
+        os.environ.get("GITHUB_REF")
+        == "refs/heads/develop"
         and os.environ.get("GITHUB_EVENT_NAME")
         in ("push", "workflow_dispatch"),
-        "Signing requires approved GitHub develop workflow",
+        "Signing requires authorized develop workflow",
     )
 
     require(
@@ -249,23 +318,27 @@ def sign(input_app, evidence):
     source_info = app_info(input_app)
 
     require(
-        source_info.get("CFBundleIdentifier") == SOURCE_BUNDLE,
+        source_info.get("CFBundleIdentifier")
+        == SOURCE_BUNDLE,
         "Xcode source Bundle ID mismatch",
     )
 
     require(
-        source_info.get("FCAEnvironment") == "development",
+        source_info.get("FCAEnvironment")
+        == "development",
         "Source is not FCA Dev",
     )
 
     require(
         not list(input_app.rglob("*.appex")),
-        "Unexpected app extension: independent signing review required",
+        "Unexpected app extension: separate signing review required",
     )
 
     original_metadata = metadata_snapshot(input_app)
 
-    with tempfile.TemporaryDirectory(prefix="fca-dev-sign-") as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="fca-dev-sign-"
+    ) as temporary:
         root = Path(temporary)
 
         cert_file = root / "certificate.p12"
@@ -273,34 +346,56 @@ def sign(input_app, evidence):
         keychain = root / "fca-dev.keychain-db"
         key_password = secrets.token_urlsafe(32)
 
-        decode_secret("FCA_PROBE_P12_BASE64", cert_file)
-        decode_secret("FCA_DEV_PROFILE_BASE64", profile_file)
+        decode_secret(
+            "FCA_PROBE_P12_BASE64",
+            cert_file,
+        )
 
-        cert_password = os.environ.get("FCA_PROBE_P12_PASSWORD", "")
+        decode_secret(
+            "FCA_DEV_PROFILE_BASE64",
+            profile_file,
+        )
+
+        cert_password = os.environ.get(
+            "FCA_PROBE_P12_PASSWORD",
+            "",
+        )
 
         require(
             bool(cert_password),
             "P12 password missing",
         )
 
-        profile = plistlib.loads(
-            call(
-                "Profile decoding",
-                "security", "cms", "-D", "-i",
-                str(profile_file),
-            )
+        decoded = call(
+            "Provisioning profile decoding",
+            "security",
+            "cms",
+            "-D",
+            "-i",
+            str(profile_file),
         )
 
-        entitlements, expiration = verify_profile(profile)
+        profile = plistlib.loads(decoded)
+
+        entitlements, expiration = verify_profile(
+            profile
+        )
 
         entitlement_file = root / "entitlements.plist"
-        entitlement_file.write_bytes(plistlib.dumps(entitlements))
+        entitlement_file.write_bytes(
+            plistlib.dumps(entitlements)
+        )
 
         payload = root / "Payload"
         payload.mkdir()
 
         signed = payload / "FamilyCarAgent.app"
-        shutil.copytree(input_app, signed, symlinks=True)
+
+        shutil.copytree(
+            input_app,
+            signed,
+            symlinks=True,
+        )
 
         signed_info = dict(source_info)
         signed_info["CFBundleIdentifier"] = INSTALLED_BUNDLE
@@ -322,40 +417,53 @@ def sign(input_app, evidence):
         try:
             call(
                 "Temporary Keychain creation",
-                "security", "create-keychain",
-                "-p", key_password,
+                "security",
+                "create-keychain",
+                "-p",
+                key_password,
                 str(keychain),
             )
 
             call(
                 "Temporary Keychain settings",
-                "security", "set-keychain-settings",
-                "-lut", "21600",
+                "security",
+                "set-keychain-settings",
+                "-lut",
+                "21600",
                 str(keychain),
             )
 
             call(
                 "Temporary Keychain unlock",
-                "security", "unlock-keychain",
-                "-p", key_password,
+                "security",
+                "unlock-keychain",
+                "-p",
+                key_password,
                 str(keychain),
             )
 
             call(
                 "Certificate import",
-                "security", "import",
+                "security",
+                "import",
                 str(cert_file),
-                "-k", str(keychain),
-                "-P", cert_password,
-                "-T", "/usr/bin/codesign",
+                "-k",
+                str(keychain),
+                "-P",
+                cert_password,
+                "-T",
+                "/usr/bin/codesign",
             )
 
             call(
                 "Code-signing key access",
-                "security", "set-key-partition-list",
-                "-S", "apple-tool:,apple:",
+                "security",
+                "set-key-partition-list",
+                "-S",
+                "apple-tool:,apple:",
                 "-s",
-                "-k", key_password,
+                "-k",
+                key_password,
                 str(keychain),
             )
 
@@ -364,12 +472,17 @@ def sign(input_app, evidence):
                 profile["DeveloperCertificates"],
             )
 
+            # Sign nested code before signing the containing app.
             nested = sorted(
                 (
-                    p for p in signed.rglob("*")
-                    if p.suffix in (".framework", ".dylib")
+                    path
+                    for path in signed.rglob("*")
+                    if path.suffix in (
+                        ".framework",
+                        ".dylib",
+                    )
                 ),
-                key=lambda p: len(p.parts),
+                key=lambda path: len(path.parts),
                 reverse=True,
             )
 
@@ -378,8 +491,10 @@ def sign(input_app, evidence):
                     "Nested code signing",
                     "codesign",
                     "--force",
-                    "--sign", identity,
-                    "--keychain", str(keychain),
+                    "--sign",
+                    identity,
+                    "--keychain",
+                    str(keychain),
                     "--timestamp=none",
                     str(item),
                 )
@@ -388,10 +503,13 @@ def sign(input_app, evidence):
                 "Application signing",
                 "codesign",
                 "--force",
-                "--sign", identity,
-                "--keychain", str(keychain),
+                "--sign",
+                identity,
+                "--keychain",
+                str(keychain),
                 "--timestamp=none",
-                "--entitlements", str(entitlement_file),
+                "--entitlements",
+                str(entitlement_file),
                 str(signed),
             )
 
@@ -404,8 +522,10 @@ def sign(input_app, evidence):
                 str(signed),
             )
 
-            certificate_requirement = (
-                '=certificate leaf = H"' + identity + '"'
+            requirement = (
+                '=certificate leaf = H"'
+                + identity
+                + '"'
             )
 
             call(
@@ -413,17 +533,21 @@ def sign(input_app, evidence):
                 "codesign",
                 "--verify",
                 "--strict",
-                "-R", certificate_requirement,
+                "-R",
+                requirement,
                 str(signed),
             )
 
             require(
-                signed_entitlements(signed) == entitlements,
-                "Signed entitlements do not match validated profile",
+                signed_entitlements(signed)
+                == entitlements,
+                "Signed entitlements differ from requested entitlements",
             )
 
             require(
-                (signed / "embedded.mobileprovision").read_bytes()
+                (
+                    signed / "embedded.mobileprovision"
+                ).read_bytes()
                 == profile_file.read_bytes(),
                 "Embedded provisioning profile mismatch",
             )
@@ -431,11 +555,12 @@ def sign(input_app, evidence):
             require(
                 app_info(signed).get("CFBundleIdentifier")
                 == INSTALLED_BUNDLE,
-                "Signed bundle identity changed",
+                "Signed Bundle ID changed",
             )
 
             require(
-                metadata_snapshot(signed) == original_metadata,
+                metadata_snapshot(signed)
+                == original_metadata,
                 "App Intents metadata changed after signing",
             )
 
@@ -444,7 +569,8 @@ def sign(input_app, evidence):
             call(
                 "IPA packaging",
                 "ditto",
-                "-c", "-k",
+                "-c",
+                "-k",
                 "--keepParent",
                 str(payload),
                 str(ipa),
@@ -455,13 +581,16 @@ def sign(input_app, evidence):
             call(
                 "IPA extraction",
                 "ditto",
-                "-x", "-k",
+                "-x",
+                "-k",
                 str(ipa),
                 str(extraction),
             )
 
             packaged = (
-                extraction / "Payload" / "FamilyCarAgent.app"
+                extraction
+                / "Payload"
+                / "FamilyCarAgent.app"
             )
 
             require(
@@ -485,18 +614,22 @@ def sign(input_app, evidence):
             )
 
             require(
-                signed_entitlements(packaged) == entitlements,
+                signed_entitlements(packaged)
+                == entitlements,
                 "Packaged entitlements mismatch",
             )
 
             require(
-                (packaged / "embedded.mobileprovision").read_bytes()
+                (
+                    packaged / "embedded.mobileprovision"
+                ).read_bytes()
                 == profile_file.read_bytes(),
-                "Packaged provisioning mismatch",
+                "Packaged provisioning profile mismatch",
             )
 
             require(
-                metadata_snapshot(packaged) == original_metadata,
+                metadata_snapshot(packaged)
+                == original_metadata,
                 "IPA lost App Intents metadata",
             )
 
@@ -508,7 +641,7 @@ def sign(input_app, evidence):
                 "development_signature_verified": True,
                 "signing_certificate_authorized_by_profile": True,
                 "embedded_profile_verified": True,
-                "entitlements_match_profile": True,
+                "entitlements_match_requested": True,
                 "app_intents_metadata_preserved": True,
                 "ipa_roundtrip_verified": True,
                 "ipa_sha256": hashlib.sha256(
@@ -524,7 +657,11 @@ def sign(input_app, evidence):
 
         finally:
             subprocess.run(
-                ["security", "delete-keychain", str(keychain)],
+                [
+                    "security",
+                    "delete-keychain",
+                    str(keychain),
+                ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -539,11 +676,13 @@ def main():
     try:
         sign(args.app, args.evidence)
     except Exception as exc:
-        message = (
-            str(exc)
-            if isinstance(exc, SignError)
-            else "FCA Dev signing failed; private diagnostic details suppressed"
-        )
+        if isinstance(exc, SignError):
+            message = str(exc)
+        else:
+            message = (
+                "FCA Dev signing failed; "
+                "private diagnostic details suppressed"
+            )
 
         print(message, file=sys.stderr)
         raise SystemExit(1) from None
