@@ -2,7 +2,7 @@
 """Sign an existing Xcode-built FCA Dev app on an ephemeral macOS Actions runner.
 
 The input app is not modified. Signing secrets and private command output
-are never printed. Only the existing XTL-prefixed FCA Dev identity is used.
+are not logged. Only the existing XTL-prefixed FCA Dev identity is used.
 """
 
 import argparse
@@ -30,7 +30,7 @@ REPORT_NAME = "fca-dev-signing-report.json"
 
 
 class SignError(Exception):
-    """Safe error without private signing-tool output."""
+    """Safe diagnostic without private signing-tool output."""
 
 
 def require(condition, message):
@@ -44,11 +44,64 @@ def call(label, *args):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+
     if result.returncode:
+        if label == "Application signing":
+            diagnostic = result.stderr.decode(
+                "utf-8",
+                errors="replace",
+            ).strip()
+
+            # Filter sensitive or environment-specific values.
+            diagnostic = re.sub(
+                r"\b[0-9A-Fa-f]{40,64}\b",
+                "[certificate-id]",
+                diagnostic,
+            )
+            diagnostic = re.sub(
+                r"/Users/[^\s:]+",
+                "[runner-path]",
+                diagnostic,
+            )
+            diagnostic = re.sub(
+                r"(?i)(password|token|secret|private.key)\s*[:=]\s*\S+",
+                r"\1=[redacted]",
+                diagnostic,
+            )
+
+            # Do not expose arbitrary codesign output. Report
+            # only known, non-sensitive diagnostic categories.
+            lower = diagnostic.lower()
+
+            if "resource fork" in lower or "finder information" in lower:
+                reason = "resource fork or Finder metadata"
+            elif "no identity found" in lower:
+                reason = "signing identity not found"
+            elif "errsecinternalcomponent" in lower:
+                reason = "errSecInternalComponent"
+            elif "user interaction is not allowed" in lower:
+                reason = "Keychain access denied"
+            elif "unsealed contents" in lower:
+                reason = "unsealed bundle contents"
+            elif "bundle format" in lower:
+                reason = "invalid bundle format"
+            elif "unsupported" in lower and "entitlement" in lower:
+                reason = "unsupported entitlement"
+            elif "already signed" in lower:
+                reason = "existing signature conflict"
+            else:
+                reason = "unclassified codesign failure"
+
+            raise SignError(
+                f"Application signing failed (exit {result.returncode}); "
+                f"diagnostic_category={reason}"
+            )
+
         raise SignError(
             f"{label} failed (exit {result.returncode}); "
             "private tool output suppressed"
         )
+
     return result.stdout
 
 
@@ -100,8 +153,6 @@ def signing_identity(keychain, certificates):
         if value.upper() in permitted
     ]
 
-    # Diagnostic counts only. No certificate fingerprints,
-    # signing identities, private keys, or secrets are logged.
     require(
         len(matches) == 1,
         (
@@ -240,12 +291,6 @@ def verify_profile(profile):
         ) == TEAM,
         "Entitlement team does not match",
     )
-
-    # The provisioning profile may omit the default Keychain
-    # access group or authorize it through a wildcard.
-    #
-    # Sign with the concrete group belonging to the installed
-    # FCA Dev identity. Reject incompatible explicit groups.
 
     expected_group = expected_app_id
     groups = entitlements.get("keychain-access-groups")
@@ -475,7 +520,7 @@ def sign(input_app, evidence):
                 profile["DeveloperCertificates"],
             )
 
-            # Sign nested code before signing the containing app.
+            # Sign nested code before the containing application.
             nested = sorted(
                 (
                     path
