@@ -88,6 +88,7 @@ def generate(ios: Path, output: Path, probe=False):
         "PRODUCT_NAME": "FamilyCarAgent", "PRODUCT_MODULE_NAME": "FamilyCarAgent",
         "PRODUCT_BUNDLE_IDENTIFIER": config["bundleID"],
         "INFOPLIST_FILE": str(info_path), "GENERATE_INFOPLIST_FILE": "YES",
+        **({"INFOPLIST_KEY_UILaunchScreen_Generation": "YES"} if not probe else {}),
         "CODE_SIGN_ENTITLEMENTS": str(entitlements_path),
         "CODE_SIGNING_ALLOWED": "NO", "CODE_SIGNING_REQUIRED": "NO",
         "SWIFT_VERSION": "6.0", "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG",
@@ -124,9 +125,12 @@ def verify(app: Path, report: Path, probe=False):
               "intent_metadata_matches": matches, "offline_intent_metadata_matches": offline_matches,
               "device_discovery_verified": False}
     if not probe:
+        result["launch_screen_dictionary_present"] = isinstance(info.get("UILaunchScreen"), dict)
         actions = [b"FCATakeVehicleIntent", b"FCAReturnVehicleIntent"]
         result["vehicle_actions_present"] = all(any(action in p.read_bytes() for p in nonempty) for action in actions)
     report.write_text(json.dumps(result, indent=2) + "\n")
+    if not probe and not result["launch_screen_dictionary_present"]:
+        raise ValueError("Processed Dev Info.plist must contain a UILaunchScreen dictionary")
     if not (result["bundle_id_matches_expected"] and result["environment_matches_expected"] and result["display_name_matches"] and matches and (offline_matches if probe else result["vehicle_actions_present"])):
         raise ValueError("App Intents metadata/Dev identity check failed; inspect metadata-report.json")
 

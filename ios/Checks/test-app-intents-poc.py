@@ -378,8 +378,13 @@ class MetadataPoCTests(unittest.TestCase):
             )
             self.assertEqual(settings["CODE_SIGNING_ALLOWED"], "NO")
             self.assertEqual(settings["SDKROOT"], "iphoneos")
+            self.assertEqual(settings["ENABLE_APP_INTENTS_METADATA_EXTRACTION"], "YES")
 
             paths = [o.get("path", "") for o in objects]
+            self.assertTrue(
+                {str(p) for p in (ios / "Sources/FamilyCarAgent").rglob("*.swift")}
+                .issubset(set(paths))
+            )
 
             self.assertIn(
                 str(ios / "Sources/FamilyCarAgent/FamilyCarAgentApp.swift"),
@@ -397,6 +402,21 @@ class MetadataPoCTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 poc.generate(ios, output)
 
+    def test_dev_target_generates_launch_screen(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "wrapper"
+            poc.generate(Path(__file__).resolve().parents[1], output)
+            objects = plistlib.loads(
+                (output / "FCAIntentPoC.xcodeproj/project.pbxproj").read_bytes()
+            )["objects"]
+            target = next(o for o in objects.values() if o["isa"] == "PBXNativeTarget")
+            configs = objects[target["buildConfigurationList"]]["buildConfigurations"]
+            for config in configs:
+                settings = objects[config]["buildSettings"]
+                self.assertEqual(settings["PRODUCT_BUNDLE_IDENTIFIER"], "com.familycaragent.app.dev")
+                self.assertEqual(settings["GENERATE_INFOPLIST_FILE"], "YES")
+                self.assertEqual(settings["INFOPLIST_KEY_UILaunchScreen_Generation"], "YES")
+
     def test_metadata_and_identity_fail_closed(self):
         with tempfile.TemporaryDirectory() as temp:
             app = Path(temp) / "FCA.app"
@@ -406,6 +426,7 @@ class MetadataPoCTests(unittest.TestCase):
             info = {
                 "CFBundleIdentifier": "com.familycaragent.app.dev",
                 "FCAEnvironment": "development",
+                "UILaunchScreen": {},
             }
 
             (app / "Info.plist").write_bytes(plistlib.dumps(info))
@@ -436,6 +457,19 @@ class MetadataPoCTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 poc.verify(app, report)
             data.write_bytes(b'["FCAConnectionTestIntent","FCATakeVehicleIntent","FCAReturnVehicleIntent"]')
+            poc.verify(app, report)
+
+            # Synthetic processed plist: missing/wrong types must fail even with valid metadata.
+            for launch_screen in (None, "", []):
+                invalid_info = dict(info)
+                if launch_screen is None:
+                    del invalid_info["UILaunchScreen"]
+                else:
+                    invalid_info["UILaunchScreen"] = launch_screen
+                (app / "Info.plist").write_bytes(plistlib.dumps(invalid_info))
+                with self.assertRaisesRegex(ValueError, "UILaunchScreen dictionary"):
+                    poc.verify(app, report)
+            (app / "Info.plist").write_bytes(plistlib.dumps(info))
             poc.verify(app, report)
 
             self.assertFalse(
