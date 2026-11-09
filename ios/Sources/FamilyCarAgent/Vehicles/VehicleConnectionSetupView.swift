@@ -1,122 +1,214 @@
 import SwiftUI
 
-/// The existing Vehicle Details connection sheet; no automation is created or inspected by FCA.
+/// Presentation only: runtime owns registration, binding and durable authorization.
 struct VehicleConnectionSetupView: View {
     let identity: ChatIdentity
     let vehicle: UUID
     let name: String
-    @State private var method = VehicleConnectionMethod.carPlay
-    @State private var saved = false
-    @State private var authorization = VehicleConnectionAuthorizationState.recoveryRequired
+    let close: () -> Void
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var presentation = VehicleConnectionPresentation()
     @State private var busy = false
     @State private var message: String?
     @State private var operation: Task<Void, Never>?
+    @State private var revision = 0
 
     var body: some View {
         #if DEBUG
-        VStack(alignment: .leading, spacing: 14) {
-            Text(name).fontWeight(.bold)
-            Picker("אופן החיבור לרכב", selection: Binding(get: { method }, set: { value in selectMethod(value) })) {
-                Text("CarPlay").tag(VehicleConnectionMethod.carPlay)
-                Text("Bluetooth").tag(VehicleConnectionMethod.bluetooth)
-            }.pickerStyle(.segmented).disabled(busy)
-            Text(method == .carPlay
-                 ? "מומלץ לרכב עם CarPlay קווי או אלחוטי."
-                 : "לרכב עם Bluetooth רגיל, ללא CarPlay. החזרת הרכב אינה מוגדרת אוטומטית.")
-            Text(authorizationText)
-            if let message { Text(message).foregroundStyle(.secondary) }
-            Button(action: activate) {
-                HStack {
-                    if busy { ProgressView() }
-                    Text(busy ? "מאמתים ומשייכים…" : authorization.permitsActivation ? "אישור והפעלת הזיהוי לרכב זה" : "אימות ורענון ההרשאה")
-                }.frame(maxWidth: .infinity, minHeight: 50)
-            }.buttonStyle(.borderedProminent).tint(ChatStyle.ink).disabled(busy)
-            if authorization.isAuthorized { instructions }
+        VStack(spacing: 0) {
+            header
+            ScrollView {
+                VStack(spacing: 22) {
+                    Text("חיבור וזיהוי אוטומטי").font(.largeTitle.bold()).multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
+                    if presentation.screen == .loading { ProgressView("בודקים את מצב החיבור…") }
+                    else if presentation.screen == .selection { selection }
+                    else { setup }
+                }.padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 28)
+                    .frame(maxWidth: 620).frame(maxWidth: .infinity)
+            }
+        }.modifier(VehiclesAppearance())
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            // Local reads only: reflect background rejection/logout without starting server verification.
+            while !Task.isCancelled {
+                if !busy { await restore() }
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            }
         }
-        .task {
-            do {
-                let runtime = try VehicleSessionRuntime.shared.get()
-                if let value = try runtime.savedConnection(identity: identity, vehicle: vehicle) { method = value; saved = true }
-                let state = try await runtime.connectionState(identity: identity, vehicle: vehicle)
-                if !busy { authorization = state }
-            } catch { show(error) }
-        }
-        .onDisappear { operation?.cancel() }
+        .onDisappear { revision += 1; operation?.cancel() }
         #else
-        Text("הגדרת קיצורי הרכב זמינה כעת בגרסת Dev DEBUG בלבד.")
+        VStack {
+            Text("הגדרת קיצורי הרכב זמינה כעת בגרסת Dev DEBUG בלבד.")
+            Button("סגירה") { close() }
+        }.modifier(VehiclesAppearance())
         #endif
     }
-
-    private var instructions: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("הגדרת הקיצורים — נדרשת פעולה שלך").fontWeight(.bold)
-            Text("FCA אינה יכולה לדעת אם האוטומציות נוצרו. יש לבחור ברכב \(name) בכל אחת מפעולות FCA.")
-            if method == .carPlay {
-                Text("בחיבור: Shortcuts ← Automation ← CarPlay ← Connects ← Run Immediately. הוסיפו FCA — Take Vehicle ובחרו ברכב הזה.")
-                Text("בניתוק: צרו אוטומציית CarPlay נוספת עם Disconnects ו־Run Immediately.")
-            } else {
-                Text("בחיבור: Shortcuts ← Automation ← Bluetooth. בחרו את התקן ה־Bluetooth של הרכב ו־Run Immediately. הוסיפו FCA — Take Vehicle ובחרו ברכב הזה.")
-                Text("אין כאן הסתמכות על טריגר ניתוק Bluetooth. להחזרה, צרו קיצור רגיל והפעילו אותו ידנית בעת החזרת הרכב. החזרה אוטומטית דורשת טריגר נתמך נפרד.")
+    private var header: some View {
+        HStack(spacing: 6) {
+            Button { revision += 1; operation?.cancel(); close() } label: {
+                Image(systemName: "xmark").font(.title2).frame(width: 44, height: 44)
+                    .background(.white.opacity(0.85), in: Circle())
+            }.buttonStyle(.plain).accessibilityLabel("סגירה")
+            AppAssetImage(path: ChatStyle.wordmark).frame(maxWidth: 240).frame(height: 62)
+                .blendMode(.multiply).accessibilityHidden(true)
+            Group {
+                if presentation.canGoBack {
+                    Button { presentation.back(); message = nil } label: {
+                        Image(systemName: "chevron.right").font(.title2).frame(width: 44, height: 44)
+                    }.buttonStyle(.plain).disabled(busy).accessibilityLabel("חזרה לבחירת אופן החיבור")
+                } else { Color.clear.frame(width: 44, height: 44) }
             }
-            Text("להחזרה, הוסיפו לפי הסדר:\n1. Get Current Location\n2. FCA — Return Vehicle\nבחרו ברכב הזה והעבירו את פלט המיקום לפקודת Current Location.")
-            Text("נדרשת מדידת מיקום אמיתית, בדיוק עד 100 מטר ובגיל עד 30 שניות. כתובת או נקודה שנבחרה במפה אינן תחליף. אם אין מדידה תקינה, ההחזרה לא תירשם.")
-            Text("בדקו את שתי הפעולות. הצלחת השיוך אינה מוכיחה שהאוטומציה הוגדרה או שהאירוע התקבל בשרת.")
+        }.frame(maxWidth: .infinity).padding(.horizontal, 16).padding(.vertical, 8)
+    }
+    private var selection: some View {
+        VStack(spacing: 24) {
+            Text("בחרו איך האייפון שלכם מתחבר לרכב כדי שנכין לכם את ההגדרה המתאימה.")
+                .font(.title3).foregroundStyle(ChatStyle.secondary).multilineTextAlignment(.center)
+            Text("ברכב הזה אני משתמש עם:").font(.title3.bold()).padding(.top, 12)
+            methodCard(.carPlay, title: "CarPlay")
+            HStack(spacing: 20) { Rectangle().frame(height: 1); Text("או").font(.title3); Rectangle().frame(height: 1) }
+                .foregroundStyle(ChatStyle.secondary.opacity(0.6)).padding(.horizontal, 34)
+            methodCard(.bluetooth, title: "Bluetooth")
         }
     }
-    private func selectMethod(_ value: VehicleConnectionMethod) {
+    private func methodCard(_ method: VehicleConnectionMethod, title: String) -> some View {
+        Button { presentation.choose(method) } label: {
+            ZStack(alignment: .leading) {
+                Image(systemName: "chevron.right").font(.title2).padding(.leading, 6)
+                VStack(spacing: 8) {
+                    if method == .carPlay {
+                        // No CarPlay asset exists in the bundle.
+                        Image(systemName: "car.fill").font(.system(size: 32)).foregroundStyle(.white)
+                            .frame(width: 54, height: 54).background(Color.green, in: RoundedRectangle(cornerRadius: 14))
+                    } else {
+                        AppAssetImage(path: "icons/archive/bluetooth_icon.png").frame(width: 60, height: 60)
+                    }
+                    Text(title).font(.title2.bold())
+                }.frame(maxWidth: .infinity).padding(.vertical, 6)
+            }.padding(18).frame(maxWidth: .infinity, minHeight: 130)
+                .background(.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 22))
+                .overlay(RoundedRectangle(cornerRadius: 22).stroke(ChatStyle.border))
+                .shadow(color: .black.opacity(0.04), radius: 10, y: 5)
+        }.buttonStyle(.plain).accessibilityLabel("בחירת " + title)
+    }
+    private var setup: some View {
+        VStack(spacing: 16) {
+            Text("כדי שהזיהוי יעבוד, צריך לחבר את המכשיר ולהגדיר את הקיצורים המתאימים.")
+                .font(.title3).foregroundStyle(ChatStyle.secondary).multilineTextAlignment(.center)
+            deviceCard
+            if let message { Text(message).font(.callout).foregroundStyle(ChatStyle.secondary).frame(maxWidth: .infinity, alignment: .leading) }
+            if presentation.showsShortcuts {
+                shortcutCard(title: "הגדרת חיבור", description: "הקיצור שיופעל כשמתחברים לרכב.")
+                shortcutCard(title: "הגדרת ניתוק", description: presentation.method == .bluetooth
+                    ? "קיצור להחזרת הרכב. ניתוק Bluetooth אינו מוגדר אוטומטית."
+                    : "הקיצור להחזרת הרכב כשמתנתקים ממנו.")
+            }
+            Button { perform(refreshOnly: true) } label: {
+                Text("רענון").font(.title3).foregroundStyle(Color.blue).frame(minWidth: 80, minHeight: 44)
+            }.buttonStyle(.plain).disabled(busy)
+        }
+    }
+    private var deviceCard: some View {
+        panel {
+            HStack(alignment: .top, spacing: 12) {
+                AppAssetImage(path: "icons/archive/phone_icon.png").frame(width: 52, height: 60).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("המכשיר הזה").font(.title2.bold()).accessibilityAddTraits(.isHeader)
+                    HStack(spacing: 8) {
+                        if presentation.authorization.isAuthorized {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityHidden(true)
+                        }
+                        Text(status).font(.title3).foregroundStyle(ChatStyle.secondary)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text(presentation.authorization.isAuthorized ? "המכשיר מחובר לזיהוי אוטומטי ברכב הזה." : "חיבור המכשיר ושיוכו לרכב הזה לזיהוי אוטומטי.")
+                .foregroundStyle(ChatStyle.secondary).frame(maxWidth: .infinity, alignment: .leading)
+            if !presentation.authorization.isAuthorized {
+                Button { perform(refreshOnly: !presentation.showsActivation) } label: {
+                    HStack(spacing: 8) {
+                        if busy { ProgressView().tint(.white) }
+                        Text(busy ? "מאמתים את החיבור…" : presentation.showsActivation ? "חיבור המכשיר" : "אימות החיבור")
+                            .font(.headline).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    }.foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 14)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .background(ChatStyle.ink.opacity(busy ? 0.55 : 1), in: RoundedRectangle(cornerRadius: 14))
+                }.buttonStyle(.plain).disabled(busy)
+            }
+        }
+    }
+    private func shortcutCard(title: String, description: String) -> some View {
+        panel {
+            HStack(alignment: .top, spacing: 12) {
+                AppAssetImage(path: "icons/archive/single_car_icon.png").frame(width: 64, height: 64).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title).font(.title2.bold()).accessibilityAddTraits(.isHeader)
+                    Text("הוספה מתוך האפליקציה עדיין אינה זמינה").font(.callout).foregroundStyle(ChatStyle.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text(description).foregroundStyle(ChatStyle.secondary).frame(maxWidth: .infinity, alignment: .leading)
+            // Phase 1: no URL, import, automation state or simulated completion.
+            Button {} label: {
+                Text("הוספת קיצור").font(.headline).foregroundStyle(ChatStyle.secondary)
+                    .padding(12).frame(maxWidth: .infinity, minHeight: 48)
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(ChatStyle.border))
+            }.buttonStyle(.plain).disabled(true).accessibilityHint("האפשרות עדיין אינה זמינה")
+        }
+    }
+    private func panel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 14, content: content).padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            .background(.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 22))
+            .overlay(RoundedRectangle(cornerRadius: 22).stroke(ChatStyle.border))
+            .shadow(color: .black.opacity(0.04), radius: 10, y: 5)
+    }
+    private var status: String {
+        switch presentation.authorization {
+        case .authorized: "מחובר"
+        case .inactive, .bindingRemoved: "לא מחובר לרכב הזה"
+        case .verificationPending: "ממתין לאימות"
+        case .temporarilyUnavailable: "לא ניתן לאמת כרגע"
+        case .verificationRequired: "נדרש אימות מחדש"
+        case .recoveryRequired: "נדרשת התאוששות"
+        }
+    }
+    @MainActor private func restore(afterFailure: Bool = false) async {
+        let expected = revision
         do {
-            if saved { try VehicleSessionRuntime.shared.get().changeConnection(identity: identity, vehicle: vehicle, method: value) }
-            method = value
+            let runtime = try VehicleSessionRuntime.shared.get()
+            let method = try runtime.savedConnection(identity: identity, vehicle: vehicle)
+            var state = try await runtime.connectionState(identity: identity, vehicle: vehicle)
+            guard !Task.isCancelled, expected == revision else { return }
+            if afterFailure || presentation.authorization == .temporarilyUnavailable { state = state.afterVerificationFailure() }
+            presentation.restore(method: method, authorization: state)
         } catch {
-            show(error)
-            if let persisted = try? VehicleSessionRuntime.shared.get().savedConnection(identity: identity, vehicle: vehicle) {
-                method = persisted
-            } else { authorization = .recoveryRequired }
+            guard !Task.isCancelled, expected == revision else { return }
+            presentation.unavailable(); show(error)
         }
     }
-
-    private var authorizationText: String {
-        switch authorization {
-        case .authorized: return "הרכב מורשה במכשיר. נותר להגדיר קיצורים באפליקציית Shortcuts."
-        case .verificationPending: return "אימות ההרשאה ממתין להשלמה. פעולות הרכב חסומות בינתיים."
-        case .temporarilyUnavailable: return "לא ניתן לאמת כרגע. פעולות הרכב חסומות עד לרענון מוצלח."
-        case .bindingRemoved: return "השיוך אינו פעיל. להפעלה מחדש נדרש אישור מפורש."
-        case .verificationRequired: return "נדרש אימות שרת לפני הפעלת פעולות הרכב."
-        case .recoveryRequired: return "נדרשת בדיקת מצב ההרשאה או התאוששות. פעולות הרכב אינן מוצגות כפעילות."
-        case .inactive: return "הזיהוי אינו מופעל עבור רכב זה במכשיר."
-        }
-    }
-    private func activate() {
+    private func perform(refreshOnly: Bool) {
         guard !busy else { return }
-        let activateBinding = authorization.permitsActivation
-        busy = true; message = nil; authorization = .verificationPending
+        let method = presentation.method
+        let activate = !refreshOnly && presentation.showsActivation
+        revision += 1; busy = true; message = nil; presentation.verifying()
         operation = Task { @MainActor in
             defer { busy = false }
             do {
                 let runtime = try VehicleSessionRuntime.shared.get()
-                if activateBinding {
-                    try await runtime.activateConnection(identity: identity, vehicle: vehicle, method: method)
-                    saved = true
-                } else {
-                    _ = try await runtime.refreshConnection(identity: identity, vehicle: vehicle)
-                }
+                if activate, let method { try await runtime.activateConnection(identity: identity, vehicle: vehicle, method: method) }
+                else { _ = try await runtime.refreshConnection(identity: identity, vehicle: vehicle) }
                 try Task.checkCancellation()
-                authorization = try await runtime.connectionState(identity: identity, vehicle: vehicle)
+                await restore()
             } catch {
                 guard !Task.isCancelled else { return }
-                do {
-                    let runtime = try VehicleSessionRuntime.shared.get()
-                    authorization = try await runtime.connectionState(identity: identity, vehicle: vehicle).afterVerificationFailure()
-                } catch { authorization = .recoveryRequired }
-                show(error)
+                await restore(afterFailure: true); show(error)
             }
         }
     }
     private func show(_ error: Error) {
         switch error {
         case NativeDeviceSetupError.busy: message = "מתבצע אימות נוסף. נסו שוב בעוד רגע."
-        case NativeDeviceSetupError.unavailable:
-            message = "המכשיר או השיוך אינם מורשים עוד. נדרשת בדיקת ההרשאות."
+        case NativeDeviceSetupError.unavailable: message = "המכשיר או השיוך אינם מורשים עוד. נדרשת בדיקת ההרשאות."
         case NativeDeviceSetupError.recoveryRequired, is VehicleQueueError:
             message = "נדרשת התאוששות של זהות המכשיר או התור. הנתונים נשמרו ולא בוצע איפוס."
         case AuthFailure.network: message = "לא ניתן להשלים את האימות כעת. בדקו את החיבור ונסו שוב; זהות הרישום נשמרה."

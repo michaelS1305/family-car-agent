@@ -19,5 +19,6 @@ fi
  Sources/FamilyCarAgent/History/HistoryCore.swift Sources/FamilyCarAgent/OfflineEvents/VehicleEventQueue.swift \
  Sources/FamilyCarAgent/OfflineEvents/VehicleSyncCoordinator.swift \
  Sources/FamilyCarAgent/OfflineEvents/NativeDeviceSetup.swift \
+ Sources/FamilyCarAgent/Vehicles/VehicleConnectionPresentation.swift \
  Checks/NativeDeviceSetupChecks.swift -o "$out/checks"
 "$out/checks"

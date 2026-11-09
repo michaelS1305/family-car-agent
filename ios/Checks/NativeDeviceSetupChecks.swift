@@ -56,6 +56,34 @@ import Foundation
         do { try await operation(); fatalError("Expected controlled failure") } catch { }
     }
     @MainActor static func main() async throws {
+        for method in VehicleConnectionMethod.allCases {
+            var ui = VehicleConnectionPresentation()
+            precondition(ui.screen == .loading && !ui.showsShortcuts)
+            ui.restore(method: nil, authorization: .inactive)
+            precondition(ui.screen == .selection)
+            ui.choose(method)
+            precondition(ui.screen == .setup && ui.method == method && ui.showsActivation && ui.canGoBack)
+            ui.back(); precondition(ui.screen == .selection)
+            ui.choose(method == .carPlay ? .bluetooth : .carPlay)
+            precondition(ui.screen == .setup && ui.method != method)
+            ui.verifying(); precondition(!ui.showsActivation && !ui.showsShortcuts && !ui.canGoBack)
+            ui.restore(method: method, authorization: .authorized)
+            precondition(ui.showsShortcuts && !ui.showsActivation && !ui.canGoBack)
+            ui.back(); ui.choose(method == .carPlay ? .bluetooth : .carPlay)
+            precondition(ui.screen == .setup && ui.method == method)
+            var reopened = VehicleConnectionPresentation()
+            reopened.restore(method: method, authorization: .authorized)
+            precondition(reopened.screen == .setup && reopened.showsShortcuts)
+            for state: VehicleConnectionAuthorizationState in [.verificationPending, .temporarilyUnavailable, .verificationRequired, .recoveryRequired, .bindingRemoved] {
+                reopened.restore(method: method, authorization: state)
+                precondition(!reopened.showsShortcuts && !reopened.canGoBack && reopened.screen == .setup)
+            }
+            var anotherVehicle = VehicleConnectionPresentation()
+            anotherVehicle.restore(method: nil, authorization: .bindingRemoved)
+            precondition(anotherVehicle.screen == .selection && anotherVehicle.method == nil)
+            anotherVehicle.unavailable(); precondition(!anotherVehicle.showsActivation && !anotherVehicle.showsShortcuts)
+        }
+        print("PASS: two-screen presentation, both methods, back, restored per-vehicle setup and untrusted authorization states")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("fca-native-setup-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let identity = ChatIdentity(owner: UUID(), user: 1, family: 2, generation: 3, version: 4)

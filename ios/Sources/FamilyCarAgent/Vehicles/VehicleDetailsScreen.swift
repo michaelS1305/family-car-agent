@@ -58,8 +58,17 @@ struct VehicleDetailsScreen: View {
             .task { model.start() }
             .onChange(of: list.current) { _, current in if !current { model.stop() } }
             .onChange(of: scenePhase) { _, phase in if phase == .active { model.refresh() } }
-            .onDisappear { model.stop() }
-            .sheet(item: Binding(get: { list.current && model.current ? model.sheet : nil }, set: { if $0 == nil { model.close() } })) { sheet in
+            .onDisappear { if model.sheet != .connection { model.stop() } }
+            .fullScreenCover(isPresented: Binding(get: {
+                list.current && model.current && model.sheet == .connection && model.detail?.vehicle.retired == false
+            }, set: { if !$0 { model.close() } })) {
+                if let identity = model.connectionIdentity {
+                    VehicleConnectionSetupView(identity: identity, vehicle: model.vehicleID,
+                                               name: model.detail?.vehicle.name ?? "", close: { model.close() })
+                        .id(model.vehicleID)
+                }
+            }
+            .sheet(item: Binding(get: { list.current && model.current && model.sheet != .connection ? model.sheet : nil }, set: { if $0 == nil && model.sheet != .connection { model.close() } })) { sheet in
                 VehicleDetailsEditor(model: model, sheet: sheet)
             }
     }
@@ -155,9 +164,7 @@ private struct VehicleDetailsEditor: View {
                     Text(title).font(.system(size: 23, weight: .bold))
                     switch sheet {
                     case .connection:
-                        if let identity = model.connectionIdentity {
-                            VehicleConnectionSetupView(identity: identity, vehicle: model.vehicleID, name: model.detail?.vehicle.name ?? "")
-                        }
+                        EmptyView() // Connection has its own full-screen flow.
                     case .retire:
                         AppAssetImage(path: "icons/archive/trash_icon.png").frame(height: 36).frame(maxWidth: .infinity)
                         Text("הרכב יישאר בהיסטוריה ולא יהיה זמין לשימוש ולהזמנות חדשות. הזמנות פעילות שטרם הסתיימו, כולל הזמנות עתידיות, יבוטלו. לא ניתן להחזיר את הרכב לפעילות.")
