@@ -7,7 +7,8 @@ on:
     paths:
       - .github/workflows/ios-dev-app-intents.yml
       - ios/Checks/sign-fca-dev.py
-
+      - ios/Checks/app-intents-poc.py
+      - ios/Sources/FamilyCarAgent/**
 permissions:
   contents: read
 
