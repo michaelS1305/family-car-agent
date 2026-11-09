@@ -16,7 +16,7 @@ struct VehicleConnectionSetupView: View {
         #if DEBUG
         VStack(alignment: .leading, spacing: 14) {
             Text(name).fontWeight(.bold)
-            Picker("אופן החיבור לרכב", selection: Binding(get: { method }, set: selectMethod)) {
+            Picker("אופן החיבור לרכב", selection: Binding(get: { method }, set: { value in selectMethod(value) })) {
                 Text("CarPlay").tag(VehicleConnectionMethod.carPlay)
                 Text("Bluetooth").tag(VehicleConnectionMethod.bluetooth)
             }.pickerStyle(.segmented).disabled(busy)

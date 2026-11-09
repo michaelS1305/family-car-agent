@@ -48,6 +48,21 @@ assert "NavigationStack" not in details and "Form {" not in details
 assert "VehicleDay.calendar" in details and "TimeZone(secondsFromGMT: 0)" in details
 assert "model.stop(); list.pop()" in details and ".onDisappear { model.stop() }" in details
 assert "frame(height: 200)" in details and "vehicle.retired ? 0.55 : 1" in details
-assert "הגדרת החיבור והזיהוי האוטומטי לרכב זה עדיין אינה זמינה" in details
+assert "הגדרת החיבור והזיהוי האוטומטי לרכב זה עדיין אינה זמינה" not in details
+# Normalize whitespace; check the connection destination rather than presentation copy.
+details_wiring = "".join(details.split())
+model = (source / "Vehicles/VehicleDetailsModel.swift").read_text(encoding="utf-8")
+model_wiring = "".join(model.split())
+assert "model.open(.connection)" in details_wiring
+connection = details_wiring.split("case.connection:", 1)[1].split("case.", 1)[0]
+assert "ifletidentity=model.connectionIdentity{" in connection
+assert "VehicleConnectionSetupView(identity:identity,vehicle:model.vehicleID," in connection
+assert "varconnectionIdentity:ChatIdentity?{current?identity:nil}" in model_wiring
+assert "varcurrent:Bool{identity!=nil&&identity==gateway.vehiclesIdentity}" in model_wiring
+navigation = model_wiring.split("funcopen(_value:VehicleDetailsSheet){", 1)[1].split("func", 1)[0]
+guard = navigation.split("else{return}", 1)[0]
+assert guard.startswith("guard")
+assert {"current", "!busy", "!requiresReview", "letv=detail?.vehicle", "!v.retired"} <= set(guard[5:].split(","))
+assert navigation.index("else{return}") < navigation.index("sheet=value")
 assert "action: model.confirmDelete" in details and "if model.canManage" in details
 print("PASS: fourteen original Vehicles assets and static Details/list wiring (not a device rendering test)")
