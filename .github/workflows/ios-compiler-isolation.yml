@@ -7,6 +7,7 @@ on:
       - .github/workflows/ios-compiler-isolation.yml
       - ios/Sources/FamilyCarAgent/Vehicles/AddVehicleScreen.swift
       - ios/Sources/FamilyCarAgent/Vehicles/VehicleDetailsScreen.swift
+      - ios/Sources/FamilyCarAgent/Vehicles/VehicleConnectionSetupView.swift
       - ios/Sources/FamilyCarAgent/Family/FamilyScreen.swift
 
 permissions:
