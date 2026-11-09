@@ -19,4 +19,4 @@ fi
  Sources/FamilyCarAgent/History/HistoryCore.swift Sources/FamilyCarAgent/OfflineEvents/VehicleEventQueue.swift \
  Sources/FamilyCarAgent/OfflineEvents/VehicleSyncCoordinator.swift \
  Checks/VehicleSyncChecks.swift -o "$out/checks"
-"$out/checks"
+"$out/checks" "$@"

@@ -248,6 +248,12 @@ protocol AuthTransport: Sendable {
     }
     var onInvalidation: ((AuthSession?) -> Void)?
     var onVehicleScopeRestored: (() -> Void)?
+    var onVehicleBindingsReduced: (() -> Void)?
+    func checkVehicleProfile(user: Int64, family: Int64, expectedUser: Int64, expectedFamily: Int64) throws {
+        guard user != expectedUser || family != expectedFamily else { return }
+        try verifyVehicleScope(user: user, family: family)
+        throw AuthFailure.stale
+    }
     func verifyVehicleScope(user: Int64, family: Int64) throws {
         guard var current = session, let scope = current.vehicleScope else { return }
         if scope.user == user && scope.family == family { onVehicleScopeRestored?(); return }
@@ -259,9 +265,18 @@ protocol AuthTransport: Sendable {
         guard generation == expected, var value = session, value.owner == owner, value.activated,
               value.vehicleScope == nil || value.vehicleScope == scope else { throw AuthFailure.stale }
         if value.shortcutNamespace == nil { value.shortcutNamespace = UUID() }
+        if value.boundVehicles?.keys.contains(where: { bindings[$0] == nil }) == true { onVehicleBindingsReduced?() }
         value.boundVehicles = bindings
         value.vehicleScope = scope
-        try vault.write(value); session = value
+        do { try vault.write(value); session = value }
+        catch {
+            // Keep confirmed removals effective in this process even if secure storage fails.
+            if var current = session, current.vehicleScope == scope {
+                current.boundVehicles = current.boundVehicles?.filter { bindings[$0.key] != nil }
+                session = current
+            }
+            throw error
+        }
     }
     func restore() throws {
         guard session == nil else { return }

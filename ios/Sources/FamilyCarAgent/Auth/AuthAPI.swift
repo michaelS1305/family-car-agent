@@ -271,6 +271,20 @@ final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTrans
         // Publishable only: never accept service-role, secret keys or arbitrary JWTs.
         key.range(of: "^sb_publishable_[A-Za-z0-9_-]+$", options: .regularExpression) != nil
     }
+    func registerVehicleDevice(requestID: UUID, token: String) async throws -> UUID {
+        struct Device: Decodable, Sendable { let device_ref: UUID; let platform: String; let revoked_at: String? }
+        let body = try JSONSerialization.data(withJSONObject: ["request_id": requestID.uuidString, "platform": "ios"])
+        let result = try await send(Device.self, url: environment.backendURL.appendingPathComponent("api/devices"),
+                                    method: "POST", body: body, token: token, auth: false)
+        guard result.platform == "ios", result.revoked_at == nil else { throw AuthFailure.rejected(403, "DEVICE_UNAVAILABLE") }
+        return result.device_ref
+    }
+
+    func bindVehicleDevice(device: UUID, vehicle: UUID, token: String) async throws {
+        let url = environment.backendURL.appendingPathComponent("api/devices/\(device.uuidString)/vehicle-bindings/\(vehicle.uuidString)")
+        let _: Bool? = try await send(Bool?.self, url: url, method: "PUT", body: nil, token: token, auth: false)
+    }
+
     func usableVehicleBindings(device: UUID, token: String) async throws -> [UUID: String] {
         struct Binding: Decodable { let vehicle_ref: UUID; let display_name: String; let usable: Bool }
         let url = environment.backendURL.appendingPathComponent("api/devices/\(device.uuidString)/vehicle-bindings")

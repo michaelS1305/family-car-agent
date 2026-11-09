@@ -28,7 +28,30 @@ private func sql(_ directory: URL, _ statement: String) throws {
         precondition(process.terminationStatus == 73)
     }
 
+    static func authorize(_ queue: VehicleEventQueue, _ context: VehicleQueueContext, _ vehicles: Set<UUID>) async throws {
+        let generation = try await queue.beginVerification(context)
+        try await queue.completeVerification(context, generation: generation, vehicles: vehicles)
+    }
+
     static func main() async throws {
+        if CommandLine.arguments.count == 6 {
+            let args = CommandLine.arguments
+            let directory = URL(fileURLWithPath: args[2])
+            let c = try VehicleQueueContext(environment: .development,
+                identity: .init(owner: UUID(uuidString: args[3])!, user: 1, family: 2, generation: 0, version: 0),
+                device: UUID(uuidString: args[4])!)
+            if args[1] == "crash-pending" {
+                let q = try VehicleEventQueue(directory: directory)
+                _ = try await q.beginVerification(c)
+                _exit(73)
+            }
+            if args[1] == "revoke" { try VehicleEventQueue.revokeAuthorization(directory: directory, context: c) }
+            else {
+                let q = try VehicleEventQueue(directory: directory)
+                _ = try await q.enqueueTake(c, vehicle: UUID(uuidString: args[5])!, occurredAt: Date(timeIntervalSince1970: 1_800_000_000))
+            }
+            return
+        }
         if CommandLine.arguments.count == 3 {
             // Abrupt process death with an open rollback journal, not a caught Swift error.
             var db: OpaquePointer?
@@ -47,9 +70,11 @@ private func sql(_ directory: URL, _ statement: String) throws {
         let queue = try VehicleEventQueue(directory: root)
         try await queue.initializeFreshDevice(context)
         let vehicle = UUID(), otherVehicle = UUID()
+        try await authorize(queue, context, [vehicle, otherVehicle])
         let now = Date(timeIntervalSince1970: 1_800_000_000.125)
         let shortcutContext = try VehicleQueueContext(environment: .development, identity: identity, device: UUID())
         try await queue.initializeFreshDevice(shortcutContext)
+        try await authorize(queue, shortcutContext, [vehicle, otherVehicle])
         let fix = VehicleLocationEvidence(latitude: 32, longitude: 34, accuracy: 5, measuredAt: now)
         let a = try await queue.recordShortcut(shortcutContext, vehicle: vehicle, kind: .take, time: now, location: nil)
         let b = try await queue.recordShortcut(shortcutContext, vehicle: otherVehicle, kind: .take, time: now, location: nil)
@@ -121,10 +146,12 @@ private func sql(_ directory: URL, _ statement: String) throws {
         await fails { try await reopened.initializeFreshDevice(familySwitch) }
         let newDevice = try VehicleQueueContext(environment: .development, identity: foreignIdentity, device: UUID())
         try await reopened.initializeFreshDevice(newDevice)
+        try await authorize(reopened, newDevice, [vehicle])
         await fails { _ = try await reopened.enqueueReturn(newDevice, vehicle: vehicle, occurredAt: now, takeID: take.id, location: evidence) }
         let fresh = try await reopened.enqueueTake(newDevice, vehicle: vehicle, occurredAt: now)
         precondition(fresh.sequence == 1)
         try await reopened.reactivate(context)
+        try await authorize(reopened, context, [vehicle, otherVehicle])
         try crash(root, mode: "crash-create")
         rows = try await reopened.records(context)
         precondition(rows.map(\.event) == [take, returning, third])
@@ -169,6 +196,7 @@ private func sql(_ directory: URL, _ statement: String) throws {
 
         let isolated = try VehicleEventQueue(directory: root.appendingPathComponent("causality"))
         try await isolated.initializeFreshDevice(context)
+        try await authorize(isolated, context, [vehicle])
         let rejectedTake = try await isolated.enqueueTake(context, vehicle: vehicle, occurredAt: now)
         _ = try await isolated.enqueueReturn(context, vehicle: vehicle, occurredAt: now, takeID: rejectedTake.id, location: evidence)
         let rejectedHead = try await isolated.prepareNext(context)!
@@ -179,6 +207,7 @@ private func sql(_ directory: URL, _ statement: String) throws {
 
         let missing = try VehicleEventQueue(directory: root.appendingPathComponent("missing"))
         try await missing.initializeFreshDevice(context)
+        try await authorize(missing, context, [vehicle])
         let missingTake = try await missing.enqueueTake(context, vehicle: vehicle, occurredAt: now)
         _ = try await missing.enqueueReturn(context, vehicle: vehicle, occurredAt: now, takeID: missingTake.id, location: nil)
         let missingRows = try await missing.records(context)
@@ -190,6 +219,116 @@ private func sql(_ directory: URL, _ statement: String) throws {
         await fails { try await missing.retryAfterTaskReconciliation(context, event: missingTake.id, attempt: missingHead.attempt!) }
         try sql(root.appendingPathComponent("missing"), "PRAGMA user_version=99")
         await fails { _ = try VehicleEventQueue(directory: root.appendingPathComponent("missing")) }
+        // Authorization migration: retain events/cursor but never infer grants from legacy state.
+        let fenceRoot = root.appendingPathComponent("fence")
+        let fence = try VehicleEventQueue(directory: fenceRoot)
+        try await fence.initializeFreshDevice(context)
+        await fails { _ = try await fence.enqueueTake(context, vehicle: vehicle, occurredAt: now) }
+        try await authorize(fence, context, [vehicle, otherVehicle])
+        let before = try await fence.enqueueTake(context, vehicle: vehicle, occurredAt: now)
+        try sql(fenceRoot, "DROP TABLE vehicle_authorizations; DROP TABLE authorization_scopes; PRAGMA user_version=1")
+        let migrated = try VehicleEventQueue(directory: fenceRoot)
+        let retainedBefore = try await migrated.records(context)
+        precondition(retainedBefore.map(\.event) == [before])
+        await fails { _ = try await migrated.enqueueTake(context, vehicle: vehicle, occurredAt: now) }
+        try await authorize(migrated, context, [vehicle, otherVehicle])
+        let after = try await migrated.enqueueTake(context, vehicle: otherVehicle, occurredAt: now)
+        precondition(after.sequence == 2)
+
+        // Out-of-order server evidence cannot undo a newer verification or logout.
+        let oldGeneration = try await migrated.beginVerification(context)
+        let currentGeneration = try await migrated.beginVerification(context)
+        await fails { try await migrated.completeVerification(context, generation: oldGeneration, vehicles: [vehicle]) }
+        await fails { _ = try await migrated.enqueueTake(context, vehicle: vehicle, occurredAt: now) }
+        try await migrated.completeVerification(context, generation: currentGeneration, vehicles: [otherVehicle])
+        await fails { _ = try await migrated.enqueueTake(context, vehicle: vehicle, occurredAt: now) }
+        let pendingLogout = try await migrated.beginVerification(context)
+        try VehicleEventQueue.revokeAuthorization(directory: fenceRoot, context: context)
+        await fails { try await migrated.completeVerification(context, generation: pendingLogout, vehicles: [vehicle]) }
+
+        // Failure before the preflight commit MUST prevent starting server verification.
+        try await authorize(migrated, context, [vehicle, otherVehicle])
+        try sql(fenceRoot, "CREATE TRIGGER fail_fence BEFORE UPDATE ON authorization_scopes BEGIN SELECT RAISE(ABORT,'test'); END")
+        var requests = 0
+        await fails {
+            _ = try await migrated.beginVerification(context)
+            requests += 1
+        }
+        precondition(requests == 0)
+        try sql(fenceRoot, "DROP TRIGGER fail_fence")
+        let failedSave = try await migrated.beginVerification(context)
+        try sql(fenceRoot, "CREATE TRIGGER fail_grants BEFORE UPDATE ON vehicle_authorizations BEGIN SELECT RAISE(ABORT,'test'); END")
+        await fails { try await migrated.completeVerification(context, generation: failedSave, vehicles: []) }
+        let recovered = try VehicleEventQueue(directory: fenceRoot)
+        let denied = try await recovered.authorizedVehicles(context)
+        precondition(denied.isEmpty)
+        await fails { _ = try await recovered.enqueueTake(context, vehicle: vehicle, occurredAt: now) }
+        try sql(fenceRoot, "DROP TRIGGER fail_grants")
+        try await authorize(recovered, context, [vehicle, otherVehicle])
+
+        func child(_ mode: String) throws -> Process {
+            let child = Process()
+            child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+            child.arguments = [mode, fenceRoot.path, context.owner.uuidString, context.device.uuidString, vehicle.uuidString]
+            try child.run()
+            return child
+        }
+        let crashed = try child("crash-pending"); crashed.waitUntilExit()
+        precondition(crashed.terminationStatus == 73)
+        let afterProcessCrash = try VehicleEventQueue(directory: fenceRoot)
+        await fails { _ = try await afterProcessCrash.enqueueTake(context, vehicle: vehicle, occurredAt: now) }
+        try await authorize(recovered, context, [vehicle, otherVehicle])
+        // If the scope write fails, the independent devices.active quarantine remains effective.
+        let preFailureTicket = try await recovered.beginVerification(context)
+        try sql(fenceRoot, "CREATE TRIGGER fail_revoke BEFORE UPDATE ON authorization_scopes BEGIN SELECT RAISE(ABORT,'test'); END")
+        await fails { try VehicleEventQueue.revokeAuthorization(directory: fenceRoot, context: context) }
+        await fails { _ = try await afterProcessCrash.enqueueTake(context, vehicle: vehicle, occurredAt: now) }
+        try sql(fenceRoot, "DROP TRIGGER fail_revoke")
+        try await recovered.reactivate(context)
+        await fails { try await recovered.completeVerification(context, generation: preFailureTicket, vehicles: [vehicle]) }
+        try await authorize(recovered, context, [vehicle, otherVehicle])
+        // Actual separate-process revocation, after a committed TAKE and before the paused next TAKE.
+        let ready = AsyncStream<Void>.makeStream(), release = AsyncStream<Void>.makeStream()
+        let paused = Task {
+            ready.continuation.yield(())
+            for await _ in release.stream { break }
+            return try await recovered.enqueueTake(context, vehicle: vehicle, occurredAt: now)
+        }
+        for await _ in ready.stream { break }
+        let revoker = try child("revoke"); revoker.waitUntilExit()
+        precondition(revoker.terminationStatus == 0)
+        release.continuation.yield(()); release.continuation.finish(); ready.continuation.finish()
+        await fails { _ = try await paused.value }
+        let retainedAfter = try await recovered.records(context)
+        precondition(retainedAfter.map(\.event) == [before, after])
+        try await authorize(recovered, context, [vehicle, otherVehicle])
+        let children = try (0..<6).map { _ in try child("record") }
+        for child in children { child.waitUntilExit(); precondition(child.terminationStatus == 0) }
+        let concurrentRows = try await recovered.records(context)
+        precondition(concurrentRows.map(\.event.sequence) == Array(1...8).map(Int64.init))
+        // A previous login namespace cannot record after fresh server authorization for a new login.
+        let oldNamespace = UUID(), newNamespace = UUID()
+        let ticket = try await recovered.beginVerification(context)
+        try await recovered.completeVerification(context, generation: ticket, vehicles: [vehicle], namespace: newNamespace)
+        await fails {
+            _ = try await recovered.recordAuthorizedShortcut(context, vehicle: vehicle, kind: .take, time: now,
+                location: nil, namespace: oldNamespace, permit: VehicleRecordingPermit())
+        }
+        // A corrupt state or lost grant row never becomes an implicit permission.
+        try sql(fenceRoot, "PRAGMA ignore_check_constraints=ON; UPDATE authorization_scopes SET state='corrupt'")
+        await fails { _ = try await recovered.enqueueTake(context, vehicle: vehicle, occurredAt: now) }
+        try await authorize(recovered, context, [vehicle])
+        try sql(fenceRoot, "DELETE FROM vehicle_authorizations")
+        await fails { _ = try await recovered.enqueueTake(context, vehicle: vehicle, occurredAt: now) }
+        // Explicitly expose the impossible guarantee when BOTH durable fence writes fail.
+        try await authorize(recovered, context, [vehicle])
+        try sql(fenceRoot, "CREATE TRIGGER fail_all_scope BEFORE UPDATE ON authorization_scopes BEGIN SELECT RAISE(ABORT,'test'); END; CREATE TRIGGER fail_all_device BEFORE UPDATE ON devices BEGIN SELECT RAISE(ABORT,'test'); END")
+        await fails { try VehicleEventQueue.revokeAuthorization(directory: fenceRoot, context: context) }
+        let survivingDiskGrant = try await afterProcessCrash.authorizedVehicles(context)
+        precondition(survivingDiskGrant.contains(vehicle))
+        print("LIMITATION: total fence-write failure leaves old durable state; fresh process cannot infer failed logout")
+        try sql(fenceRoot, "DROP TRIGGER fail_all_scope; DROP TRIGGER fail_all_device")
+        print("PASS: authorization migration, pending/unknown/revoked fences, stale evidence, persistence failures and separate-process ordering")
         print("PASS: durable queue, sequencing, concurrency, identity, causality, admission, rollback and process-crash recovery")
     }
 }

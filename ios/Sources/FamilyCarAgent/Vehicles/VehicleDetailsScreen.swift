@@ -90,7 +90,7 @@ struct VehicleDetailsScreen: View {
                 icon("phone_icon.png", size: 36)
                 VStack(alignment: .leading) {
                     Text("חיבור וזיהוי אוטומטי").fontWeight(.bold)
-                    Text(detail.vehicle.retired ? "לא פעיל" : "לא מוגדר")
+                    Text(detail.vehicle.retired ? "לא פעיל" : "הגדרה והרשאות")
                 }.padding(.horizontal, 10).frame(maxWidth: .infinity, alignment: .leading)
                 if !detail.vehicle.retired {
                     Button { model.open(.connection) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }
@@ -155,7 +155,9 @@ private struct VehicleDetailsEditor: View {
                     Text(title).font(.system(size: 23, weight: .bold))
                     switch sheet {
                     case .connection:
-                        Text("הגדרת החיבור והזיהוי האוטומטי לרכב זה עדיין אינה זמינה ב־iPhone.")
+                        if let identity = model.connectionIdentity {
+                            VehicleConnectionSetupView(identity: identity, vehicle: model.vehicleID, name: model.detail?.vehicle.name ?? "")
+                        }
                     case .retire:
                         AppAssetImage(path: "icons/archive/trash_icon.png").frame(height: 36).frame(maxWidth: .infinity)
                         Text("הרכב יישאר בהיסטוריה ולא יהיה זמין לשימוש ולהזמנות חדשות. הזמנות פעילות שטרם הסתיימו, כולל הזמנות עתידיות, יבוטלו. לא ניתן להחזיר את הרכב לפעילות.")

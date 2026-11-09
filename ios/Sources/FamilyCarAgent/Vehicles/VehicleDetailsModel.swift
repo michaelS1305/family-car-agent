@@ -33,6 +33,7 @@ enum VehicleDetailsSheet: String, Identifiable { case edit, maintenance, retire,
     @Published private(set) var deleteConfirmation = false
     init(gateway: any VehiclesGateway, vehicleID: UUID) { self.gateway = gateway; self.vehicleID = vehicleID }
     var current: Bool { identity != nil && identity == gateway.vehiclesIdentity }
+    var connectionIdentity: ChatIdentity? { current ? identity : nil }
     var canManage: Bool { current && admin && detail?.vehicle.retired == false && !loading && !loadError }
     var canWrite: Bool { canManage && !busy && !requiresReview }
     var matches: [VehicleManufacturer] { catalog.filter { $0.name_he.range(of: draft.manufacturerQuery, options: .caseInsensitive) != nil } }

@@ -15,7 +15,7 @@ struct FCABoundVehicle: AppEntity {
 struct FCABoundVehicleQuery: EntityQuery {
     @MainActor func suggestedEntities() async throws -> [FCABoundVehicle] {
         guard let runtime = try? VehicleSessionRuntime.shared.get(),
-              let choices = try? runtime.shortcutVehicles(), let names = runtime.sessions.session?.boundVehicles else { return [] }
+              let choices = try? await runtime.shortcutVehicles(), let names = runtime.sessions.session?.boundVehicles else { return [] }
         return choices.compactMap { key, ref in
             names[ref].map { FCABoundVehicle(id: key, vehicleRef: ref, name: $0) }
         }.sorted { $0.id < $1.id }
@@ -49,7 +49,6 @@ private enum VehicleShortcut {
         let time = Date()
         do {
             let runtime = try VehicleSessionRuntime.shared.get()
-            guard try runtime.shortcutVehicles()[vehicle.id] != nil else { return "הרכב אינו משויך למכשיר בחשבון הנוכחי." }
             let location = kind == .returning ? evidence(place, at: time) : nil
             try await runtime.recordShortcut(selection: vehicle.id, kind: kind, time: time, location: location)
             return "האירוע נשמר במכשיר לסנכרון."

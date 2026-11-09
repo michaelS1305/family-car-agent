@@ -155,7 +155,7 @@ import UIKit
                     return
                 }
                 #endif
-                let transport = try VehicleSessionRuntime.shared.get().restore(identifier)
+                let transport = try await VehicleSessionRuntime.shared.get().restore(identifier)
                 guard transport.identifier == identifier else { throw VehicleQueueError.contextUnavailable }
                 transport.handleBackgroundEvents(completion: completionHandler)
             } catch {

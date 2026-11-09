@@ -1,12 +1,24 @@
 import Foundation
+import SQLite3
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
+private func rejectionSQL(_ directory: URL, _ statement: String) throws {
+    var db: OpaquePointer?
+    guard sqlite3_open(directory.appendingPathComponent("vehicle-events.sqlite").path, &db) == SQLITE_OK else { throw VehicleQueueError.storage }
+    defer { sqlite3_close_v2(db) }
+    guard sqlite3_exec(db, statement, nil, nil, nil) == SQLITE_OK else { throw VehicleQueueError.storage }
+}
+
 @MainActor private final class SyncSessionVault: SessionVault {
     var saved: AuthSession?
+    var failWrite = false
     func read() throws -> AuthSession? { saved }
-    func write(_ value: AuthSession) throws { saved = value }
+    func write(_ value: AuthSession) throws {
+        if failWrite { throw AuthFailure.configuration }
+        saved = value
+    }
     func clear() throws { saved = nil }
 }
 private actor SyncSessionExchange: AuthTransport {
@@ -37,6 +49,7 @@ private actor SyncSessionExchange: AuthTransport {
         return .init(context: suppliedContext ?? self.context, generation: 1, accessToken: forceRefresh ? "test-new" : "test-old")
     }
     func isCurrent(_ authorization: VehicleUploadAuthorization) -> Bool { current && permitted && authorization.context == context }
+    func rejectAuthorization(for context: VehicleQueueContext) { if self.context == context { permitted = false } }
 }
 
 @MainActor private final class SyncTransport: VehicleUploadTransport {
@@ -73,6 +86,7 @@ private actor SyncSessionExchange: AuthTransport {
     let queue: VehicleEventQueue
     let auth: SyncAuth
     let transport: SyncTransport
+    var namespace: UUID?
     var clock = Date(timeIntervalSince1970: 1_800_000_000)
     var coordinator: VehicleSyncCoordinator!
     init(root: URL) throws {
@@ -90,7 +104,10 @@ private actor SyncSessionExchange: AuthTransport {
     }
     func start() async throws { try await queue.initializeFreshDevice(context) }
     func take(vehicle: UUID = UUID()) async throws -> QueuedVehicleEvent {
-        try await queue.enqueueTake(context, vehicle: vehicle, occurredAt: clock)
+        var vehicles = try await queue.authorizedVehicles(context); vehicles.insert(vehicle)
+        let verification = try await queue.beginVerification(context)
+        try await queue.completeVerification(context, generation: verification, vehicles: vehicles, namespace: namespace)
+        return try await queue.enqueueTake(context, vehicle: vehicle, occurredAt: clock)
     }
     func states() async throws -> [VehicleQueueState] { try await queue.records(context).map(\.state) }
 }
@@ -114,11 +131,14 @@ private actor SyncSessionExchange: AuthTransport {
         let exchange = SyncSessionExchange(.init(owner: ctx.owner, accessToken: "new", refreshToken: "second-sentinel", expires: .distantFuture))
         let sessions = SessionManager(vault: vault, transport: exchange)
         try sessions.restore()
-        let provider = SessionVehicleAuthentication(environment: .development, sessions: sessions)
+        let provider = SessionVehicleAuthentication(environment: .development, sessions: sessions, queueDirectory: sharedFixture.root.appendingPathComponent("db"))
         precondition(!provider.permits(ctx))
         let vehicleA = UUID(), vehicleB = UUID()
         try sessions.authorizeVehicleScope(provider.scope(ctx), owner: ctx.owner, generation: sessions.generation,
                                            bindings: [vehicleA: "A", vehicleB: "B"])
+        let initialVerification = try await sharedFixture.queue.beginVerification(ctx)
+        try await sharedFixture.queue.completeVerification(ctx, generation: initialVerification, vehicles: [vehicleA, vehicleB], namespace: sessions.session?.shortcutNamespace)
+        sharedFixture.namespace = sessions.session?.shortcutNamespace
         let options = provider.shortcutVehicles(ctx)
         precondition(Set(options.values) == [vehicleA, vehicleB] && options[vehicleA.uuidString] == nil)
         let fg = Task { try await sessions.access(owner: ctx.owner) }
@@ -130,9 +150,79 @@ private actor SyncSessionExchange: AuthTransport {
         precondition(calls == 1 && foreground == grant.accessToken && provider.isCurrent(grant))
         let actual = try VehicleSyncCoordinator(environment: .development, context: ctx, queue: sharedFixture.queue,
             authentication: provider, transport: sharedFixture.transport, directory: sharedFixture.root.appendingPathComponent("actual"))
-        _ = try await sharedFixture.take()
+        let boundEvent = try await sharedFixture.take(vehicle: vehicleA)
         await actual.wake()
         precondition(sharedFixture.transport.created.count == 1)
+        try sessions.authorizeVehicleScope(provider.scope(ctx), owner: ctx.owner, generation: sessions.generation,
+                                           bindings: [vehicleB: "B"])
+        await actual.wake()
+        precondition(sharedFixture.transport.created.count == 1 && sharedFixture.transport.cancelled == [1])
+        precondition(!provider.permitsVehicle(vehicleA, in: ctx) && Set(provider.shortcutVehicles(ctx).values) == [vehicleB])
+        let bindingRetained = try await sharedFixture.queue.records(ctx)
+        precondition(bindingRetained.count == 1 && bindingRetained[0].event == boundEvent)
+        try sessions.authorizeVehicleScope(provider.scope(ctx), owner: ctx.owner, generation: sessions.generation,
+                                           bindings: [vehicleA: "A", vehicleB: "B"])
+        let offlineRestored = SessionManager(vault: vault, transport: exchange)
+        try offlineRestored.restore()
+        let offlineProvider = SessionVehicleAuthentication(environment: .development, sessions: offlineRestored, queueDirectory: sharedFixture.root.appendingPathComponent("db"))
+        precondition(offlineProvider.shortcutVehicles(ctx) == options)
+        for logout in [false, true] {
+            let testVault = SyncSessionVault(); testVault.saved = vault.saved
+            let manager = SessionManager(vault: testVault, transport: exchange)
+            try manager.restore()
+            let permit = VehicleRecordingPermit()
+            manager.onVehicleBindingsReduced = { permit.invalidate() }
+            manager.onInvalidation = { _ in permit.invalidate() }
+            let db = try VehicleEventQueue(directory: root.appendingPathComponent(UUID().uuidString))
+            try await db.initializeFreshDevice(ctx)
+            let verified = try await db.beginVerification(ctx)
+            try await db.completeVerification(ctx, generation: verified, vehicles: [vehicleA, vehicleB], namespace: sessions.session?.shortcutNamespace)
+            let original = try await db.enqueueTake(ctx, vehicle: vehicleB, occurredAt: Date())
+            let arrived = AsyncStream<Void>.makeStream(), proceed = AsyncStream<Void>.makeStream()
+            let selectedNamespace = manager.session!.shortcutNamespace!
+            let pending = Task {
+                arrived.continuation.yield(())
+                for await _ in proceed.stream { break }
+                return try await db.recordAuthorizedShortcut(ctx, vehicle: vehicleA, kind: .take,
+                    time: Date(), location: nil, namespace: selectedNamespace, permit: permit)
+            }
+            for await _ in arrived.stream { break }
+            if logout { try manager.clear() }
+            else { try manager.authorizeVehicleScope(provider.scope(ctx), owner: ctx.owner, generation: manager.generation, bindings: [vehicleB: "B"]) }
+            proceed.continuation.yield(()); proceed.continuation.finish(); arrived.continuation.finish()
+            do { _ = try await pending.value; fatalError("Stale TAKE allocated a sequence") }
+            catch VehicleQueueError.contextUnavailable {}
+            let remaining = try await db.records(ctx)
+            precondition(remaining.map(\.event) == [original])
+            let next = try await db.enqueueTake(ctx, vehicle: vehicleB, occurredAt: Date())
+            precondition(next.sequence == original.sequence + 1)
+        }
+        try VehicleEventQueue.revokeAuthorization(directory: sharedFixture.root.appendingPathComponent("db"), context: ctx)
+        vault.failWrite = true
+        do {
+            try offlineRestored.authorizeVehicleScope(provider.scope(ctx), owner: ctx.owner,
+                generation: offlineRestored.generation, bindings: [:])
+            fatalError("Expected failed Keychain write")
+        } catch AuthFailure.configuration {}
+        precondition(offlineProvider.shortcutVehicles(ctx).isEmpty)
+        if CommandLine.arguments.contains("--verify-durable-revocation") {
+            let restart = SessionManager(vault: vault, transport: exchange)
+            try restart.restore()
+            if SessionVehicleAuthentication(environment: .development, sessions: restart, queueDirectory: sharedFixture.root.appendingPathComponent("db")).permitsVehicle(vehicleA, in: ctx) {
+                print("FAIL: fresh authentication provider recovered revoked binding after vault write failure")
+                exit(1)
+            }
+        }
+        vault.failWrite = false
+        try offlineRestored.checkVehicleProfile(user: ctx.user, family: ctx.family, expectedUser: ctx.user, expectedFamily: ctx.family)
+        do {
+            try offlineRestored.checkVehicleProfile(user: ctx.user, family: ctx.family + 1, expectedUser: ctx.user, expectedFamily: ctx.family)
+            fatalError("Expected second profile check to reject a changed family")
+        } catch AuthFailure.stale {}
+        precondition(offlineRestored.session?.vehicleScope == nil && vault.saved?.vehicleScope == nil)
+        await actual.wake()
+        precondition(sharedFixture.transport.created.count == 1) // Durable revocation also blocks the older live SessionManager.
+        print("PASS: confirmed binding removal cancels scheduling without sequence loss; reauthorization and offline picker restoration")
         let paths = FileManager.default.enumerator(at: sharedFixture.root, includingPropertiesForKeys: [.isRegularFileKey])!
         for case let file as URL in paths where try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
             let bytes = try Data(contentsOf: file)
@@ -146,6 +236,75 @@ private actor SyncSessionExchange: AuthTransport {
         try sessions.restore()
         precondition(!provider.permits(ctx) && provider.shortcutVehicles(ctx).isEmpty)
         print("PASS: real shared session provider, explicit scope, refresh, logout and different login")
+
+        // Exercise real structured responses, not just a generic 4xx blocked-head assertion.
+        let unavailableBody = #"{"detail":{"code":"DEVICE_OR_VEHICLE_UNAVAILABLE","message":"unavailable"}}"#
+        for (status, body, rejected) in [
+            (404, unavailableBody, true),
+            (403, #"{"detail":{"code":"IDENTITY_UNAVAILABLE"}}"#, true),
+            (404, #"{"detail":{"code":"OTHER_ERROR"}}"#, false),
+            (422, unavailableBody, false),
+            (404, "not-json", false),
+            (404, #"{"code":"DEVICE_OR_VEHICLE_UNAVAILABLE"}"#, false)
+        ] {
+            let f = try await fixture()
+            let event = try await f.take()
+            let pending = try await f.take()
+            await f.coordinator.wake()
+            await f.coordinator.receive(f.transport.finish(1, status: status, body: body))
+            let rows = try await f.queue.records(f.context)
+            precondition(rows.map(\.event) == [event, pending] && rows[0].state == .blocked && rows[1].state == .pending)
+            let grants = try await f.queue.authorizedVehicles(f.context)
+            precondition(grants.isEmpty == rejected)
+            if rejected {
+                do { _ = try await f.queue.enqueueTake(f.context, vehicle: event.vehicle, occurredAt: f.clock); fatalError("Rejected scope allocated TAKE") }
+                catch VehicleQueueError.contextUnavailable {}
+                do {
+                    _ = try await f.queue.enqueueReturn(f.context, vehicle: event.vehicle, occurredAt: f.clock, takeID: event.id,
+                        location: .init(latitude: 32, longitude: 34, accuracy: 5, measuredAt: f.clock))
+                    fatalError("Rejected scope allocated RETURN")
+                } catch VehicleQueueError.contextUnavailable {}
+                let verification = try await f.queue.beginVerification(f.context)
+                try await f.queue.completeVerification(f.context, generation: verification, vehicles: [event.vehicle, pending.vehicle])
+                f.auth.permitted = true; try f.restoreCoordinator(); await f.coordinator.wake()
+                precondition(f.transport.created.count == 1) // Reverification cannot skip the rejected sequence.
+            } else {
+                _ = try await f.queue.enqueueTake(f.context, vehicle: event.vehicle, occurredAt: f.clock)
+            }
+        }
+        for failWrites in [false, true] {
+            let f = try await fixture(), vehicle = UUID()
+            let v = SyncSessionVault()
+            v.saved = AuthSession(owner: f.context.owner, accessToken: "synthetic", refreshToken: "synthetic-refresh", expires: .distantFuture, activated: true)
+            let manager = SessionManager(vault: v, transport: exchange); try manager.restore()
+            let real = SessionVehicleAuthentication(environment: .development, sessions: manager, queueDirectory: f.root.appendingPathComponent("db"))
+            try manager.authorizeVehicleScope(real.scope(f.context), owner: f.context.owner, generation: manager.generation, bindings: [vehicle: "Test"])
+            let staleSnapshot = v.saved
+            f.namespace = manager.session?.shortcutNamespace
+            let event = try await f.take(vehicle: vehicle)
+            let sync = try VehicleSyncCoordinator(environment: .development, context: f.context, queue: f.queue,
+                authentication: real, transport: f.transport, directory: f.root.appendingPathComponent("real-rejection"))
+            await sync.wake()
+            if failWrites {
+                try rejectionSQL(f.root.appendingPathComponent("db"), "CREATE TRIGGER reject_scope_write BEFORE UPDATE ON authorization_scopes BEGIN SELECT RAISE(ABORT,'test'); END; CREATE TRIGGER reject_device_write BEFORE UPDATE ON devices BEGIN SELECT RAISE(ABORT,'test'); END")
+            }
+            v.failWrite = true // Preserve stale Keychain even while memory is fenced.
+            await sync.receive(f.transport.finish(1, status: 404, body: unavailableBody))
+            precondition(real.shortcutVehicles(f.context).isEmpty && !real.permitsVehicle(vehicle, in: f.context))
+            await sync.wake(); precondition(f.transport.created.count == 1)
+            let kept = try await f.queue.records(f.context)
+            precondition(kept.count == 1 && kept[0].event == event)
+            if !failWrites {
+                precondition(kept[0].state == .blocked)
+                let oldVault = SyncSessionVault(); oldVault.saved = staleSnapshot
+                let restoredSession = SessionManager(vault: oldVault, transport: exchange); try restoredSession.restore()
+                let fresh = SessionVehicleAuthentication(environment: .development, sessions: restoredSession, queueDirectory: f.root.appendingPathComponent("db"))
+                precondition(fresh.shortcutVehicles(f.context).isEmpty)
+            } else {
+                precondition(kept[0].state == .registered) // No false claim of persistence when every write failed.
+            }
+        }
+        print("PASS: structured authorization rejection, durable fence, stale Keychain, TAKE/RETURN denial, generic errors and memory fail-closed")
 
         let ordered = try await fixture()
         let first = try await ordered.take()

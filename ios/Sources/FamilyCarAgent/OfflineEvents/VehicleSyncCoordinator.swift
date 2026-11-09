@@ -12,15 +12,23 @@ struct VehicleUploadAuthorization: Sendable {
 /// Credentials are supplied per attempt and never serialized with an event.
 @MainActor protocol VehicleUploadAuthentication: AnyObject {
     func permits(_ context: VehicleQueueContext) -> Bool
+    func permitsVehicle(_ vehicle: UUID, in context: VehicleQueueContext) -> Bool
     func authorization(for context: VehicleQueueContext, forceRefresh: Bool) async throws -> VehicleUploadAuthorization
     func isCurrent(_ authorization: VehicleUploadAuthorization) -> Bool
+    func rejectAuthorization(for context: VehicleQueueContext)
+}
+
+extension VehicleUploadAuthentication {
+    func permitsVehicle(_ vehicle: UUID, in context: VehicleQueueContext) -> Bool { permits(context) }
 }
 
 @MainActor final class SessionVehicleAuthentication: VehicleUploadAuthentication {
     private let environment: AppEnvironment
     private let sessions: SessionManager
-    init(environment: AppEnvironment, sessions: SessionManager) {
+    private let queueDirectory: URL?
+    init(environment: AppEnvironment, sessions: SessionManager, queueDirectory: URL? = nil) {
         self.environment = environment; self.sessions = sessions
+        self.queueDirectory = queueDirectory
     }
     func scope(_ c: VehicleQueueContext) -> VehicleSessionScope {
         .init(environment: c.environment, user: c.user, family: c.family, device: c.device)
@@ -30,11 +38,26 @@ struct VehicleUploadAuthorization: Sendable {
         return s.activated && s.owner == c.owner && s.vehicleScope == scope(c)
             && c.environment == environment.backendURL.absoluteString + "|" + environment.supabaseURL.absoluteString
     }
+    func permitsVehicle(_ vehicle: UUID, in context: VehicleQueueContext) -> Bool {
+        permits(context) && sessions.session?.boundVehicles?[vehicle] != nil && durable(context).contains(vehicle)
+    }
+    func rejectAuthorization(for context: VehicleQueueContext) {
+        guard permits(context), let session = sessions.session else { return }
+        // The runtime callback fences recording permits and scheduling synchronously.
+        sessions.onInvalidation?(session)
+        // Existing setter also narrows memory when Keychain persistence fails.
+        try? sessions.authorizeVehicleScope(scope(context), owner: session.owner,
+                                           generation: sessions.generation, bindings: [:])
+    }
+    private func durable(_ context: VehicleQueueContext) -> Set<UUID> {
+        guard let namespace = sessions.session?.shortcutNamespace else { return [] }
+        return (try? VehicleEventQueue.durableVehicles(directory: queueDirectory ?? VehicleEventQueue.applicationDirectory(), context: context, namespace: namespace)) ?? []
+    }
     /// Selection IDs expire on logout even if a second account can use the same vehicle.
     func shortcutVehicles(_ c: VehicleQueueContext) -> [String: UUID] {
         guard permits(c), let session = sessions.session, let namespace = session.shortcutNamespace,
               let bindings = session.boundVehicles else { return [:] }
-        return Dictionary(uniqueKeysWithValues: bindings.keys.map { (namespace.uuidString + "/" + $0.uuidString, $0) })
+        return Dictionary(uniqueKeysWithValues: bindings.keys.filter { durable(c).contains($0) }.map { (namespace.uuidString + "/" + $0.uuidString, $0) })
     }
     func isCurrent(_ grant: VehicleUploadAuthorization) -> Bool {
         permits(grant.context) && sessions.generation == grant.generation && sessions.session?.accessToken == grant.accessToken
@@ -129,8 +152,14 @@ struct VehicleUploadCompletion: Sendable {
         let task = Task { @MainActor in
             await previous?.value
             do { try await operation() }
-            catch VehicleQueueError.contextUnavailable { self.diagnostic = .identityUnavailable }
-            catch { self.diagnostic = .storageFailure }
+            catch VehicleQueueError.contextUnavailable {
+                self.diagnostic = .identityUnavailable
+                for task in await self.transport.allTasks() { self.transport.cancel(task.identifier) }
+            }
+            catch {
+                self.diagnostic = .storageFailure
+                for task in await self.transport.allTasks() { self.transport.cancel(task.identifier) }
+            }
         }
         tail = task
         await task.value
@@ -151,6 +180,11 @@ struct VehicleUploadCompletion: Sendable {
             for task in tasks { transport.cancel(task.identifier) }
             diagnostic = .idle; return
         }
+        guard auth.permitsVehicle(head.event.vehicle, in: context),
+              try await queue.authorizedVehicles(context).contains(head.event.vehicle) else {
+            for task in tasks { transport.cancel(task.identifier) }
+            diagnostic = .blocked; return // Preserve the head and sequence; never skip an unbound vehicle.
+        }
         // Never register a replacement while any task still exists in this session.
         if !tasks.isEmpty {
             guard tasks.count == 1, let task = tasks.first, let attempt = head.attempt,
@@ -168,6 +202,10 @@ struct VehicleUploadCompletion: Sendable {
                                                sessionIdentifier: transport.identifier, taskIdentifier: task.identifier)
             }
             try await allowed()
+            guard auth.permitsVehicle(head.event.vehicle, in: context),
+              try await queue.authorizedVehicles(context).contains(head.event.vehicle) else {
+                transport.cancel(task.identifier); diagnostic = .blocked; return
+            }
             if task.state == .suspended { transport.resume(task.identifier) }
             diagnostic = .registered; return
         }
@@ -205,13 +243,13 @@ struct VehicleUploadCompletion: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer " + grant.accessToken, forHTTPHeaderField: "Authorization")
         try await allowed()
-        guard auth.isCurrent(grant) else { diagnostic = .identityUnavailable; return }
+        guard auth.isCurrent(grant), auth.permitsVehicle(claim.event.vehicle, in: context) else { diagnostic = .identityUnavailable; return }
         let task = try transport.create(request: request, file: file, tag: Self.tag(claim.event.id, attempt))
         do {
             try await queue.markRegistered(context, event: claim.event.id, attempt: attempt,
                                            sessionIdentifier: transport.identifier, taskIdentifier: task.identifier)
             try await allowed()
-            guard auth.isCurrent(grant) else { transport.cancel(task.identifier); diagnostic = .identityUnavailable; return }
+            guard auth.isCurrent(grant), auth.permitsVehicle(claim.event.vehicle, in: context) else { transport.cancel(task.identifier); diagnostic = .identityUnavailable; return }
             transport.resume(task.identifier)
             diagnostic = .registered
         } catch {
@@ -232,6 +270,14 @@ struct VehicleUploadCompletion: Sendable {
             try await deferRetry(row, after: nil); return
         }
         guard let status = result.status else { return }
+        if Self.isAuthorizationRejection(status: status, body: result.body) {
+            stopped = true
+            auth.rejectAuthorization(for: context)
+            for task in await transport.allTasks() { transport.cancel(task.identifier) }
+            try await queue.rejectAuthorization(context, event: row.event.id, attempt: attempt)
+            diagnostic = .blocked
+            return
+        }
         if status == 401 {
             try await queue.recordFailure(context, event: row.event.id, attempt: attempt, failure: .authentication)
             try await schedule(); return
@@ -259,6 +305,17 @@ struct VehicleUploadCompletion: Sendable {
         }
         try await queue.recordFailure(context, event: row.event.id, attempt: attempt, failure: .preAdmissionRejection)
         diagnostic = .blocked
+    }
+
+    /// FastAPI's documented envelope; neither HTTP status nor arbitrary text is evidence.
+    static func isAuthorizationRejection(status: Int, body: Data) -> Bool {
+        struct Envelope: Decodable {
+            struct Detail: Decodable { let code: String }
+            let detail: Detail
+        }
+        guard body.count <= 65_536, let response = try? JSONDecoder().decode(Envelope.self, from: body) else { return false }
+        return (status == 404 && response.detail.code == "DEVICE_OR_VEHICLE_UNAVAILABLE")
+            || (status == 403 && response.detail.code == "IDENTITY_UNAVAILABLE")
     }
 
     private func deferRetry(_ row: VehicleQueueRecord, after: String?) async throws {

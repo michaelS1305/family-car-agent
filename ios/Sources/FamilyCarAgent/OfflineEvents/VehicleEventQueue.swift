@@ -22,6 +22,20 @@ struct VehicleQueueContext: Equatable, Sendable {
 }
 
 enum ShortcutQueueError: Error { case location, alreadyTaken, noUniqueTake }
+
+/// Local to one app process. Invalidation and the entire sequence-allocating
+/// transaction exclude each other. An old permit can never become valid again.
+final class VehicleRecordingPermit: @unchecked Sendable {
+    private let lock = NSLock()
+    private var valid = true
+    func invalidate() { lock.withLock { valid = false } }
+    fileprivate func record<T>(_ body: () throws -> T) throws -> T {
+        try lock.withLock {
+            guard valid else { throw VehicleQueueError.contextUnavailable }
+            return try body()
+        }
+    }
+}
 enum VehicleQueueError: Error { case invalidInput, storage, unsupportedSchema, contextUnavailable, conflict, invalidTransition }
 enum VehicleQueueState: String, Codable, Sendable {
     case pending, preparing, registered, awaitingAuthentication, accepted, terminal, blocked
@@ -79,8 +93,61 @@ actor VehicleEventQueue {
 
     init(directory: URL) throws { db = try VehicleQueueDatabase(directory: directory) }
 
+    /// Server verification must reserve a durable fence BEFORE making any request.
+    func beginVerification(_ context: VehicleQueueContext) throws -> UUID {
+        try db.beginVerification(context)
+    }
+    func completeVerification(_ context: VehicleQueueContext, generation: UUID, vehicles: Set<UUID>, namespace: UUID? = nil) throws {
+        try db.completeVerification(context, generation: generation, vehicles: vehicles, namespace: namespace)
+    }
+    func authorizedVehicles(_ context: VehicleQueueContext) throws -> Set<UUID> {
+        try db.authorizedVehicles(context)
+    }
+    /// Synchronous independent connection for logout's synchronous session callback.
+    nonisolated static func revokeAuthorization(directory: URL, context: VehicleQueueContext) throws {
+        let db = try VehicleQueueDatabase(directory: directory)
+        do {
+            _ = try db.beginVerification(context)
+            try db.transaction {
+                try db.execute("UPDATE authorization_scopes SET state='revoked' WHERE context=?", [context.key])
+                try db.execute("UPDATE vehicle_authorizations SET allowed=0 WHERE context=?", [context.key])
+            }
+        } catch {
+            // Independent fallback inside the EXISTING database, no new persistence subsystem.
+            // Report the original failure even if quarantine succeeds. Never delete the queue.
+            try? db.transaction { try db.execute("UPDATE devices SET active=0 WHERE context=?", [context.key]) }
+            throw error
+        }
+    }
+    nonisolated static func durableVehicles(directory: URL, context: VehicleQueueContext, namespace: UUID) throws -> Set<UUID> {
+        let db = try VehicleQueueDatabase(directory: directory)
+        return try db.transaction {
+            try db.requireNamespace(context, namespace)
+            return try db.authorizedVehicles(context)
+        }
+    }
+
     /// Scheduling/restoration must also respect a frozen partition.
     func validateActiveContext(_ context: VehicleQueueContext) throws { try require(context) }
+
+    /// Every allocated sequence has one retained row, including settled events.
+    func validateSequence(_ context: VehicleQueueContext) throws {
+        let rows = try db.rows("""
+            SELECT d.last_sequence, COUNT(e.id), COALESCE(MAX(e.sequence),0)
+            FROM devices d LEFT JOIN events e ON e.context=d.context
+            WHERE d.context=? AND d.active=1 GROUP BY d.context
+            """, [context.key])
+        guard let row = rows.first, row[0] == row[1], row[0] == row[2]
+        else { throw VehicleQueueError.contextUnavailable }
+    }
+
+    /// A lost registration journal must not disguise an existing installation as new.
+    func hasDeviceHistory(environment: AppEnvironment, owner: UUID) throws -> Bool {
+        let name = environment.backendURL.absoluteString + "|" + environment.supabaseURL.absoluteString
+        let prefix = name + "|" + owner.uuidString + "|"
+        return try db.rows("SELECT context FROM devices WHERE environment=?", [name])
+            .contains { $0[0]?.hasPrefix(prefix) == true }
+    }
 
     /// Call only for a newly registered device whose server cursor is known to be zero.
     /// Reopening an existing partition never resets its sequence or unfreezes it.
@@ -103,6 +170,8 @@ actor VehicleEventQueue {
         try db.transaction {
             try require(context, active: false)
             try db.execute("UPDATE devices SET active=0 WHERE context=?", [context.key])
+            try db.execute("UPDATE authorization_scopes SET generation=?,state='revoked' WHERE context=?", [UUID().uuidString, context.key])
+            try db.execute("UPDATE vehicle_authorizations SET allowed=0 WHERE context=?", [context.key])
         }
     }
 
@@ -110,6 +179,8 @@ actor VehicleEventQueue {
     func reactivate(_ context: VehicleQueueContext) throws {
         try db.transaction {
             try require(context, active: false)
+            // Invalidate outstanding verification tickets BEFORE lifting a quarantine.
+            try db.execute("UPDATE authorization_scopes SET generation=?,state='verificationPending' WHERE context=?", [UUID().uuidString, context.key])
             try db.execute("UPDATE devices SET active=1 WHERE context=?", [context.key])
         }
     }
@@ -126,6 +197,15 @@ actor VehicleEventQueue {
         try enqueue(context, id: id, vehicle: vehicle, occurredAt: occurredAt, takeID: takeID, location: location)
     }
 
+    func recordAuthorizedShortcut(_ context: VehicleQueueContext, vehicle: UUID, kind: QueuedVehicleEvent.Kind,
+                                  time: Date, location: VehicleLocationEvidence?, namespace: UUID, permit: VehicleRecordingPermit) throws -> QueuedVehicleEvent {
+        try permit.record {
+            guard kind == .take || location != nil else { throw ShortcutQueueError.location }
+            return try enqueue(context, id: UUID(), vehicle: vehicle, occurredAt: time, takeID: nil,
+                               location: location, shortcut: kind, namespace: namespace)
+        }
+    }
+
     func recordShortcut(_ context: VehicleQueueContext, vehicle: UUID, kind: QueuedVehicleEvent.Kind,
                         time: Date, location: VehicleLocationEvidence?) throws -> QueuedVehicleEvent {
         guard kind == .take || location != nil else { throw ShortcutQueueError.location }
@@ -134,7 +214,7 @@ actor VehicleEventQueue {
     }
 
     private func enqueue(_ context: VehicleQueueContext, id: UUID, vehicle: UUID, occurredAt: Date,
-                         takeID: UUID?, location: VehicleLocationEvidence?, shortcut: QueuedVehicleEvent.Kind? = nil) throws -> QueuedVehicleEvent {
+                         takeID: UUID?, location: VehicleLocationEvidence?, shortcut: QueuedVehicleEvent.Kind? = nil, namespace: UUID? = nil) throws -> QueuedVehicleEvent {
         guard id.uuidString.split(separator: "-")[2].first == "4",
               occurredAt.timeIntervalSince1970.isFinite,
               (0...253402300799).contains(occurredAt.timeIntervalSince1970)
@@ -142,6 +222,8 @@ actor VehicleEventQueue {
         try location?.validate(at: occurredAt)
         return try db.transaction {
             try require(context)
+            guard try db.authorizedVehicles(context).contains(vehicle) else { throw VehicleQueueError.contextUnavailable }
+            if let namespace { try db.requireNamespace(context, namespace) }
             var takeID = takeID
             if let shortcut {
                 let rows = try records(context).filter { $0.event.vehicle == vehicle }
@@ -202,6 +284,7 @@ actor VehicleEventQueue {
             let all = try records(context)
             guard let head = all.first(where: { $0.state != .accepted && $0.state != .terminal }),
                   head.state == .pending else { return nil }
+            guard try db.authorizedVehicles(context).contains(head.event.vehicle) else { throw VehicleQueueError.contextUnavailable }
             if let cause = head.event.takeID, !all.contains(where: { $0.event.id == cause && $0.state == .accepted }) {
                 try db.execute("UPDATE events SET state='blocked',reason='cause_not_accepted' WHERE id=?", [head.event.id.uuidString])
                 return nil
@@ -220,9 +303,47 @@ actor VehicleEventQueue {
         try db.transaction {
             try require(context)
             let row = try record(context, event)
+            guard try db.authorizedVehicles(context).contains(row.event.vehicle) else { throw VehicleQueueError.contextUnavailable }
             guard row.state == .preparing, row.attempt == attempt else { throw VehicleQueueError.invalidTransition }
             try db.execute("UPDATE events SET state='registered',session=?,task=? WHERE id=?",
                            [sessionIdentifier, String(taskIdentifier), event.uuidString])
+        }
+    }
+
+    /// Receipt identity/attempt, durable scope fence and rejected head commit together.
+    /// This error does not identify whether the device or a particular binding was removed.
+    func rejectAuthorization(_ context: VehicleQueueContext, event: UUID, attempt: UUID) throws {
+        do {
+            try db.transaction {
+                try require(context, active: false)
+                let row = try record(context, event)
+                guard row.state == .registered, row.attempt == attempt else { throw VehicleQueueError.invalidTransition }
+                try db.execute("UPDATE authorization_scopes SET generation=?,state='revoked' WHERE context=?", [UUID().uuidString, context.key])
+                try db.execute("UPDATE vehicle_authorizations SET allowed=0 WHERE context=?", [context.key])
+                try db.execute("UPDATE events SET state='blocked',reason='authorizationRejected' WHERE id=?", [event.uuidString])
+            }
+        } catch VehicleQueueError.invalidTransition { throw VehicleQueueError.invalidTransition }
+        catch {
+            // Same existing fallback as logout. Report failure even when quarantine succeeds.
+            try? db.transaction { try db.execute("UPDATE devices SET active=0 WHERE context=?", [context.key]) }
+            throw error
+        }
+    }
+
+    enum AuthorizationStatus { case unknown, pending, authorized, removed, fenced }
+    func authorizationStatus(_ context: VehicleQueueContext, vehicle: UUID, namespace: UUID?) throws -> AuthorizationStatus {
+        try db.transaction {
+            try require(context)
+            guard let row = try db.rows("SELECT generation,state,namespace FROM authorization_scopes WHERE context=?", [context.key]).first else { return .unknown }
+            guard row[0].flatMap(UUID.init(uuidString:)) != nil else { throw VehicleQueueError.storage }
+            switch row[1] {
+            case "verificationPending": return .pending
+            case "revoked": return .fenced
+            case "verified":
+                guard let namespace, row[2] == namespace.uuidString else { return .unknown }
+                return try db.authorizedVehicles(context).contains(vehicle) ? .authorized : .removed
+            default: throw VehicleQueueError.storage
+            }
         }
     }
 
@@ -315,16 +436,56 @@ private final class VehicleQueueDatabase: @unchecked Sendable {
         try execute("PRAGMA journal_mode=DELETE")
         try execute("PRAGMA synchronous=FULL")
         try transaction {
-            guard let version = try rows("PRAGMA user_version").first?[0], ["0", "1"].contains(version) else {
+            guard let version = try rows("PRAGMA user_version").first?[0], ["0", "1", "2"].contains(version) else {
                 throw VehicleQueueError.unsupportedSchema
             }
             try execute("CREATE TABLE IF NOT EXISTS devices(context TEXT PRIMARY KEY,environment TEXT NOT NULL,device TEXT NOT NULL,last_sequence INTEGER NOT NULL CHECK(last_sequence>=0),active INTEGER NOT NULL CHECK(active IN(0,1)),UNIQUE(environment,device))")
             try execute("CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,context TEXT NOT NULL REFERENCES devices(context),sequence INTEGER NOT NULL CHECK(sequence>0),vehicle TEXT NOT NULL,cause TEXT REFERENCES events(id),payload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('pending','preparing','registered','awaitingAuthentication','accepted','terminal','blocked')),attempt TEXT,session TEXT,task INTEGER,reason TEXT,UNIQUE(context,sequence),UNIQUE(context,cause))")
-            try execute("PRAGMA user_version=1")
+            try execute("CREATE TABLE IF NOT EXISTS authorization_scopes(context TEXT PRIMARY KEY REFERENCES devices(context),generation TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('verificationPending','verified','revoked')),namespace TEXT)")
+            try execute("CREATE TABLE IF NOT EXISTS vehicle_authorizations(context TEXT NOT NULL REFERENCES authorization_scopes(context),vehicle TEXT NOT NULL,allowed INTEGER NOT NULL CHECK(allowed IN(0,1)),PRIMARY KEY(context,vehicle))")
+            try execute("PRAGMA user_version=2")
         }
         #if os(iOS)
         try fm.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: path)
         #endif
+    }
+
+    func beginVerification(_ context: VehicleQueueContext) throws -> UUID {
+        let generation = UUID()
+        try transaction {
+            guard try rows("SELECT context FROM devices WHERE context=?", [context.key]).count == 1 else { throw VehicleQueueError.contextUnavailable }
+            try execute("INSERT INTO authorization_scopes(context,generation,state) VALUES(?,?,'verificationPending') ON CONFLICT(context) DO UPDATE SET generation=excluded.generation,state=excluded.state", [context.key, generation.uuidString])
+        }
+        return generation
+    }
+    func completeVerification(_ context: VehicleQueueContext, generation: UUID, vehicles: Set<UUID>, namespace: UUID? = nil) throws {
+        try transaction {
+            guard let row = try rows("SELECT generation,state FROM authorization_scopes WHERE context=?", [context.key]).first,
+                  row[0] == generation.uuidString, row[1] == "verificationPending",
+                  try rows("SELECT active FROM devices WHERE context=?", [context.key]).first?[0] == "1"
+            else { throw VehicleQueueError.contextUnavailable }
+            try execute("UPDATE vehicle_authorizations SET allowed=0 WHERE context=?", [context.key])
+            for vehicle in vehicles {
+                try execute("INSERT INTO vehicle_authorizations(context,vehicle,allowed) VALUES(?,?,1) ON CONFLICT(context,vehicle) DO UPDATE SET allowed=1", [context.key, vehicle.uuidString])
+            }
+            try execute("UPDATE authorization_scopes SET state='verified',namespace=? WHERE context=?", [namespace?.uuidString, context.key])
+        }
+    }
+    func requireNamespace(_ context: VehicleQueueContext, _ namespace: UUID) throws {
+        guard try rows("SELECT namespace FROM authorization_scopes WHERE context=? AND state='verified'", [context.key]).first?[0] == namespace.uuidString
+        else { throw VehicleQueueError.contextUnavailable }
+    }
+    func authorizedVehicles(_ context: VehicleQueueContext) throws -> Set<UUID> {
+        // One statement gives a consistent snapshot even across independent processes.
+        let values = try rows("SELECT a.vehicle,a.allowed,s.generation FROM authorization_scopes s JOIN devices d ON d.context=s.context LEFT JOIN vehicle_authorizations a ON a.context=s.context WHERE s.context=? AND s.state='verified' AND d.active=1", [context.key])
+        var result = Set<UUID>()
+        for row in values {
+            guard row[2].flatMap(UUID.init(uuidString:)) != nil else { throw VehicleQueueError.storage }
+            guard let text = row[0] else { continue }
+            guard let id = UUID(uuidString: text), row[1] == "0" || row[1] == "1" else { throw VehicleQueueError.storage }
+            if row[1] == "1" { result.insert(id) }
+        }
+        return result
     }
 
     deinit { sqlite3_close_v2(handle) }

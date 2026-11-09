@@ -192,13 +192,15 @@ import Combine
     }
     func resume() async {
         // Ordinary foregrounding must not reset navigation or show global loading.
-        guard !busy, !checkingApple, let user = sessions?.session?.appleUser else { return }
+        guard !busy, !checkingApple else { return }
+        guard let user = sessions?.session?.appleUser else { refreshNativeDevice(); return }
         checkingApple = true; let current = version
         defer { checkingApple = false }
         do {
             let valid = try await providers?.credentialValid(user) == true
             if current == version && !valid { logout(); if error == nil { error = AuthFailure.signedOut.message } }
         } catch { /* A system failure is not evidence of revocation. */ }
+        refreshNativeDevice()
     }
     func selectRoute(_ selected: LoginRoute) {
         guard !busy, screen == .intro else { return }
@@ -270,6 +272,15 @@ import Combine
         try sessions?.activate(owner: owner)
         me = profile; resolutionToken = nil; familyCode = ""; addressLocation = nil
         screen = existing ? .ready : .success
+        refreshNativeDevice()
+    }
+    private func refreshNativeDevice() {
+        #if canImport(UIKit)
+        guard let sessions, let s = sessions.session, s.activated, let me,
+              let runtime = try? VehicleSessionRuntime.shared.get(), runtime.sessions === sessions else { return }
+        runtime.restoreAuthorized(identity: .init(owner: s.owner, user: me.user_id, family: me.family_id,
+                                                  generation: sessions.generation, version: version))
+        #endif
     }
     private func bootstrap() async throws {
         let current = version
