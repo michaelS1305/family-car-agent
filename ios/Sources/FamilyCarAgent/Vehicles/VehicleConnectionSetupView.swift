@@ -7,6 +7,7 @@ struct VehicleConnectionSetupView: View {
     let name: String
     let close: () -> Void
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @State private var presentation = VehicleConnectionPresentation()
     @State private var busy = false
     @State private var message: String?
@@ -99,8 +100,8 @@ struct VehicleConnectionSetupView: View {
             deviceCard
             if let message { Text(message).font(.callout).foregroundStyle(ChatStyle.secondary).frame(maxWidth: .infinity, alignment: .leading) }
             if presentation.showsShortcuts {
-                shortcutCard(title: "הגדרת חיבור", description: "הקיצור שיופעל כשמתחברים לרכב.")
-                shortcutCard(title: "הגדרת ניתוק", description: presentation.method == .bluetooth
+                shortcutCard(action: .take, title: "הגדרת חיבור", description: "הקיצור שיופעל כשמתחברים לרכב.")
+                shortcutCard(action: .returning, title: "הגדרת ניתוק", description: presentation.method == .bluetooth
                     ? "קיצור להחזרת הרכב. ניתוק Bluetooth אינו מוגדר אוטומטית."
                     : "הקיצור להחזרת הרכב כשמתנתקים ממנו.")
             }
@@ -138,22 +139,24 @@ struct VehicleConnectionSetupView: View {
             }
         }
     }
-    private func shortcutCard(title: String, description: String) -> some View {
+    private func shortcutCard(action: VehicleConnectionPresentation.ShortcutAction, title: String, description: String) -> some View {
         panel {
             HStack(alignment: .top, spacing: 12) {
                 AppAssetImage(path: "icons/archive/single_car_icon.png").frame(width: 64, height: 64).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(title).font(.title2.bold()).accessibilityAddTraits(.isHeader)
-                    Text("הוספה מתוך האפליקציה עדיין אינה זמינה").font(.callout).foregroundStyle(ChatStyle.secondary)
+                    Text(presentation.shortcutURL(for: action) == nil ? "לא ניתן לזהות את שיטת החיבור לרכב" : "ההתקנה מתבצעת באפליקציית קיצורים").font(.callout).foregroundStyle(ChatStyle.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             Text(description).foregroundStyle(ChatStyle.secondary).frame(maxWidth: .infinity, alignment: .leading)
-            // Phase 1: no URL, import, automation state or simulated completion.
-            Button {} label: {
+            Button {
+                if let url = presentation.shortcutURL(for: action) { openURL(url) }
+            } label: {
                 Text("הוספת קיצור").font(.headline).foregroundStyle(ChatStyle.secondary)
                     .padding(12).frame(maxWidth: .infinity, minHeight: 48)
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(ChatStyle.border))
-            }.buttonStyle(.plain).disabled(true).accessibilityHint("האפשרות עדיין אינה זמינה")
+            }.buttonStyle(.plain).disabled(presentation.shortcutURL(for: action) == nil)
+                .accessibilityHint("פותח קישור להוספת קיצור; אינו מאשר התקנה או הגדרת אוטומציה")
         }
     }
     private func panel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
@@ -164,7 +167,7 @@ struct VehicleConnectionSetupView: View {
     }
     private var status: String {
         switch presentation.authorization {
-        case .authorized: "מחובר"
+        case .authorized: "מחובר לשירות"
         case .inactive, .bindingRemoved: "לא מחובר לרכב הזה"
         case .verificationPending: "ממתין לאימות"
         case .temporarilyUnavailable: "לא ניתן לאמת כרגע"

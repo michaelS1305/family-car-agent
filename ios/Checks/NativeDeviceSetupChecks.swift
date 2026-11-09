@@ -56,6 +56,24 @@ import Foundation
         do { try await operation(); fatalError("Expected controlled failure") } catch { }
     }
     @MainActor static func main() async throws {
+        let shortcutMappings: [(VehicleConnectionMethod, String, String)] = [
+            (.carPlay, "e900c2fb4d0b4693b9b0e06b4d41e286", "0ba7d1bad0ed48d7ae327aaa704d5dc3"),
+            (.bluetooth, "ba5ad0d57039435994d36aea1db4aa54", "8099ca6de16048368de042b9cfcc5206")
+        ]
+        for (method, take, returning) in shortcutMappings {
+            var ui = VehicleConnectionPresentation()
+            ui.restore(method: method, authorization: .authorized)
+            precondition(ui.shortcutURL(for: .take)?.absoluteString == "https://www.icloud.com/shortcuts/" + take)
+            precondition(ui.shortcutURL(for: .returning)?.absoluteString == "https://www.icloud.com/shortcuts/" + returning)
+            for state: VehicleConnectionAuthorizationState in [.inactive, .verificationPending, .temporarilyUnavailable, .verificationRequired, .recoveryRequired, .bindingRemoved] {
+                ui.restore(method: method, authorization: state)
+                precondition(ui.shortcutURL(for: .take) == nil && ui.shortcutURL(for: .returning) == nil)
+            }
+        }
+        var missingMethod = VehicleConnectionPresentation()
+        missingMethod.restore(method: nil, authorization: .authorized)
+        precondition(missingMethod.shortcutURL(for: .take) == nil && missingMethod.shortcutURL(for: .returning) == nil)
+        print("PASS: four Shortcut URLs; missing method and unauthorized states fail closed")
         for method in VehicleConnectionMethod.allCases {
             var ui = VehicleConnectionPresentation()
             precondition(ui.screen == .loading && !ui.showsShortcuts)
