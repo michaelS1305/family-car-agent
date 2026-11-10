@@ -158,10 +158,13 @@ private func list(_ row: Data) -> Data { Data("[".utf8) + row + Data("]".utf8) }
         sut.selectMode(.cancel); sut.choose(row); sut.submit(); sut.submit()
         await wait { gateway.writes.count == 1 }
         precondition(gateway.requests.last?.1 == true && sut.visibleRows.isEmpty)
+        sut.dismiss()
+        precondition(sut.busy && sut.confirmation == row && sut.sheet == .cancellation)
         gateway.writes.removeFirst().resume(returning: Data("{\"cancelled\":true}".utf8))
         await wait { gateway.reads.count == 1 }
         gateway.reads.removeFirst().resume(returning: Data("[]".utf8)); await wait { sut.loaded }
         precondition(sut.pending == nil && sut.dayRows.isEmpty)
+        precondition(sut.reservationCountLabel == "0 הזמנות")
         sut.openCreate(); await wait { sut.catalogLoaded && !sut.catalogLoading }
         sut.updateDraft(BookingDraft(start: row.start, end: row.end)); sut.submit(); sut.submit()
         await wait { gateway.writes.count == 1 }
@@ -188,6 +191,7 @@ private func list(_ row: Data) -> Data { Data("[".utf8) + row + Data("]".utf8) }
         await wait { gateway.reads.count == 1 }
         gateway.reads.removeFirst().resume(returning: list(rowData)); await wait { sut.loaded }
         precondition(sut.pending == nil && sut.dayRows == [row] && sut.notice == "ההזמנה נשמרה.")
+        precondition(sut.reservationCountLabel == "הזמנה אחת")
         sut.openFilters(); sut.filters = BookingFilters(start: row.start, end: row.end); sut.applyFilters()
         await wait { gateway.reads.count == 1 }
         let longRow = reservation(start: "2026-11-11T00:00:00", end: "2026-11-15T00:00:00")
@@ -215,6 +219,11 @@ private func list(_ row: Data) -> Data { Data("[".utf8) + row + Data("]".utf8) }
         gateway.writes.removeFirst().resume(returning: rowData)
         for _ in 0..<30 { await Task.yield() }
         precondition(!sut.current && sut.visibleRows.isEmpty && sut.notice == nil && gateway.reads.isEmpty)
+        var optionalFilters = BookingFilters(vehicle: vehicle, member: member, start: row.start, end: row.end)
+        optionalFilters.start = nil
+        precondition(optionalFilters.end == row.end && optionalFilters.vehicle == vehicle && optionalFilters.member == member)
+        optionalFilters.end = nil
+        precondition(optionalFilters.start == nil && optionalFilters.vehicle == vehicle && optionalFilters.member == member)
         let formGateway = BookingMock()
         let form = BookingModel(gateway: formGateway, now: { now })
         form.synchronize(); form.openCreate()

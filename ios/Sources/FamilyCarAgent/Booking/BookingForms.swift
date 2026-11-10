@@ -3,6 +3,8 @@ import SwiftUI
 struct BookingForms: View {
     @ObservedObject var model: BookingModel
     let sheet: BookingModel.Sheet
+    @State private var pickingStart = false
+    @State private var pickingEnd = false
     var body: some View {
         NavigationStack {
             Form {
@@ -11,19 +13,20 @@ struct BookingForms: View {
                 switch sheet {
                 case .editor: editor
                 case .filters: filters
-                case .cancellation:
-                    if let row = model.confirmation {
-                        Text("לבטל את ההזמנה?").font(.headline)
-                        Text(row.vehicleName ?? "הזמנה כללית")
-                        Text(BookingPreviewCalendar.label(row.start, format: "dd/MM/yyyy HH:mm") + " – " + BookingPreviewCalendar.label(row.end, format: "dd/MM/yyyy HH:mm"))
-                        Button("אישור ביטול ההזמנה", role: .destructive) { model.submit() }
-                            .disabled(!model.canWrite || !model.eligible(row))
-                    }
+                case .cancellation: EmptyView() // Presented over the Booking Center, never as a form.
                 }
             }
-            .navigationTitle(sheet == .filters ? "סינון הזמנות" : sheet == .cancellation ? "ביטול הזמנה" : "פרטי הזמנה")
+            .navigationTitle(sheet == .filters ? "סינון הזמנות" : "")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("חזרה") { model.dismiss() }.disabled(model.busy) } }
+            .toolbar(sheet == .editor ? .hidden : .visible, for: .navigationBar)
+            .toolbar {
+                if sheet != .editor {
+                    ToolbarItem(placement: .cancellationAction) { Button("חזרה") { model.dismiss() }.disabled(model.busy) }
+                }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if sheet == .editor { editorHeader }
+            }
         }.tint(ChatStyle.ink)
     }
     @ViewBuilder private var catalog: some View {
@@ -34,6 +37,7 @@ struct BookingForms: View {
         }
     }
     @ViewBuilder private var editor: some View {
+        Text("פרטי הזמנה").font(.headline).accessibilityAddTraits(.isHeader)
         catalog
         if let draft = model.draft {
             Picker("רכב", selection: Binding(get: { model.draft?.vehicle }, set: { value in
@@ -51,8 +55,6 @@ struct BookingForms: View {
             dateInput(start: true)
             dateInput(start: false)
             if model.startLocked { Text("ההזמנה כבר התחילה; לא ניתן לשנות את שעת ההתחלה.").font(.caption) }
-            Button("שמירת הזמנה") { model.submit() }
-                .disabled(!model.canSubmitDraft)
             if !model.busy && model.catalogLoaded && !model.catalogError && !model.canSubmitDraft {
                 Text("יש לבחור רכב זמין וטווח שעות תקין. בשעת מעבר שעון חוזרת יש לבחור שעה חד־משמעית.").font(.caption)
             }
@@ -94,25 +96,85 @@ struct BookingForms: View {
             }.disabled(!model.catalogLoaded)
             filterDate(start: true)
             filterDate(start: false)
-            Button("איפוס מסננים") { model.filters = BookingFilters() }
-            Button("החלת מסננים") { model.applyFilters() }.disabled(model.busy)
+            HStack(spacing: 12) {
+                Button("החלת מסננים") { model.applyFilters() }
+                    .buttonStyle(BookingCapsuleStyle()).disabled(model.busy)
+                Button("איפוס מסננים") {
+                    model.filters = BookingFilters(); pickingStart = false; pickingEnd = false
+                }.buttonStyle(BookingCapsuleStyle(secondary: true)).disabled(model.busy)
+            }.listRowBackground(Color.clear).listRowSeparator(.hidden)
         }
     }
+    private var editorHeader: some View {
+        // Equal side columns keep Save centered in the screen, independently of Back's width.
+        HStack(spacing: 8) {
+            Button("חזרה") { model.dismiss() }.disabled(model.busy)
+                .frame(minWidth: 0, maxWidth: .infinity)
+            Button { model.submit() } label: {
+                VStack(spacing: 4) {
+                    if model.busy { ProgressView().tint(.white) }
+                    Text("שמירת הזמנה")
+                }
+            }.buttonStyle(BookingCapsuleStyle()).disabled(!model.canSubmitDraft)
+                .frame(minWidth: 0, maxWidth: .infinity)
+            Color.clear.frame(minWidth: 0, maxWidth: .infinity, maxHeight: 1)
+                .accessibilityHidden(true)
+        }.padding(.horizontal, 12).padding(.vertical, 8)
+            .background(ChatStyle.incoming)
+    }
     private func filterDate(start: Bool) -> some View {
-        VStack(alignment: .leading) {
-            Toggle(start ? "מתאריך ושעה" : "עד תאריך ושעה", isOn: Binding(get: {
-                (start ? model.filters.start : model.filters.end) != nil
-            }, set: { enabled in
-                if start { model.filters.start = enabled ? model.calendar.selected : nil }
-                else { model.filters.end = enabled ? BookingPreviewCalendar.calendar.date(byAdding: .day, value: 1, to: model.calendar.selected) : nil }
-            }))
-            if (start ? model.filters.start : model.filters.end) != nil {
+        let value = start ? model.filters.start : model.filters.end
+        let picking = start ? pickingStart : pickingEnd
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Button {
+                    if start { pickingStart.toggle() } else { pickingEnd.toggle() }
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(start ? "מתאריך ושעה" : "עד תאריך ושעה")
+                        Text(value.map { BookingPreviewCalendar.label($0, format: "dd/MM/yyyy HH:mm") } ?? "בחרו תאריך ושעה")
+                            .foregroundStyle(ChatStyle.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                if value != nil {
+                    Button {
+                        if start { model.filters.start = nil; pickingStart = false }
+                        else { model.filters.end = nil; pickingEnd = false }
+                    } label: { Image(systemName: "xmark.circle").frame(minWidth: 44, minHeight: 44) }
+                        .buttonStyle(.plain).accessibilityLabel(start ? "ניקוי תאריך התחלה" : "ניקוי תאריך סיום")
+                }
+            }
+            if picking {
                 DatePicker(start ? "מתחיל ב־" : "מסתיים ב־", selection: Binding(get: {
                     (start ? model.filters.start : model.filters.end) ?? model.calendar.selected
                 }, set: { value in
                     if start { model.filters.start = value } else { model.filters.end = value }
                 }), displayedComponents: [.date, .hourAndMinute])
+                // Revealing a picker does not activate a boundary. Explicitly choosing its displayed
+                // default is possible without first changing the date or time.
+                if value == nil {
+                    Button("בחירת המועד המוצג") {
+                        if start { model.filters.start = model.calendar.selected }
+                        else { model.filters.end = model.calendar.selected }
+                    }
+                }
             }
         }
+    }
+}
+
+struct BookingCapsuleStyle: ButtonStyle {
+    var secondary = false
+    var destructive = false
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(.body.weight(.semibold)).multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .foregroundStyle(destructive ? Color.red : secondary ? ChatStyle.ink : .white)
+            .background(secondary || destructive ? Color.white : ChatStyle.ink, in: Capsule())
+            .overlay(Capsule().stroke(secondary || destructive ? ChatStyle.border : .clear))
+            .opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
     }
 }

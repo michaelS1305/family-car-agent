@@ -47,6 +47,7 @@ import Combine
     var canAcknowledge: Bool { current && !busy && !loading && !readError && pending?.inspected == true && pending?.lastQuery == query && loadedQuery == query }
     var visibleRows: [BookingReservation] { current && loadedQuery == query ? rows : [] }
     var dayRows: [BookingReservation] { onDay(calendar.selected) }
+    var reservationCountLabel: String { dayRows.count == 1 ? "הזמנה אחת" : "\(dayRows.count) הזמנות" }
     var startLocked: Bool { draft?.original.map { $0.start < clock() } ?? false }
     var activeVehicles: [ManagedVehicle] { vehicles.filter { !$0.retired } }
     func onDay(_ day: Date) -> [BookingReservation] {

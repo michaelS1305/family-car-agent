@@ -1,9 +1,8 @@
 import SwiftUI
 
-private struct BookingPeekDetent: CustomPresentationDetent {
-    static func height(in context: Context) -> CGFloat? {
-        min(context.maxDetentValue * 0.8, context.dynamicTypeSize.isAccessibilitySize ? 440 : 250)
-    }
+private struct BookingHeaderHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 struct BookingCenterPreview: View {
@@ -13,8 +12,9 @@ struct BookingCenterPreview: View {
     private var calendar: BookingPreviewCalendar { model.calendar }
     @State private var presented = false
     @State private var leaving = false
-    @State private var detent = PresentationDetent.custom(BookingPeekDetent.self)
-    private let peek = PresentationDetent.custom(BookingPeekDetent.self)
+    @State private var headerHeight: CGFloat = 200
+    @State private var detent = PresentationDetent.height(200)
+    private var peek: PresentationDetent { .height(headerHeight) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,15 +37,27 @@ struct BookingCenterPreview: View {
         .onChange(of: phase) { _, value in if value == .active { model.refresh() } }
         .sheet(isPresented: $presented, onDismiss: { if leaving { back() } }) {
             previewSheet
+                .onPreferenceChange(BookingHeaderHeight.self) { height in
+                    guard height > 0, abs(height - headerHeight) > 1 else { return }
+                    let collapsed = detent == peek
+                    headerHeight = ceil(height)
+                    if collapsed { detent = peek }
+                }
+                .onChange(of: model.busy) { _, busy in
+                    if !busy && model.sheet == .cancellation { model.dismiss() }
+                }
+                .onChange(of: detent) { _, value in
+                    if model.sheet == .cancellation && value != .large { detent = .large }
+                }
                 .presentationDetents([peek, .large], selection: $detent)
                 .presentationDragIndicator(.visible)
-                .presentationBackgroundInteraction(.enabled(upThrough: peek))
+                .presentationBackgroundInteraction(model.sheet == .cancellation ? .disabled : .enabled(upThrough: peek))
                 .presentationContentInteraction(.resizes)
                 .interactiveDismissDisabled()
                 .presentationBackground(ChatStyle.incoming)
                 .environment(\.layoutDirection, .rightToLeft)
                 .preferredColorScheme(.light)
-                .sheet(item: Binding(get: { model.current ? model.sheet : nil }, set: { if $0 == nil { model.dismiss() } })) { sheet in
+                .sheet(item: Binding(get: { model.current && model.sheet != .cancellation ? model.sheet : nil }, set: { if $0 == nil && model.sheet != .cancellation { model.dismiss() } })) { sheet in
                     BookingForms(model: model, sheet: sheet)
                         .environment(\.layoutDirection, .rightToLeft)
                         .environment(\.timeZone, BookingPreviewCalendar.calendar.timeZone)
@@ -98,6 +110,52 @@ struct BookingCenterPreview: View {
     }
 
     private var previewSheet: some View {
+        ZStack {
+            ScrollView {
+                VStack(spacing: 0) {
+                    sheetHeader
+                    if detent == .large {
+                        VStack(spacing: 16) {
+                            if let notice = model.notice { Text(notice).font(.callout) }
+                            if let pending = model.pending, !model.busy {
+                                Text("פעולה שטרם הובררה: " + BookingPreviewCalendar.label(pending.operation.start, format: "dd/MM/yyyy HH:mm"))
+                                    .font(.callout)
+                                Button("בדיקת הטווח המבוקש בשרת") { model.inspectPending() }
+                                if pending.operation.original != nil {
+                                    Button("בדיקת הטווח המקורי בשרת") { model.inspectPending(original: true) }
+                                }
+                                Button("בדקתי את ההזמנות; להמשיך למרות אי־הוודאות") { model.acknowledge() }
+                                    .disabled(!model.canAcknowledge)
+                            }
+                            if model.selection != .none {
+                                Text(model.selection == .edit ? "בחרו הזמנה שלכם לעריכה" : "בחרו הזמנה שלכם לביטול")
+                                Button("סיום בחירה") { model.selectMode(model.selection) }
+                            }
+                            if model.busy { ProgressView("שומר…") }
+                            ForEach(model.dayRows) { row in
+                                if model.selection != .none && model.canWrite && model.eligible(row) {
+                                    Button { model.choose(row) } label: {
+                                        reservationCard(row)
+                                            .shadow(color: ChatStyle.ink.opacity(0.16), radius: 5, y: 3)
+                                    }.buttonStyle(.plain)
+                                        .accessibilityHint("בחירת הזמנה לעריכה או לביטול")
+                                } else {
+                                    reservationCard(row).accessibilityElement(children: .combine)
+                                }
+                            }
+                            if model.loaded && !model.readError && model.dayRows.isEmpty { Text("אין הזמנות לתאריך זה תחת המסננים הנוכחיים").padding(.vertical, 12) }
+                        }.padding(.horizontal, 18).padding(.bottom, 20).frame(maxWidth: .infinity)
+                    }
+                }
+            }
+            .accessibilityHidden(model.current && model.sheet == .cancellation)
+            .allowsHitTesting(model.sheet != .cancellation)
+            if model.current && model.sheet == .cancellation {
+                cancellationPrompt
+            }
+        }.foregroundStyle(ChatStyle.ink)
+    }
+    private var sheetHeader: some View {
         VStack(spacing: 12) {
             GeometryReader { geometry in
               ScrollView(.horizontal) {
@@ -118,47 +176,40 @@ struct BookingCenterPreview: View {
             }.scrollBounceBehavior(.basedOnSize, axes: .horizontal)
                 .defaultScrollAnchor(.center)
             }.frame(height: 48)
-            ScrollView {
-                VStack(spacing: 16) {
-                    Text(BookingPreviewCalendar.label(calendar.selected, format: "EEEE, d MMMM yyyy"))
-                        .font(.title2.bold()).multilineTextAlignment(.center)
-                    if model.loading { ProgressView("טוען הזמנות…") }
-                    else if model.readError {
-                        Text("לא ניתן לטעון הזמנות כרגע")
-                        Button("נסה שוב") { model.refresh() }
-                    } else if model.loaded {
-                        Text("\(model.dayRows.count) הזמנות").foregroundStyle(ChatStyle.secondary)
-                    }
-                    if let notice = model.notice { Text(notice).font(.callout) }
-                    if let pending = model.pending, !model.busy {
-                        Text("פעולה שטרם הובררה: " + BookingPreviewCalendar.label(pending.operation.start, format: "dd/MM/yyyy HH:mm"))
-                            .font(.callout)
-                        Button("בדיקת הטווח המבוקש בשרת") { model.inspectPending() }
-                        if pending.operation.original != nil {
-                            Button("בדיקת הטווח המקורי בשרת") { model.inspectPending(original: true) }
-                        }
-                        Button("בדקתי את ההזמנות; להמשיך למרות אי־הוודאות") { model.acknowledge() }
-                            .disabled(!model.canAcknowledge)
-                    }
-                    if model.selection != .none {
-                        Text(model.selection == .edit ? "בחרו הזמנה שלכם לעריכה" : "בחרו הזמנה שלכם לביטול")
-                        Button("סיום בחירה") { model.selectMode(model.selection) }
-                    }
-                    if model.busy { ProgressView("שומר…") }
-                    ForEach(model.dayRows) { row in
-                        Button { model.choose(row) } label: { reservationCard(row) }
-                            .buttonStyle(.plain)
-                            .disabled(model.selection == .none || !model.canWrite || !model.eligible(row))
-                            .accessibilityHint(model.eligible(row) ? "ניתן לבחור במצב עריכה או ביטול" : "הזמנה לקריאה בלבד")
-                    }
-                    if model.loaded && !model.readError && model.dayRows.isEmpty { Text("אין הזמנות לתאריך זה תחת המסננים הנוכחיים").padding(.vertical, 12) }
-                    Button(detent == peek ? "הרחבה" : "צמצום") {
-                        withAnimation { detent = detent == peek ? .large : peek }
-                    }.frame(minHeight: 44)
-                    Button("חזרה לדשבורד", action: leave).frame(minHeight: 44)
-                }.padding(.horizontal, 18).padding(.bottom, 20).frame(maxWidth: .infinity)
-            }
-        }.padding(.top, 28).foregroundStyle(ChatStyle.ink)
+            Text(BookingPreviewCalendar.label(calendar.selected, format: "EEEE, d MMMM yyyy"))
+                .font(.title2.bold()).multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 18)
+            Group {
+                if model.loading { ProgressView("טוען הזמנות…") }
+                else if model.readError {
+                    Button("לא ניתן לטעון הזמנות — נסה שוב") { model.refresh() }
+                } else if model.loaded {
+                    Text(model.reservationCountLabel).foregroundStyle(ChatStyle.secondary)
+                }
+            }.fixedSize(horizontal: false, vertical: true).padding(.horizontal, 18)
+        }.padding(.top, 28).padding(.bottom, 12)
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: BookingHeaderHeight.self, value: geometry.size.height)
+            })
+    }
+    private var cancellationPrompt: some View {
+        ZStack {
+            ChatStyle.ink.opacity(0.18).ignoresSafeArea().accessibilityHidden(true)
+            VStack(spacing: 20) {
+                Text("לבטל את ההזמנה?").font(.headline).multilineTextAlignment(.center)
+                HStack(spacing: 12) {
+                    Button(role: .destructive) { model.submit() } label: {
+                        HStack { if model.busy { ProgressView() }; Text("לבטל") }
+                    }.buttonStyle(BookingCapsuleStyle(destructive: true))
+                        .disabled(!model.canWrite || model.confirmation.map { !model.eligible($0) } != false)
+                    Button("חזרה") { model.dismiss() }
+                        .buttonStyle(BookingCapsuleStyle(secondary: true)).disabled(model.busy)
+                }
+            }.padding(24).frame(maxWidth: 340)
+                .background(.white, in: RoundedRectangle(cornerRadius: 24))
+                .shadow(color: ChatStyle.ink.opacity(0.15), radius: 16, y: 6)
+                .padding(24).accessibilityAddTraits(.isModal)
+        }
     }
     private func toolbarButton(_ label: String, symbol: String, enabled: Bool, active: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
