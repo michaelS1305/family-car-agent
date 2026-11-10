@@ -57,8 +57,8 @@ import Foundation
     }
     @MainActor static func main() async throws {
         let shortcutMappings: [(VehicleConnectionMethod, String, String)] = [
-            (.carPlay, "0778e9ea8728412ea433f8f86f7b9641", "6a52317d132747a39c0b4a70cf6906c3"),
-            (.bluetooth, "ff56f83128ab4bbd9f302d69fe00bcad", "df28edf6d0794cc5810787ac4f161904")
+            (.carPlay, "8d40b6d0c6874fd2a6298a60eb8d49df", "00312d9300b64cdba857d469fd04a4fe"),
+            (.bluetooth, "b4bd8ed12ab04c6b96c33769609c85a2", "60b68b80a05e4d74a09b5060b177f2c8")
         ]
         for (method, take, returning) in shortcutMappings {
             var ui = VehicleConnectionPresentation()

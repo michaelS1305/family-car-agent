@@ -15,10 +15,10 @@ struct VehicleConnectionPresentation {
         guard showsShortcuts, let method else { return nil }
         let identifier: String
         switch (method, action) {
-        case (.carPlay, .take): identifier = "0778e9ea8728412ea433f8f86f7b9641"
-        case (.carPlay, .returning): identifier = "6a52317d132747a39c0b4a70cf6906c3"
-        case (.bluetooth, .take): identifier = "ff56f83128ab4bbd9f302d69fe00bcad"
-        case (.bluetooth, .returning): identifier = "df28edf6d0794cc5810787ac4f161904"
+        case (.carPlay, .take): identifier = "8d40b6d0c6874fd2a6298a60eb8d49df"
+        case (.carPlay, .returning): identifier = "00312d9300b64cdba857d469fd04a4fe"
+        case (.bluetooth, .take): identifier = "b4bd8ed12ab04c6b96c33769609c85a2"
+        case (.bluetooth, .returning): identifier = "60b68b80a05e4d74a09b5060b177f2c8"
         }
         return URL(string: "https://www.icloud.com/shortcuts/" + identifier)
     }
