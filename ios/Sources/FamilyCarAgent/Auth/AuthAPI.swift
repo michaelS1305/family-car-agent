@@ -123,7 +123,11 @@ private final class NoRedirect: NSObject, URLSessionTaskDelegate, Sendable {
 }
 
 /// No shared cookies/cache, redirects, raw errors, token logging, or arbitrary destinations.
-final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTransport, VehiclesTransport, VehicleDetailsTransport, HistoryTransport, Sendable {
+protocol ReservationTransport: Sendable {
+    func reservationData(token: String, method: String, cancel: Bool, query: [URLQueryItem], body: Data?) async throws -> Data
+}
+
+final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTransport, VehiclesTransport, VehicleDetailsTransport, HistoryTransport, ReservationTransport, Sendable {
     let environment: AppEnvironment
     private let publicKey: String
     private let http: URLSession
@@ -200,6 +204,41 @@ final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTrans
             guard FamilyInvitation.validCode(value.family_code) else { throw AuthFailure.invalidResponse }
             return .code(value.family_code)
         }
+    }
+    /// Fixed reservation endpoints, existing ephemeral authenticated transport. No write retries here.
+    func makeReservationRequest(token: String, method: String, cancel: Bool, query: [URLQueryItem], body: Data?) throws -> URLRequest {
+        guard ["GET", "POST", "PATCH"].contains(method), !cancel || method == "POST" else { throw AuthFailure.configuration }
+        let url = environment.backendURL.appendingPathComponent(cancel ? "api/reservations/cancel" : "api/reservations")
+            .appending(queryItems: query)
+        var request = URLRequest(url: url)
+        request.httpMethod = method; request.httpBody = body
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        return request
+    }
+    static func reservationFailure(status: Int, data: Data) -> AuthFailure {
+        let allowed: Set<String> = ["RESERVATION_CONFLICT", "VEHICLE_REQUIRED", "VEHICLE_NOT_FOUND_OR_UNAVAILABLE",
+            "RESERVATION_NOT_FOUND_OR_UNAVAILABLE", "RESERVATION_AMBIGUOUS", "INVALID_RESERVATION_TIME",
+            "RESERVATION_TIME_IN_PAST", "FAMILY_ACCESS_DENIED", "INVALID_RESERVATION_FILTER",
+            "INVALID_RESERVATION_RANGE", "RESERVATION_FILTER_NOT_FOUND_OR_UNAVAILABLE"]
+        guard data.count <= 8192, let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let detail = object["detail"] as? [String: Any], let code = detail["code"] as? String, allowed.contains(code) else {
+            return .rejected(status, "")
+        }
+        return .rejected(status, code)
+    }
+    func reservationData(token: String, method: String, cancel: Bool, query: [URLQueryItem], body: Data?) async throws -> Data {
+        let request = try makeReservationRequest(token: token, method: method, cancel: cancel, query: query, body: body)
+        let data: Data; let response: URLResponse
+        do { (data, response) = try await http.data(for: request) }
+        catch { throw AuthFailure.network }
+        guard let response = response as? HTTPURLResponse else { throw AuthFailure.invalidResponse }
+        guard (200..<300).contains(response.statusCode) else {
+            throw Self.reservationFailure(status: response.statusCode, data: data)
+        }
+        guard data.count <= 1_048_576 else { throw AuthFailure.invalidResponse }
+        return data
     }
     func history(token: String, operation: HistoryOperation) async throws -> HistoryReply {
         if case .page(let filters, _) = operation, !filters.valid { throw AuthFailure.configuration }

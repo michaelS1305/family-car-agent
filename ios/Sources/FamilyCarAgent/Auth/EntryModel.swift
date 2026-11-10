@@ -41,6 +41,23 @@ import Combine
                             generation: sessions.generation, version: version)
     }
     var vehiclesIdentity: ChatIdentity? { chatIdentity }
+    func reservationData(identity: ChatIdentity, method: String, cancel: Bool, query: [URLQueryItem], body: Data?) async throws -> Data {
+        guard let transport = api as? any ReservationTransport, let sessions else { throw AuthFailure.configuration }
+        func check() throws {
+            try Task.checkCancellation()
+            guard chatIdentity == identity else { throw AuthFailure.stale }
+        }
+        func attempt(force: Bool) async throws -> Data {
+            try check()
+            let token = try await sessions.access(owner: identity.owner, force: force)
+            try check()
+            let data = try await transport.reservationData(token: token, method: method, cancel: cancel, query: query, body: body)
+            try check(); return data
+        }
+        do { return try await attempt(force: false) }
+        // Only an explicit authentication rejection permits another attempt, never a timeout.
+        catch AuthFailure.rejected(401, _) { try check(); return try await attempt(force: true) }
+    }
     func historyRequest(identity: ChatIdentity, operation: HistoryOperation) async throws -> HistoryReply {
         guard let transport = api as? any HistoryTransport, let sessions else { throw AuthFailure.configuration }
         func check() throws {

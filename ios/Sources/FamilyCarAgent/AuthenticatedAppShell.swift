@@ -15,12 +15,14 @@ struct AuthenticatedAppShell: View {
     @ObservedObject var entry: EntryModel
     @StateObject private var chat: ChatModel
     @StateObject private var vehicles: VehiclesModel
+    @StateObject private var bookings: BookingModel
     @State private var keyboardVisible = false
     @State private var navigation = DashboardNavigation()
     init(entry: EntryModel) {
         self.entry = entry
         _chat = StateObject(wrappedValue: ChatModel(gateway: entry))
         _vehicles = StateObject(wrappedValue: VehiclesModel(gateway: entry))
+        _bookings = StateObject(wrappedValue: BookingModel(gateway: entry))
     }
     var body: some View {
         NavigationStack(path: $navigation.path) {
@@ -50,12 +52,7 @@ struct AuthenticatedAppShell: View {
             } else if destination == .history {
                 HistoryScreen(entry: entry, back: { navigation.back() })
             } else if destination == .bookingCenter {
-                #if DEBUG
-                BookingCenterPreview(back: { navigation.back() })
-                #else
-                DashboardDestinationPlaceholder(destination: destination, back: { navigation.back() })
-                    .toolbar(.visible, for: .navigationBar)
-                #endif
+                BookingCenterPreview(model: bookings, back: { navigation.back() })
             } else {
                 DashboardDestinationPlaceholder(destination: destination, back: { navigation.back() })
                     .toolbar(.visible, for: .navigationBar)
@@ -68,6 +65,7 @@ struct AuthenticatedAppShell: View {
         .task { navigation.synchronize(entry.chatIdentity); chat.enter() }
         .onChange(of: entry.chatIdentity) { _, identity in
             vehicles.stop(); navigation.synchronize(identity); chat.enter()
+            bookings.synchronize()
         }
         .onChange(of: navigation.path) { _, path in
             if !path.contains(.vehicles) { vehicles.stop() }

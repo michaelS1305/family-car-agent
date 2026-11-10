@@ -1,7 +1,6 @@
 import Foundation
 
-#if DEBUG
-/// Layout-only calendar; no server data or persistence.
+/// Gregorian calendar shared by the Booking Center and its deterministic checks.
 struct BookingPreviewCalendar {
     static var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
@@ -12,12 +11,10 @@ struct BookingPreviewCalendar {
     }
     private(set) var month: Date
     private(set) var selected: Date
-    let sampleDay: Date
     init(now: Date = Date()) {
         let calendar = Self.calendar
         selected = calendar.startOfDay(for: now)
         month = calendar.dateInterval(of: .month, for: now)!.start
-        sampleDay = calendar.date(byAdding: .day, value: 1, to: selected)!
     }
     var days: [Date] {
         let calendar = Self.calendar
@@ -29,12 +26,13 @@ struct BookingPreviewCalendar {
     }
     mutating func moveMonth(_ delta: Int) {
         month = Self.calendar.date(byAdding: .month, value: delta, to: month)!
+        let day = min(Self.calendar.component(.day, from: selected), Self.calendar.range(of: .day, in: .month, for: month)!.count)
+        selected = Self.calendar.date(byAdding: .day, value: day - 1, to: month)!
     }
     mutating func select(_ day: Date) {
         selected = Self.calendar.startOfDay(for: day)
         month = Self.calendar.dateInterval(of: .month, for: day)!.start
     }
-    var hasSample: Bool { Self.calendar.isDate(selected, inSameDayAs: sampleDay) }
     static func label(_ date: Date, format: String) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar
@@ -44,4 +42,3 @@ struct BookingPreviewCalendar {
         return formatter.string(from: date)
     }
 }
-#endif

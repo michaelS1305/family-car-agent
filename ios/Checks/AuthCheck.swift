@@ -213,7 +213,51 @@ actor TestTransport: AuthTransport {
         try await runFamilySessionChecks()
         try await runVehiclesSessionChecks()
         try await runHistorySessionChecks()
+        try await runBookingSessionChecks()
         try await runEntryUIChecks()
         print("Auth checks passed: \(checks). Mock identities only; no provider/device claims.")
     }
+}
+
+
+actor BookingSessionBackend: BackendTransport, ReservationTransport {
+    var calls = 0
+    var failure: AuthFailure? = .rejected(401, "")
+    var paused = false
+    var continuation: CheckedContinuation<Void, Never>?
+    func fail(_ value: AuthFailure?) { failure = value }
+    func pause() { paused = true }
+    func release() { paused = false; continuation?.resume(); continuation = nil }
+    func backend<T: Decodable & Sendable>(_ type: T.Type, path: String, token: String, fields: [String: Field]?) async throws -> T {
+        guard path == "/api/me" else { throw AuthFailure.invalidResponse }
+        return try JSONDecoder().decode(type, from: Data(#"{"user_id":1,"family_id":2,"name":"Synthetic"}"#.utf8))
+    }
+    func reservationData(token: String, method: String, cancel: Bool, query: [URLQueryItem], body: Data?) async throws -> Data {
+        calls += 1
+        if let error = failure { failure = nil; throw error }
+        if paused { await withCheckedContinuation { continuation = $0 } }
+        return Data("[]".utf8)
+    }
+}
+@MainActor func runBookingSessionChecks() async throws {
+    let session = AuthSession(owner: UUID(), accessToken: "synthetic", refreshToken: "synthetic", expires: Date().addingTimeInterval(3600))
+    let auth = TestTransport(session), backend = BookingSessionBackend()
+    let entry = EntryModel(sessions: SessionManager(vault: TestVault(), transport: auth), api: backend, providers: TestProvider())
+    await entry.login(apple: false)
+    let who = entry.chatIdentity!
+    _ = try await entry.reservationData(identity: who, method: "POST", cancel: false, query: [], body: Data())
+    AuthCheck.check(await backend.calls == 2, "Booking explicit 401 refreshes once")
+    AuthCheck.check(await auth.calls == 2, "Booking reuses shared session refresh")
+    await backend.fail(.network)
+    do { _ = try await entry.reservationData(identity: who, method: "PATCH", cancel: false, query: [], body: Data()); preconditionFailure("network expected") } catch { }
+    AuthCheck.check(await backend.calls == 3, "Booking ambiguous write is not retried")
+    await backend.pause()
+    let late = Task { try await entry.reservationData(identity: who, method: "GET", cancel: false, query: [], body: nil) }
+    while await backend.continuation == nil { await Task.yield() }
+    entry.logout(); await backend.release()
+    do { _ = try await late.value; preconditionFailure("late booking accepted") }
+    catch { AuthCheck.check(error as? AuthFailure == .stale, "Booking late result fenced on logout") }
+    let before = await backend.calls
+    do { _ = try await entry.reservationData(identity: who, method: "POST", cancel: true, query: [], body: Data()); preconditionFailure("stale write") } catch { }
+    AuthCheck.check(await backend.calls == before, "Booking old identity cannot send writes")
 }

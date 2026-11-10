@@ -25,14 +25,13 @@ import Foundation
         let selected = model.selected
         model.moveMonth(1)
         precondition(calendar.component(.year, from: model.month) == 2027)
-        precondition(calendar.component(.month, from: model.month) == 1 && model.selected == selected)
+        precondition(calendar.component(.month, from: model.month) == 1 && model.selected != selected)
         model.moveMonth(-1)
         precondition(calendar.component(.month, from: model.month) == 12)
-        precondition(!model.hasSample)
-        model.select(model.sampleDay)
-        precondition(model.hasSample && calendar.component(.year, from: model.selected) == 2027)
+        model.select(date(2027, 1, 1))
+        precondition(calendar.component(.year, from: model.selected) == 2027)
         model.select(date(2024, 2, 29))
-        precondition(calendar.component(.day, from: model.selected) == 29 && !model.hasSample)
+        precondition(calendar.component(.day, from: model.selected) == 29)
         // Local dates remain consecutive through Israel's daylight-saving transitions.
         for day in [date(2026, 3, 27), date(2026, 10, 25)] {
             model.select(day)
