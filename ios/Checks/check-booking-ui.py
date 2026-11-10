@@ -21,11 +21,20 @@ assert 'Text("לבטל את ההזמנה?")' in prompt and 'Text("לבטל")' in
 assert ".disabled(model.busy)" in prompt and "!model.canWrite" in prompt
 assert "vehicleName" not in prompt and "BookingPreviewCalendar.label" not in prompt
 editor = forms.split("private var editor:", 1)[1].split("private func dateInput", 1)[0]
-header = forms.split("private var editorHeader:", 1)[1].split("private func filterDate", 1)[0]
-assert '"שמירת הזמנה"' not in editor
-assert 'Text("שמירת הזמנה")' in header and ".disabled(!model.canSubmitDraft)" in header
-assert ".safeAreaInset(edge: .top" in forms and "BookingCapsuleStyle" in header
+assert forms.count('Text("שמירת הזמנה")') == 1
+assert editor.index('dateInput(start: false)') < editor.index('Text("שמירת הזמנה")')
+assert ".disabled(!model.canSubmitDraft)" in editor and "BookingCapsuleStyle" in editor
+assert "if model.busy { ProgressView()" in editor
+assert "editorHeader" not in forms and ".safeAreaInset(edge: .top" not in forms
+header = forms.split(".navigationTitle", 1)[1].split("}.tint", 1)[0]
+assert '"פרטי הזמנה"' in header and '"סינון הזמנות"' in header
+assert 'ToolbarItem(placement: .cancellationAction)' in header
+assert 'Button("חזרה") { model.dismiss() }.disabled(model.busy)' in header
+assert "if sheet != .editor" not in header
+assert "בחירת המועד המוצג" not in forms and "מעבר שעון" not in forms
+assert "!model.canSubmitDraft" in editor and "יש לבחור רכב זמין וטווח שעות תקין." in editor
+assert "DatePicker(start ?" in forms
 assert "Toggle(" not in forms
 assert "model.filters.start = nil" in forms and "model.filters.end = nil" in forms
 assert "model.applyFilters()" in forms and "model.filters = BookingFilters()" in forms
-print("PASS: measured peek, expanded-only content, card eligibility, compact confirmation, header save and optional filters (static wiring only)")
+print("PASS: measured peek, expanded-only content, card eligibility, compact confirmation, below-form save, shared navigation and optional filters (static wiring only)")

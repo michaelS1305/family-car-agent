@@ -16,16 +16,10 @@ struct BookingForms: View {
                 case .cancellation: EmptyView() // Presented over the Booking Center, never as a form.
                 }
             }
-            .navigationTitle(sheet == .filters ? "סינון הזמנות" : "")
+            .navigationTitle(sheet == .filters ? "סינון הזמנות" : "פרטי הזמנה")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(sheet == .editor ? .hidden : .visible, for: .navigationBar)
             .toolbar {
-                if sheet != .editor {
-                    ToolbarItem(placement: .cancellationAction) { Button("חזרה") { model.dismiss() }.disabled(model.busy) }
-                }
-            }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if sheet == .editor { editorHeader }
+                ToolbarItem(placement: .cancellationAction) { Button("חזרה") { model.dismiss() }.disabled(model.busy) }
             }
         }.tint(ChatStyle.ink)
     }
@@ -37,7 +31,6 @@ struct BookingForms: View {
         }
     }
     @ViewBuilder private var editor: some View {
-        Text("פרטי הזמנה").font(.headline).accessibilityAddTraits(.isHeader)
         catalog
         if let draft = model.draft {
             Picker("רכב", selection: Binding(get: { model.draft?.vehicle }, set: { value in
@@ -54,9 +47,16 @@ struct BookingForms: View {
             }.disabled(model.busy || !model.catalogLoaded || model.catalogError)
             dateInput(start: true)
             dateInput(start: false)
+            Button { model.submit() } label: {
+                HStack(spacing: 8) {
+                    if model.busy { ProgressView().tint(.white) }
+                    Text("שמירת הזמנה")
+                }
+            }.buttonStyle(BookingCapsuleStyle()).disabled(!model.canSubmitDraft)
+                .listRowBackground(Color.clear).listRowSeparator(.hidden)
             if model.startLocked { Text("ההזמנה כבר התחילה; לא ניתן לשנות את שעת ההתחלה.").font(.caption) }
             if !model.busy && model.catalogLoaded && !model.catalogError && !model.canSubmitDraft {
-                Text("יש לבחור רכב זמין וטווח שעות תקין. בשעת מעבר שעון חוזרת יש לבחור שעה חד־משמעית.").font(.caption)
+                Text("יש לבחור רכב זמין וטווח שעות תקין.").font(.caption)
             }
         }
     }
@@ -105,23 +105,6 @@ struct BookingForms: View {
             }.listRowBackground(Color.clear).listRowSeparator(.hidden)
         }
     }
-    private var editorHeader: some View {
-        // Equal side columns keep Save centered in the screen, independently of Back's width.
-        HStack(spacing: 8) {
-            Button("חזרה") { model.dismiss() }.disabled(model.busy)
-                .frame(minWidth: 0, maxWidth: .infinity)
-            Button { model.submit() } label: {
-                VStack(spacing: 4) {
-                    if model.busy { ProgressView().tint(.white) }
-                    Text("שמירת הזמנה")
-                }
-            }.buttonStyle(BookingCapsuleStyle()).disabled(!model.canSubmitDraft)
-                .frame(minWidth: 0, maxWidth: .infinity)
-            Color.clear.frame(minWidth: 0, maxWidth: .infinity, maxHeight: 1)
-                .accessibilityHidden(true)
-        }.padding(.horizontal, 12).padding(.vertical, 8)
-            .background(ChatStyle.incoming)
-    }
     private func filterDate(start: Bool) -> some View {
         let value = start ? model.filters.start : model.filters.end
         let picking = start ? pickingStart : pickingEnd
@@ -150,14 +133,7 @@ struct BookingForms: View {
                 }, set: { value in
                     if start { model.filters.start = value } else { model.filters.end = value }
                 }), displayedComponents: [.date, .hourAndMinute])
-                // Revealing a picker does not activate a boundary. Explicitly choosing its displayed
-                // default is possible without first changing the date or time.
-                if value == nil {
-                    Button("בחירת המועד המוצג") {
-                        if start { model.filters.start = model.calendar.selected }
-                        else { model.filters.end = model.calendar.selected }
-                    }
-                }
+
             }
         }
     }
