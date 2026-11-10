@@ -49,6 +49,13 @@ struct AuthenticatedAppShell: View {
                 VehiclesScreen(model: vehicles, back: { navigation.back() })
             } else if destination == .history {
                 HistoryScreen(entry: entry, back: { navigation.back() })
+            } else if destination == .bookingCenter {
+                #if DEBUG
+                BookingCenterPreview(back: { navigation.back() })
+                #else
+                DashboardDestinationPlaceholder(destination: destination, back: { navigation.back() })
+                    .toolbar(.visible, for: .navigationBar)
+                #endif
             } else {
                 DashboardDestinationPlaceholder(destination: destination, back: { navigation.back() })
                     .toolbar(.visible, for: .navigationBar)
