@@ -1,3 +1,4 @@
+
 import SwiftUI
 
 struct BookingForms: View {
@@ -57,9 +58,6 @@ struct BookingForms: View {
             }.buttonStyle(BookingCapsuleStyle()).disabled(!model.canSubmitDraft)
                 .listRowBackground(Color.clear).listRowSeparator(.hidden)
             if model.startLocked { Text("ההזמנה כבר התחילה; לא ניתן לשנות את שעת ההתחלה.").font(.caption) }
-            if !model.busy && model.catalogLoaded && !model.catalogError && !model.canSubmitDraft {
-                Text("יש לבחור רכב זמין וטווח שעות תקין.").font(.caption)
-            }
         }
     }
     private func dateInput(start: Bool) -> some View {
