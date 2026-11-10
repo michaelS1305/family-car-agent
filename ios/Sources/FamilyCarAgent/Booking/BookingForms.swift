@@ -8,7 +8,9 @@ struct BookingForms: View {
     var body: some View {
         NavigationStack {
             Form {
-                if let notice = model.notice { Text(notice).foregroundStyle(ChatStyle.ink) }
+                if let notice = model.notice, sheet != .editor {
+                    Text(notice).foregroundStyle(ChatStyle.ink)
+                }
                 if model.busy { ProgressView("שומר…") }
                 switch sheet {
                 case .editor: editor
