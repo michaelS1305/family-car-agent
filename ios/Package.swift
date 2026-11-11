@@ -16,9 +16,13 @@ let package = Package(
             targets: ["FamilyCarAgent"]
         ),
     ],
+    dependencies: [
+        .package(url: "https://github.com/firebase/firebase-ios-sdk.git", exact: "12.19.3"),
+    ],
     targets: [
         .target(
             name: "FamilyCarAgent",
+            dependencies: [.product(name: "FirebaseMessaging", package: "firebase-ios-sdk", condition: .when(platforms: [.iOS]))],
             resources: [
                 .copy("Resources/EntryAssets"),
                 .copy("Resources/AppAssets")

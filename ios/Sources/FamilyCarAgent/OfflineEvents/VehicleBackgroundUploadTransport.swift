@@ -145,6 +145,18 @@ import UIKit
 @MainActor final class VehicleSyncAppDelegate: NSObject, UIApplicationDelegate {
     private(set) static var restorationUnavailable = false
 
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        NativePushService.shared.configure()
+        return true
+    }
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        NativePushService.shared.registeredAPNs(deviceToken)
+    }
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        NativePushService.shared.failedAPNs()
+    }
+
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
                      completionHandler: @escaping () -> Void) {
         Task { @MainActor in

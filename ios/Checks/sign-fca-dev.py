@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from firebase_dev_config import validate_bundle
 
 TEAM = "GT43M39TLK"
 SOURCE_BUNDLE = "com.familycaragent.app.dev"
@@ -146,6 +147,7 @@ def verify_profile(profile):
     require(bool(profile.get("DeveloperCertificates")), "Development profile has no signing certificates")
 
     entitlements = dict(profile.get("Entitlements", {}))
+    verify_push_entitlements(entitlements)
     require(entitlements.get("get-task-allow") is True, "Not a Development provisioning profile")
     expected_app_id = f"{TEAM}.{INSTALLED_BUNDLE}"
     require(
@@ -176,6 +178,11 @@ def verify_profile(profile):
     return entitlements, expiration
 
 
+def verify_push_entitlements(entitlements):
+    require(entitlements.get("aps-environment") == "development", "Development APNs entitlement required")
+    require(entitlements.get("com.apple.developer.applesignin") == ["Default"], "Sign in with Apple entitlement required")
+
+
 def get_user_keychains():
     output = call("Read user Keychain search list", "security", "list-keychains", "-d", "user")
     # `security list-keychains` returns one shell-quoted file path per line.
@@ -204,6 +211,7 @@ def sign(input_app, evidence):
     require(info.get("FCAEnvironment") == "development", "Source is not FCA Dev")
     require(not list(input_app.rglob("*.appex")), "Unexpected app extension: separate signing review required")
     original_metadata = metadata_snapshot(input_app)
+    validate_bundle(input_app)
 
     with tempfile.TemporaryDirectory(prefix="fca-dev-sign-") as temporary:
         root = Path(temporary)
@@ -283,6 +291,8 @@ def sign(input_app, evidence):
                 "-R", requirement, str(signed),
             )
             require(signed_entitlements(signed) == entitlements, "Signed entitlements differ from requested entitlements")
+            verify_push_entitlements(signed_entitlements(signed))
+            validate_bundle(signed)
             require((signed / "embedded.mobileprovision").read_bytes() == profile_file.read_bytes(), "Embedded provisioning profile mismatch")
             require(app_info(signed).get("CFBundleIdentifier") == INSTALLED_BUNDLE, "Signed Bundle ID changed")
             require(metadata_snapshot(signed) == original_metadata, "App Intents metadata changed after signing")
@@ -296,6 +306,8 @@ def sign(input_app, evidence):
             call("Packaged signature verification", "codesign", "--verify", "--deep", "--strict", str(packaged))
             require(app_info(packaged).get("CFBundleIdentifier") == INSTALLED_BUNDLE, "IPA Bundle ID mismatch")
             require(signed_entitlements(packaged) == entitlements, "Packaged entitlements mismatch")
+            verify_push_entitlements(signed_entitlements(packaged))
+            validate_bundle(packaged)
             require((packaged / "embedded.mobileprovision").read_bytes() == profile_file.read_bytes(), "Packaged provisioning mismatch")
             require(metadata_snapshot(packaged) == original_metadata, "IPA lost App Intents metadata")
 
@@ -308,6 +320,8 @@ def sign(input_app, evidence):
                 "signing_certificate_authorized_by_profile": True,
                 "embedded_profile_verified": True,
                 "entitlements_match_requested": True,
+                "development_apns_entitlement_verified": True,
+                "firebase_dev_configuration_verified": True,
                 "app_intents_metadata_preserved": True,
                 "ipa_roundtrip_verified": True,
                 "preflight_signing_verified": True,

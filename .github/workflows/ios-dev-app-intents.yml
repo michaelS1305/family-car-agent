@@ -8,6 +8,9 @@ on:
       - .github/workflows/ios-dev-app-intents.yml
       - ios/Checks/sign-fca-dev.py
       - ios/Checks/app-intents-poc.py
+      - ios/Checks/firebase_dev_config.py
+      - ios/Package.swift
+      - ios/Config/**
       - ios/Sources/FamilyCarAgent/**
 permissions:
   contents: read
@@ -26,13 +29,20 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore validated Firebase Dev configuration
+        env:
+          FCA_IOS_DEV_GOOGLE_SERVICE_INFO_BASE64: ${{ secrets.FCA_IOS_DEV_GOOGLE_SERVICE_INFO_BASE64 }}
+        shell: bash
+        run: python3 ios/Checks/firebase_dev_config.py "$RUNNER_TEMP/GoogleService-Info.plist"
+
       - name: Generate FCA Dev Xcode wrapper
         shell: bash
         run: |
           set -euo pipefail
           python3 ios/Checks/app-intents-poc.py generate \
             "$GITHUB_WORKSPACE/ios" \
-            "$RUNNER_TEMP/fca-dev-wrapper"
+            "$RUNNER_TEMP/fca-dev-wrapper" \
+            --firebase-config "$RUNNER_TEMP/GoogleService-Info.plist"
           plutil -lint "$RUNNER_TEMP/fca-dev-wrapper/FCAIntentPoC.xcodeproj/project.pbxproj"
 
       - name: Build full FCA Dev app
@@ -69,22 +79,6 @@ jobs:
           path: ${{ runner.temp }}/metadata-report.json
           if-no-files-found: warn
 
-      - name: Package unsigned FCA Dev app
-        shell: bash
-        run: |
-          set -euo pipefail
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$RUNNER_TEMP/fca-dev-products/Debug-iphoneos/FamilyCarAgent.app" \
-            "$RUNNER_TEMP/FCA-Dev-Xcode-Unsigned.zip"
-
-      - name: Upload unsigned FCA Dev app
-        uses: actions/upload-artifact@v4
-        with:
-          name: fca-dev-xcode-unsigned
-          path: ${{ runner.temp }}/FCA-Dev-Xcode-Unsigned.zip
-          if-no-files-found: error
-          retention-days: 7
-
       # Signing is deliberately opt-in. Enable only after reviewing the
       # matching provisioning profile, certificate, and installed Keychain identity.
       - name: Sign and verify FCA Dev IPA
@@ -111,3 +105,8 @@ jobs:
             ${{ runner.temp }}/fca-dev-signed/fca-dev-signing-report.json
           if-no-files-found: error
           retention-days: 7
+
+      - name: Remove temporary Firebase configuration
+        if: always()
+        shell: bash
+        run: rm -f -- "$RUNNER_TEMP/GoogleService-Info.plist"

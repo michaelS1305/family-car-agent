@@ -5,13 +5,16 @@ import json
 from pathlib import Path
 import plistlib
 import re
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from firebase_dev_config import validate as validate_firebase, validate_bundle, SDK_VERSION
 
 
 PROBE_ID = "com.familycaragent.intentprobe"
 PROBE_NAME = "FCA Intent Probe"
 
 
-def generate(ios: Path, output: Path, probe=False):
+def generate(ios: Path, output: Path, probe=False, firebase_config=None):
     ios = ios.resolve()
     output = output.resolve()
     if output == ios or ios in output.parents:
@@ -27,6 +30,12 @@ def generate(ios: Path, output: Path, probe=False):
     if ".iOS(.v17)" not in package or "swift-tools-version: 6.0" not in package:
         raise ValueError("Package platform/tool version changed; review the wrapper")
     sources = sorted((ios / "Sources/FamilyCarAgent").rglob("*.swift"))
+    if not probe:
+        if firebase_config is None:
+            raise ValueError("Firebase Dev configuration required")
+        validate_firebase(firebase_config)
+        if f'exact: "{SDK_VERSION}"' not in package:
+            raise ValueError("Firebase SDK version mismatch")
     for required in ("FamilyCarAgentApp.swift", "FCAConnectionTestIntent.swift"):
         if not any(p.name == required for p in sources):
             raise ValueError(f"Missing required source: {required}")
@@ -66,18 +75,29 @@ def generate(ios: Path, output: Path, probe=False):
 
     source_refs = [file(p, "sourcecode.swift") for p in sources + [accessor]]
     resource_refs = [file(ios / "Sources/FamilyCarAgent" / p, "folder") for p in resources]
+    package_refs, products, framework_builds = [], [], []
+    if not probe:
+        resource_refs.append(file(Path(firebase_config).resolve(), "text.plist.xml"))
+        package_ref = obj("firebase-package", "XCRemoteSwiftPackageReference",
+                          repositoryURL="https://github.com/firebase/firebase-ios-sdk.git",
+                          requirement={"kind": "exactVersion", "version": SDK_VERSION})
+        product_ref = obj("firebase-messaging", "XCSwiftPackageProductDependency",
+                          package=package_ref, productName="FirebaseMessaging")
+        package_refs.append(package_ref)
+        products.append(product_ref)
+        framework_builds.append(obj("firebase-link", "PBXBuildFile", productRef=product_ref))
     build_sources = [obj("build" + r, "PBXBuildFile", fileRef=r) for r in source_refs]
     build_resources = [obj("build" + r, "PBXBuildFile", fileRef=r) for r in resource_refs]
     phases = [obj("sources", "PBXSourcesBuildPhase", buildActionMask="2147483647",
                   files=build_sources, runOnlyForDeploymentPostprocessing="0"),
               obj("frameworks", "PBXFrameworksBuildPhase", buildActionMask="2147483647",
-                  files=[], runOnlyForDeploymentPostprocessing="0"),
+                  files=framework_builds, runOnlyForDeploymentPostprocessing="0"),
               obj("resources", "PBXResourcesBuildPhase", buildActionMask="2147483647",
                   files=build_resources, runOnlyForDeploymentPostprocessing="0")]
     product = obj("product", "PBXFileReference", explicitFileType="wrapper.application",
                   path="FamilyCarAgent.app", sourceTree="BUILT_PRODUCTS_DIR")
-    products = obj("products", "PBXGroup", name="Products", children=[product], sourceTree="<group>")
-    group = obj("rootgroup", "PBXGroup", children=source_refs + resource_refs + [products], sourceTree="<group>")
+    products_group = obj("products", "PBXGroup", name="Products", children=[product], sourceTree="<group>")
+    group = obj("rootgroup", "PBXGroup", children=source_refs + resource_refs + [products_group], sourceTree="<group>")
 
     def configs(key, settings):
         debug = obj(key + "debug", "XCBuildConfiguration", name="Debug", buildSettings=settings)
@@ -96,13 +116,16 @@ def generate(ios: Path, output: Path, probe=False):
         "SDKROOT": "iphoneos", "SUPPORTED_PLATFORMS": "iphoneos",
         "TARGETED_DEVICE_FAMILY": "1", "CURRENT_PROJECT_VERSION": "1",
         "MARKETING_VERSION": "1.0", "ENABLE_APP_INTENTS_METADATA_EXTRACTION": "YES",
+        **({"OTHER_LDFLAGS": "$(inherited) -ObjC"} if not probe else {}),
     })
     target = obj("target", "PBXNativeTarget", name="FamilyCarAgent", productName="FamilyCarAgent",
                  productType="com.apple.product-type.application", productReference=product,
-                 buildConfigurationList=target_config, buildPhases=phases, buildRules=[], dependencies=[])
+                 buildConfigurationList=target_config, buildPhases=phases, buildRules=[], dependencies=[],
+                 packageProductDependencies=products)
     project = obj("project", "PBXProject", buildConfigurationList=configs("project", {}),
                   compatibilityVersion="Xcode 14.0", developmentRegion="en", knownRegions=["en", "Base"],
-                  mainGroup=group, productRefGroup=products, projectDirPath="", projectRoot="", targets=[target])
+                  mainGroup=group, productRefGroup=products_group, projectDirPath="", projectRoot="", targets=[target],
+                  packageReferences=package_refs)
     xcodeproj = output / "FCAIntentPoC.xcodeproj"
     xcodeproj.mkdir()
     with (xcodeproj / "project.pbxproj").open("wb") as f:
@@ -125,6 +148,8 @@ def verify(app: Path, report: Path, probe=False):
               "intent_metadata_matches": matches, "offline_intent_metadata_matches": offline_matches,
               "device_discovery_verified": False}
     if not probe:
+        validate_bundle(app)
+        result["firebase_dev_configuration_valid"] = True
         result["launch_screen_dictionary_present"] = isinstance(info.get("UILaunchScreen"), dict)
         actions = [b"FCATakeVehicleIntent", b"FCAReturnVehicleIntent"]
         result["vehicle_actions_present"] = all(any(action in p.read_bytes() for p in nonempty) for action in actions)
@@ -141,5 +166,9 @@ if __name__ == "__main__":
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--probe", action="store_true")
+    parser.add_argument("--firebase-config", type=Path)
     args = parser.parse_args()
-    (generate if args.mode == "generate" else verify)(args.source, args.output, args.probe)
+    if args.mode == "generate":
+        generate(args.source, args.output, args.probe, args.firebase_config)
+    else:
+        verify(args.source, args.output, args.probe)

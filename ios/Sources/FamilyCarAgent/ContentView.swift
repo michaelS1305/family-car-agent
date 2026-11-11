@@ -47,7 +47,14 @@ struct ContentView: View {
         .environment(\.layoutDirection, .rightToLeft)
         .preferredColorScheme(model.screen == .intro || model.screen == .login || model.screen == .onboarding || model.screen == .ready ? .light : nil)
         .task { await model.start() }
-        .onChange(of: phase) { _, value in if value == .active { Task { await model.resume() } } }
+        .onChange(of: model.chatIdentity, initial: true) { _, value in NativePushService.shared.authenticatedEntry(value) }
+        .onChange(of: phase) { _, value in if value == .active { Task {
+            await model.resume()
+            NativePushService.shared.authenticatedEntry(model.chatIdentity)
+        } } }
+        #if DEBUG
+        .modifier(NativePushDiagnosticControl(enabled: model.chatIdentity != nil))
+        #endif
         .onReceive(NotificationCenter.default.publisher(for: ASAuthorizationAppleIDProvider.credentialRevokedNotification)) { _ in
             Task { await model.resume() }
         }

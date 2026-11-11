@@ -28,7 +28,10 @@ import UIKit
         api = try AuthAPI(environment: environment, publicKey: key)
         sessions = SessionManager(vault: KeychainVault(environment: environment), transport: api)
         authentication = SessionVehicleAuthentication(environment: environment, sessions: sessions)
-        sessions.onInvalidation = { [weak self] old in self?.invalidate(old) }
+        sessions.onInvalidation = { [weak self] old in
+            self?.invalidate(old)
+            NativePushService.shared.invalidate()
+        }
         sessions.onVehicleBindingsReduced = { [weak self] in self?.invalidateRecording() }
     }
 

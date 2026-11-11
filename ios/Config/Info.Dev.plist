@@ -3,6 +3,9 @@
 <plist version="1.0"><dict>
     <key>CFBundleDisplayName</key><string>FCA Dev</string>
     <key>FCAEnvironment</key><string>development</string>
+    <key>FirebaseAppDelegateProxyEnabled</key><false/>
+    <key>FirebaseMessagingAutoInitEnabled</key><false/>
+    <key>FirebaseMessagingInstallationIdEnabled</key><false/>
     <!-- PUBLIC Dev publishable key only. No service-role / Apple private keys. -->
     <key>FCASupabasePublishableKey</key><string>sb_publishable_vIB_0P9H5WAnadTKRVr4mw_bd0u2K3h</string>
     <key>CFBundleURLTypes</key><array><dict>
