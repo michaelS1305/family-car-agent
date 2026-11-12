@@ -100,10 +100,16 @@ struct VehicleConnectionSetupView: View {
             deviceCard
             if let message { Text(message).font(.callout).foregroundStyle(ChatStyle.secondary).frame(maxWidth: .infinity, alignment: .leading) }
             if presentation.showsShortcuts {
-                shortcutCard(action: .take, title: "הגדרת חיבור", description: "הקיצור שיופעל כשמתחברים לרכב.")
-                shortcutCard(action: .returning, title: "הגדרת ניתוק", description: presentation.method == .bluetooth
-                    ? "קיצור להחזרת הרכב. ניתוק Bluetooth אינו מוגדר אוטומטית."
-                    : "הקיצור להחזרת הרכב כשמתנתקים ממנו.")
+                shortcutCard(
+                    action: .take,
+                    title: "הגדרת חיבור",
+                    description: "הקיצור שיופעל כשמתחברים לרכב."
+                )
+                shortcutCard(
+                    action: .returning,
+                    title: "הגדרת ניתוק",
+                    description: "הקיצור להחזרת הרכב כשמתנתקים ממנו."
+                )
             }
             Button { perform(refreshOnly: true) } label: {
                 Text("רענון").font(.title3).foregroundStyle(Color.blue).frame(minWidth: 80, minHeight: 44)

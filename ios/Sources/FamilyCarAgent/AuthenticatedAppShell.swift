@@ -83,8 +83,8 @@ struct AppModeBar: View {
     @Binding var mode: ChatModel.Mode
     var body: some View {
         HStack(spacing: 0) {
-            tab(.chat, title: "צ׳אט", asset: "chat_icon.png", scale: 512.0 / 244.0, offset: 20.5 * 34.0 / 244.0)
-            tab(.dashboard, title: "דשבורד", asset: "dashboard_icon.png", scale: 512.0 / 242.0, offset: 39.0 * 34.0 / 242.0)
+            tab(.chat, title: "צ׳אט", asset: "chat_icon.png", scale: 2.00, offset: 0.9)
+            tab(.dashboard, title: "דשבורד", asset: "dashboard_icon.png", scale: 2.01, offset: 3.5)
         }
         .padding(3)
         .modifier(ModeBarGlass())
