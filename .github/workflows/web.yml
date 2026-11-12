@@ -1,0 +1,50 @@
+name: Web CI
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - .github/workflows/web.yml
+      - web/**
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - .github/workflows/web.yml
+      - web/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v4
+        with:
+          # Compatible with the existing v9 lockfile; no package.json change.
+          version: '11.24.0'
+          run_install: false
+      - name: Install frozen Web dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Web tests
+        run: pnpm run test:frontend
+      - name: Web lint
+        run: pnpm run lint
+      - name: Web production build (includes TypeScript and PWA)
+        run: pnpm run build
