@@ -127,8 +127,8 @@ jobs:
 
       - name: Sign and verify FCA Dev IPA
         env:
-          FCA_PROBE_P12_BASE64: ${{ secrets.FCA_PROBE_P12_BASE64 }}
-          FCA_PROBE_P12_PASSWORD: ${{ secrets.FCA_PROBE_P12_PASSWORD }}
+          FCA_PROBE_P12_BASE64: ${{ secrets.FCA_IOS_DEV_CERT_P12_BASE64 }}
+          FCA_PROBE_P12_PASSWORD: ${{ secrets.FCA_IOS_DEV_CERT_P12_PASSWORD }}
           FCA_DEV_PROFILE_BASE64: ${{ secrets.FCA_DEV_PROFILE_BASE64 }}
         shell: bash
         run: |
