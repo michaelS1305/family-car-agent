@@ -24,12 +24,10 @@ import tempfile
 
 from firebase_dev_config import validate_bundle
 
-
 TEAM = "GT43M39TLK"
 SOURCE_BUNDLE = "com.familycaragent.app.dev"
 INSTALLED_BUNDLE = "com.familycaragent.app.dev"
 PROFILE_NAME = "FCA iOS Dev Development"
-
 IPA_NAME = "FCA-Dev-AppIntents-Development.ipa"
 REPORT_NAME = "fca-dev-signing-report.json"
 
@@ -74,6 +72,39 @@ def call(label, *args):
     )
 
     if result.returncode:
+        if label == "Certificate import":
+            diagnostic = result.stderr.decode(
+                "utf-8", errors="replace"
+            ).lower()
+
+            if (
+                "mac verify failure" in diagnostic
+                or "invalid password" in diagnostic
+            ):
+                category = "PKCS12_PASSWORD_OR_INTEGRITY"
+            elif (
+                "unsupported" in diagnostic
+                or "unknown pbe algorithm" in diagnostic
+            ):
+                category = "PKCS12_UNSUPPORTED_FORMAT"
+            elif (
+                "user interaction is not allowed" in diagnostic
+                or "authorization" in diagnostic
+            ):
+                category = "KEYCHAIN_ACCESS_DENIED"
+            elif (
+                "already exists" in diagnostic
+                or "duplicate" in diagnostic
+            ):
+                category = "KEYCHAIN_DUPLICATE_ITEM"
+            else:
+                category = "UNKNOWN_IMPORT_FAILURE"
+
+            raise SignError(
+                f"Certificate import failed (exit {result.returncode}); "
+                f"diagnostic_category={category}"
+            )
+
         if label in ("Preflight signing", "Application signing"):
             raise SignError(
                 f"{label} failed (exit {result.returncode}); "
@@ -255,7 +286,11 @@ def verify_profile(profile):
         bool(profile.get("ProvisionedDevices")),
         "Development profile has no registered devices",
     )
-    require(not profile.get("ProvisionsAllDevices"), "Enterprise profile is not permitted")
+
+    require(
+        not profile.get("ProvisionsAllDevices"),
+        "Enterprise profile is not permitted",
+    )
 
     require(
         bool(profile.get("DeveloperCertificates")),
@@ -291,7 +326,11 @@ def verify_profile(profile):
     groups = entitlements.get(
         "keychain-access-groups"
     )
-    require(groups is not None, "Provisioning Keychain groups missing")
+
+    require(
+        groups is not None,
+        "Provisioning Keychain groups missing",
+    )
 
     if groups is not None:
         require(
@@ -319,9 +358,7 @@ def verify_profile(profile):
             "the FCA Dev Keychain group",
         )
 
-    entitlements[
-        "keychain-access-groups"
-    ] = [expected_app_id]
+    entitlements["keychain-access-groups"] = [expected_app_id]
 
     return entitlements, expiration
 
@@ -361,8 +398,7 @@ def sign(input_app, evidence):
     )
 
     require(
-        os.environ.get("GITHUB_REF")
-        == "refs/heads/develop"
+        os.environ.get("GITHUB_REF") == "refs/heads/develop"
         and os.environ.get("GITHUB_EVENT_NAME")
         in ("push", "workflow_dispatch"),
         "Signing requires authorized develop workflow",
@@ -388,26 +424,21 @@ def sign(input_app, evidence):
     info = app_info(input_app)
 
     require(
-        info.get("CFBundleIdentifier")
-        == SOURCE_BUNDLE,
+        info.get("CFBundleIdentifier") == SOURCE_BUNDLE,
         "Xcode source Bundle ID mismatch",
     )
 
     require(
-        info.get("FCAEnvironment")
-        == "development",
+        info.get("FCAEnvironment") == "development",
         "Source is not FCA Dev",
     )
 
     require(
         not list(input_app.rglob("*.appex")),
-        "Unexpected app extension: "
-        "separate signing review required",
+        "Unexpected app extension: separate signing review required",
     )
 
-    original_metadata = metadata_snapshot(
-        input_app
-    )
+    original_metadata = metadata_snapshot(input_app)
 
     validate_bundle(input_app)
 
@@ -422,9 +453,7 @@ def sign(input_app, evidence):
 
         key_password = secrets.token_urlsafe(32)
 
-        # These environment variable names are retained
-        # for compatibility with the current ios.yml.
-        # ios.yml supplies the NEW Development secrets.
+        # Environment names retained for ios.yml compatibility.
         decode_secret(
             "FCA_PROBE_P12_BASE64",
             cert_file,
@@ -456,14 +485,9 @@ def sign(input_app, evidence):
             )
         )
 
-        entitlements, expiration = verify_profile(
-            profile
-        )
+        entitlements, expiration = verify_profile(profile)
 
-        entitlements_file = (
-            root / "entitlements.plist"
-        )
-
+        entitlements_file = root / "entitlements.plist"
         entitlements_file.write_bytes(
             plistlib.dumps(entitlements)
         )
@@ -479,9 +503,7 @@ def sign(input_app, evidence):
             symlinks=True,
         )
 
-        # The source and installed Bundle IDs are now
-        # identical. Preserve the original Info.plist.
-        # Do not apply any XTool Bundle ID prefix.
+        # Preserve the original Info.plist.
         require(
             app_info(signed).get("CFBundleIdentifier")
             == INSTALLED_BUNDLE,
@@ -494,8 +516,7 @@ def sign(input_app, evidence):
         )
 
         require(
-            metadata_snapshot(signed)
-            == original_metadata,
+            metadata_snapshot(signed) == original_metadata,
             "App Intents metadata changed before signing",
         )
 
@@ -532,9 +553,7 @@ def sign(input_app, evidence):
                 str(keychain),
             )
 
-            original_keychains = (
-                get_user_keychains()
-            )
+            original_keychains = get_user_keychains()
 
             set_user_keychains(
                 [str(keychain)]
@@ -575,8 +594,7 @@ def sign(input_app, evidence):
                 profile["DeveloperCertificates"],
             )
 
-            # Verify the imported signing identity
-            # independently before signing FCA.
+            # Verify imported identity independently.
             preflight = root / "signing-preflight"
 
             shutil.copyfile(
@@ -610,8 +628,7 @@ def sign(input_app, evidence):
                 (
                     p
                     for p in signed.rglob("*")
-                    if p.suffix
-                    in (".framework", ".dylib")
+                    if p.suffix in (".framework", ".dylib")
                 ),
                 key=lambda p: len(p.parts),
                 reverse=True,
@@ -670,10 +687,8 @@ def sign(input_app, evidence):
             )
 
             require(
-                signed_entitlements(signed)
-                == entitlements,
-                "Signed entitlements differ "
-                "from requested entitlements",
+                signed_entitlements(signed) == entitlements,
+                "Signed entitlements differ from requested entitlements",
             )
 
             verify_push_entitlements(
@@ -685,23 +700,19 @@ def sign(input_app, evidence):
             require(
                 (
                     signed / "embedded.mobileprovision"
-                ).read_bytes()
-                == profile_file.read_bytes(),
+                ).read_bytes() == profile_file.read_bytes(),
                 "Embedded provisioning profile mismatch",
             )
 
             require(
-                app_info(signed).get(
-                    "CFBundleIdentifier"
-                ) == INSTALLED_BUNDLE,
+                app_info(signed).get("CFBundleIdentifier")
+                == INSTALLED_BUNDLE,
                 "Signed Bundle ID changed",
             )
 
             require(
-                metadata_snapshot(signed)
-                == original_metadata,
-                "App Intents metadata changed "
-                "after signing",
+                metadata_snapshot(signed) == original_metadata,
+                "App Intents metadata changed after signing",
             )
 
             ipa = evidence / IPA_NAME
@@ -748,15 +759,13 @@ def sign(input_app, evidence):
             )
 
             require(
-                app_info(packaged).get(
-                    "CFBundleIdentifier"
-                ) == INSTALLED_BUNDLE,
+                app_info(packaged).get("CFBundleIdentifier")
+                == INSTALLED_BUNDLE,
                 "IPA Bundle ID mismatch",
             )
 
             require(
-                signed_entitlements(packaged)
-                == entitlements,
+                signed_entitlements(packaged) == entitlements,
                 "Packaged entitlements mismatch",
             )
 
@@ -768,16 +777,13 @@ def sign(input_app, evidence):
 
             require(
                 (
-                    packaged
-                    / "embedded.mobileprovision"
-                ).read_bytes()
-                == profile_file.read_bytes(),
+                    packaged / "embedded.mobileprovision"
+                ).read_bytes() == profile_file.read_bytes(),
                 "Packaged provisioning mismatch",
             )
 
             require(
-                metadata_snapshot(packaged)
-                == original_metadata,
+                metadata_snapshot(packaged) == original_metadata,
                 "IPA lost App Intents metadata",
             )
 
@@ -785,9 +791,7 @@ def sign(input_app, evidence):
                 "bundle_id": INSTALLED_BUNDLE,
                 "environment": "development",
                 "profile_name": PROFILE_NAME,
-                "profile_expires": (
-                    expiration.isoformat()
-                ),
+                "profile_expires": expiration.isoformat(),
                 "development_signature_verified": True,
                 "signing_certificate_authorized_by_profile": True,
                 "embedded_profile_verified": True,
@@ -804,16 +808,12 @@ def sign(input_app, evidence):
                 "existing_keychain_session_preservation_verified": False,
             }
 
-            (
-                evidence / REPORT_NAME
-            ).write_text(
-                json.dumps(report, indent=2)
-                + "\n"
+            (evidence / REPORT_NAME).write_text(
+                json.dumps(report, indent=2) + "\n"
             )
 
         finally:
-            # Restore the runner's original Keychain
-            # search list even if signing fails.
+            # Restore original Keychain search list.
             try:
                 if original_keychains is not None:
                     set_user_keychains(
@@ -852,14 +852,9 @@ def main():
             args.app,
             args.evidence,
         )
-
     except SignError as exc:
-        print(
-            str(exc),
-            file=sys.stderr,
-        )
+        print(str(exc), file=sys.stderr)
         raise SystemExit(1) from None
-
     except Exception:
         print(
             "FCA Dev signing failed; "
