@@ -65,10 +65,12 @@ def sign_failure_category(stderr):
 
 
 def call(label, *args):
+    diagnostic_only = label.startswith("Diagnostic ")
     result = subprocess.run(
         args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        **({"timeout": 30} if diagnostic_only else {}),
     )
 
     if result.returncode:
@@ -79,9 +81,12 @@ def call(label, *args):
 
             if (
                 "mac verify failure" in diagnostic
+                or "mac verification failed" in diagnostic
                 or "invalid password" in diagnostic
+                or "wrong password" in diagnostic
+                or "passphrase you entered is not correct" in diagnostic
             ):
-                category = "PKCS12_PASSWORD_OR_INTEGRITY"
+                category = "PKCS12_INTEGRITY_PASSWORD_OR_COMPATIBILITY"
             elif (
                 "unsupported" in diagnostic
                 or "unknown pbe algorithm" in diagnostic
@@ -117,6 +122,53 @@ def call(label, *args):
         )
 
     return result.stdout
+
+
+def pkcs12_diagnostics(cert_file):
+    """Best-effort diagnostics only; never change the Apple import decision.
+
+    OpenSSL inherits the existing password environment variable. Neither the
+    password nor raw tool output is printed, including on timeout or failure.
+    """
+    try:
+        version = call("Diagnostic macOS version", "/usr/bin/sw_vers", "-productVersion").decode().strip()
+        safe = re.fullmatch(r"[0-9]{1,3}(?:\.[0-9]{1,3}){1,2}", version)
+        print("macOS version: " + (version if safe else "UNAVAILABLE"))
+    except (SignError, OSError, subprocess.TimeoutExpired, UnicodeError):
+        print("macOS version: UNAVAILABLE")
+
+    # The system openssl may be LibreSSL. Prefer OpenSSL 3 for this diagnostic
+    # so its parser can distinguish a modern P12 from Apple import support.
+    candidates = ["/opt/homebrew/opt/openssl@3/bin/openssl",
+                  "/usr/local/opt/openssl@3/bin/openssl", shutil.which("openssl")]
+    executable = None
+    for candidate in dict.fromkeys(p for p in candidates if p):
+        if not Path(candidate).is_file():
+            continue
+        try:
+            raw = call("Diagnostic OpenSSL version", candidate, "version").decode()
+            match = re.match(r"^(OpenSSL|LibreSSL) ([0-9]+\.[0-9]+\.[0-9]+[a-z]?)(?=\s|$)", raw)
+            if match:
+                print("Crypto tool version: " + match.group(1) + " " + match.group(2))
+                if match.group(1) == "OpenSSL" and match.group(2).startswith("3."):
+                    executable = candidate
+                    break
+        except (SignError, OSError, subprocess.TimeoutExpired, UnicodeError):
+            continue
+    if executable is None:
+        print("PKCS12 preflight: FAIL; diagnostic_category=OPENSSL3_UNAVAILABLE")
+        return
+    try:
+        # -noout suppresses all credential output. MAC verification remains on.
+        call("Diagnostic PKCS12 validation", executable, "pkcs12",
+             "-in", str(cert_file), "-noout", "-passin", "env:FCA_PROBE_P12_PASSWORD")
+        print("PKCS12 preflight: PASS")
+    except SignError:
+        print("PKCS12 preflight: FAIL; diagnostic_category=PKCS12_VALIDATION_FAILED")
+    except subprocess.TimeoutExpired:
+        print("PKCS12 preflight: FAIL; diagnostic_category=VALIDATION_TIMEOUT")
+    except OSError:
+        print("PKCS12 preflight: FAIL; diagnostic_category=VALIDATOR_UNAVAILABLE")
 
 
 def decode_secret(name, destination):
@@ -473,6 +525,8 @@ def sign(input_app, evidence):
             bool(cert_password),
             "P12 password missing",
         )
+
+        pkcs12_diagnostics(cert_file)
 
         profile = plistlib.loads(
             call(
