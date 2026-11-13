@@ -5,6 +5,7 @@ from pathlib import Path
 import plistlib
 import tempfile
 import unittest
+import struct
 
 spec = importlib.util.spec_from_file_location(
     "poc", Path(__file__).with_name("app-intents-poc.py")
@@ -45,6 +46,13 @@ class MetadataPoCTests(unittest.TestCase):
             self.assertEqual(settings["CODE_SIGNING_ALLOWED"], "NO")
             self.assertEqual(settings["SDKROOT"], "iphoneos")
             self.assertEqual(settings["ENABLE_APP_INTENTS_METADATA_EXTRACTION"], "YES")
+            self.assertEqual(settings["ASSETCATALOG_COMPILER_APPICON_NAME"], "AppIcon")
+            catalog = next(o for o in objects if o.get("lastKnownFileType") == "folder.assetcatalog")
+            self.assertEqual(catalog["path"], str(ios / "Config/AppIcon.xcassets"))
+            resources_phase = next(o for o in objects if o["isa"] == "PBXResourcesBuildPhase")
+            objects_by_id = plistlib.loads((output / "FCAIntentPoC.xcodeproj/project.pbxproj").read_bytes())["objects"]
+            self.assertTrue(any(objects_by_id[objects_by_id[b]["fileRef"]].get("path") == catalog["path"]
+                                for b in resources_phase["files"]))
 
             self.assertTrue(any(o.get("productName") == "FirebaseMessaging" for o in objects))
             self.assertTrue(any(o.get("requirement", {}).get("version") == "12.19.3" for o in objects))
@@ -97,7 +105,11 @@ class MetadataPoCTests(unittest.TestCase):
                 "CFBundleIdentifier": "com.familycaragent.app.dev",
                 "FCAEnvironment": "development",
                 "UILaunchScreen": {},
+                "CFBundleIcons": {"CFBundlePrimaryIcon": {
+                    "CFBundleIconName": "AppIcon", "CFBundleIconFiles": ["AppIcon60x60"]}},
             }
+            (app / "Assets.car").write_bytes(b"synthetic compiled catalog")
+            (app / "AppIcon60x60@2x.png").write_bytes(b"synthetic compiled icon")
 
             (app / "Info.plist").write_bytes(plistlib.dumps(info))
 
@@ -129,6 +141,20 @@ class MetadataPoCTests(unittest.TestCase):
             data.write_bytes(b'["FCAConnectionTestIntent","FCATakeVehicleIntent","FCAReturnVehicleIntent"]')
             poc.verify(app, report)
 
+            for missing in ("Assets.car", "AppIcon60x60@2x.png"):
+                path = app / missing
+                content = path.read_bytes()
+                path.unlink()
+                with self.assertRaisesRegex(ValueError, "compiled AppIcon"):
+                    poc.verify(app, report)
+                path.write_bytes(content)
+            without_icon = dict(info)
+            del without_icon["CFBundleIcons"]
+            (app / "Info.plist").write_bytes(plistlib.dumps(without_icon))
+            with self.assertRaisesRegex(ValueError, "compiled AppIcon"):
+                poc.verify(app, report)
+            (app / "Info.plist").write_bytes(plistlib.dumps(info))
+
             # Synthetic processed plist: missing/wrong types must fail even with valid metadata.
             for launch_screen in (None, "", []):
                 invalid_info = dict(info)
@@ -151,6 +177,23 @@ class MetadataPoCTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 poc.verify(app, report)
+
+    def test_app_icon_source_is_square_opaque_srgb(self):
+        catalog = Path(__file__).resolve().parents[1] / "Config/AppIcon.xcassets/AppIcon.appiconset"
+        contents = json.loads((catalog / "Contents.json").read_text())
+        self.assertEqual(contents["images"], [{"filename": "AppIcon.png", "idiom": "universal",
+                                             "platform": "ios", "size": "1024x1024"}])
+        png = (catalog / "AppIcon.png").read_bytes()
+        self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(struct.unpack(">IIBB", png[16:26]), (1024, 1024, 8, 2))
+        chunks = {}
+        offset = 8
+        while offset < len(png):
+            size = struct.unpack(">I", png[offset:offset + 4])[0]
+            chunks[png[offset + 4:offset + 8]] = png[offset + 8:offset + 8 + size]
+            offset += size + 12
+        self.assertNotIn(b"tRNS", chunks)
+        self.assertEqual(chunks[b"sRGB"], b"\x00")
 
 
 if __name__ == "__main__":

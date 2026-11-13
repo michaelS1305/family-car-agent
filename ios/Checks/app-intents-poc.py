@@ -78,6 +78,7 @@ def generate(ios: Path, output: Path, probe=False, firebase_config=None):
     package_refs, products, framework_builds = [], [], []
     if not probe:
         resource_refs.append(file(Path(firebase_config).resolve(), "text.plist.xml"))
+        resource_refs.append(file(ios / "Config/AppIcon.xcassets", "folder.assetcatalog"))
         package_ref = obj("firebase-package", "XCRemoteSwiftPackageReference",
                           repositoryURL="https://github.com/firebase/firebase-ios-sdk.git",
                           requirement={"kind": "exactVersion", "version": SDK_VERSION})
@@ -109,6 +110,7 @@ def generate(ios: Path, output: Path, probe=False, firebase_config=None):
         "PRODUCT_BUNDLE_IDENTIFIER": config["bundleID"],
         "INFOPLIST_FILE": str(info_path), "GENERATE_INFOPLIST_FILE": "YES",
         **({"INFOPLIST_KEY_UILaunchScreen_Generation": "YES"} if not probe else {}),
+        **({"ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon"} if not probe else {}),
         "CODE_SIGN_ENTITLEMENTS": str(entitlements_path),
         "CODE_SIGNING_ALLOWED": "NO", "CODE_SIGNING_REQUIRED": "NO",
         "SWIFT_VERSION": "6.0", "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG",
@@ -151,11 +153,24 @@ def verify(app: Path, report: Path, probe=False):
         validate_bundle(app)
         result["firebase_dev_configuration_valid"] = True
         result["launch_screen_dictionary_present"] = isinstance(info.get("UILaunchScreen"), dict)
+        primary_icon = info.get("CFBundleIcons", {}).get("CFBundlePrimaryIcon", {})
+        icon_files = primary_icon.get("CFBundleIconFiles", [])
+        result["app_icon_present"] = (
+            primary_icon.get("CFBundleIconName") == "AppIcon"
+            and (app / "Assets.car").is_file()
+            and (app / "Assets.car").stat().st_size > 0
+            and isinstance(icon_files, list) and bool(icon_files)
+            and all(isinstance(name, str) and Path(name).name == name
+                    and any(p.stat().st_size > 0 for p in app.glob(name + "*.png"))
+                    for name in icon_files)
+        )
         actions = [b"FCATakeVehicleIntent", b"FCAReturnVehicleIntent"]
         result["vehicle_actions_present"] = all(any(action in p.read_bytes() for p in nonempty) for action in actions)
     report.write_text(json.dumps(result, indent=2) + "\n")
     if not probe and not result["launch_screen_dictionary_present"]:
         raise ValueError("Processed Dev Info.plist must contain a UILaunchScreen dictionary")
+    if not probe and not result["app_icon_present"]:
+        raise ValueError("Processed Dev app must contain compiled AppIcon resources and CFBundleIcons")
     if not (result["bundle_id_matches_expected"] and result["environment_matches_expected"] and result["display_name_matches"] and matches and (offline_matches if probe else result["vehicle_actions_present"])):
         raise ValueError("App Intents metadata/Dev identity check failed; inspect metadata-report.json")
 
