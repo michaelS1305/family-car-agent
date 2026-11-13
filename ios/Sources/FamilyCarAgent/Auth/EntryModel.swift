@@ -33,6 +33,7 @@ import Combine
     private var sessions: SessionManager?
     private var providers: (any NativeAuthProvider)?
     private var checkingApple = false
+    private var pushLogoutInProgress = false
 
     var chatIdentity: ChatIdentity? {
         guard screen == .ready, let sessions, let session = sessions.session, session.activated,
@@ -155,6 +156,7 @@ import Combine
 
     init(sessions: SessionManager, api: any BackendTransport, providers: any NativeAuthProvider) {
         self.sessions = sessions; self.api = api; self.providers = providers
+        observeSessionInvalidation()
     }
 
     #if canImport(UIKit)
@@ -163,15 +165,48 @@ import Combine
             let runtime = try VehicleSessionRuntime.shared.get()
             api = runtime.api; sessions = runtime.sessions
             providers = NativeProviders(environment: runtime.environment)
+            observeSessionInvalidation()
         } catch { self.error = AuthFailure.configuration.message }
     }
     #endif
+    private func observeSessionInvalidation() {
+        guard let sessions else { return }
+        let previous = sessions.onInvalidation
+        sessions.onInvalidation = { [weak self] old in
+            previous?(old) // Preserve vehicle queue and Native Push cleanup.
+            guard let self, self.sessions?.session == nil, self.screen == .ready else { return }
+            self.version += 1; self.resetPrivate(); self.screen = .intro; self.busy = false
+            self.error = AuthFailure.signedOut.message
+        }
+    }
     private func resetPrivate() {
         me = nil; familyName = ""; address = ""; userName = ""; familyCode = ""
         consent = false; resolutionToken = nil; resolvedAddress = ""; createdCode = ""; completed = false; step = 1
         addressLocation = nil; editingJoinName = false
     }
     func logout() {
+        #if os(iOS)
+        guard !pushLogoutInProgress else { return }
+        pushLogoutInProgress = true
+        let logoutVersion = version
+        busy = true
+        Task { @MainActor in
+            defer { pushLogoutInProgress = false }
+            do {
+                try await NativePushService.shared.prepareLogout()
+                if version == logoutVersion { finishLogout() }
+            } catch {
+                if version == logoutVersion {
+                    busy = false
+                    self.error = "לא ניתן להשלים התנתקות בבטחה כרגע. פרטי ההתחברות נשמרו. נסו ללחוץ שוב על התנתקות."
+                }
+            }
+        }
+        #else
+        finishLogout()
+        #endif
+    }
+    private func finishLogout() {
         version += 1; providers?.cancel(); resetPrivate(); screen = .intro; busy = false; error = nil
         do { try sessions?.clear() } catch { self.error = AuthFailure.storage.message }
     }
@@ -186,7 +221,8 @@ import Combine
             let failure = error as? AuthFailure ?? .network
             switch failure {
             case .signedOut, .rejected(401, _), .rejected(403, "ACCOUNT_UNAVAILABLE"), .rejected(403, "MISSING_ACCOUNT"):
-                logout(); if self.error == nil { self.error = failure.message }
+                // Revoked credentials cannot be retained to wait for Push cleanup.
+                finishLogout(); if self.error == nil { self.error = failure.message }
             default:
                 self.error = failure.message
                 if failure == .rejected(409, "ADDRESS_RESOLUTION_EXPIRED") { clearAddress(); step = 2 }
@@ -215,7 +251,7 @@ import Combine
         defer { checkingApple = false }
         do {
             let valid = try await providers?.credentialValid(user) == true
-            if current == version && !valid { logout(); if error == nil { error = AuthFailure.signedOut.message } }
+            if current == version && !valid { finishLogout(); if error == nil { error = AuthFailure.signedOut.message } }
         } catch { /* A system failure is not evidence of revocation. */ }
         refreshNativeDevice()
     }

@@ -5,8 +5,9 @@ import UserNotifications
 import FirebaseCore
 import FirebaseMessaging
 import CryptoKit
+import Network
 
-/// Phase 2A: no Backend registration, delivery claims, or payload routing.
+/// Firebase lifecycle and the existing authenticated Native Push protocol.
 @MainActor final class NativePushService: NSObject, ObservableObject {
     static let shared = NativePushService()
     @Published private(set) var state = NativePushState()
@@ -14,10 +15,30 @@ import CryptoKit
     private var checkingPermission = false
     private var fetchingToken = false
     private var initialized = false
+    private var registration: NativePushRegistration?
+    private var loggingOut = false
+    private var pendingChallenge: [String:String]?
+    private let connectivity = NWPathMonitor()
+    private func registrar() throws -> NativePushRegistration {
+        if let registration { return registration }
+        let runtime = try VehicleSessionRuntime.shared.get()
+        let value = NativePushRegistration(sessions:runtime.sessions,api:runtime.api,store:NativePushKeychainStore(environment:runtime.environment))
+        registration = value; return value
+    }
 
     func configure() {
         guard !initialized else { return }
         initialized = true
+        connectivity.pathUpdateHandler = { [weak self] path in
+            guard path.status == .satisfied else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                do { try await self.registrar().reconcile() }
+                catch { self.state.errorCategory = "push_revocation_pending" }
+                if self.current(self.state.epoch) { self.fetchToken() }
+            }
+        }
+        connectivity.start(queue:DispatchQueue(label:"fca.push.connectivity"))
         let bundle = Bundle.main
         guard let path = bundle.path(forResource: "GoogleService-Info", ofType: "plist"),
               let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
@@ -26,7 +47,7 @@ import CryptoKit
         }
         state.configurationLoaded = true
         guard bundle.object(forInfoDictionaryKey: "FCAEnvironment") as? String == "development",
-              bundle.bundleIdentifier == "XTL-255E706B.com.familycaragent.app.dev",
+              bundle.bundleIdentifier == "com.familycaragent.app.dev",
               bundle.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool == false,
               bundle.object(forInfoDictionaryKey: "FirebaseMessagingAutoInitEnabled") as? Bool == false,
               config["BUNDLE_ID"] as? String == bundle.bundleIdentifier,
@@ -50,8 +71,9 @@ import CryptoKit
     }
 
     func authenticatedEntry(_ value: ChatIdentity?) {
+        guard !loggingOut else { return }
         if identity != value {
-            invalidate()
+            if identity != nil { invalidate() }
             identity = value
             if value != nil { state.activate() }
         }
@@ -60,16 +82,44 @@ import CryptoKit
     }
 
     func invalidate() {
+        var storageFailed = false
+        do { try registrar().retire() }
+        catch { storageFailed = true }
         let configurationError = state.configured ? "none" : state.errorCategory
         identity = nil; state.deactivate()
-        state.errorCategory = configurationError
+        pendingChallenge = nil
+        state.errorCategory = storageFailed ? "push_revocation_storage" : configurationError
         checkingPermission = false; fetchingToken = false
         // Firebase's own token is installation-scoped, never associated with an FCA
         // account here. Turn auto-init off; do not race asynchronous token deletion
-        // against a subsequent login. No FCA token persistence or Backend upload.
+        // against a subsequent login. FCA retires its separate server registration;
+        // only the token fingerprint, never the raw token, is persisted locally.
         if state.configured { Messaging.messaging().isAutoInitEnabled = false }
         UIApplication.shared.unregisterForRemoteNotifications()
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        Task { @MainActor in
+            do { try await registrar().reconcile() }
+            catch { state.errorCategory = "push_revocation_pending" }
+        }
+    }
+
+    func prepareLogout() async throws {
+        guard !loggingOut else { return }
+        loggingOut = true
+        defer { loggingOut = false }
+        try await registrar().prepareLogout()
+        invalidate()
+        // Capability is cancellation-only; do not extend or retain the login session.
+        do { try await registrar().revokeOnline() }
+        catch { state.errorCategory = "push_revocation_pending" }
+    }
+
+    func receive(_ payload: [String:String]) async {
+        guard let identity, current(state.epoch), state.permitsRegistration else { return }
+        if payload["kind"] == "registration_challenge" { pendingChallenge = payload }
+        let ticket = state.epoch
+        do { try await registrar().confirm(payload,identity:identity) }
+        catch { if current(ticket) { state.errorCategory = "push_confirmation" } }
     }
 
     private func current(_ ticket: Int) -> Bool {
@@ -107,6 +157,9 @@ import CryptoKit
             @unknown default: state.permission = .unknown
             }
             guard state.permitsRegistration else {
+                do { try registrar().retire(); try await registrar().reconcile() }
+                catch { if current(ticket) { state.errorCategory = "push_revocation_pending" } }
+                guard current(ticket) else { return }
                 state.apns = .idle; state.fcm = .idle
                 Messaging.messaging().isAutoInitEnabled = false
                 UIApplication.shared.unregisterForRemoteNotifications(); return
@@ -140,9 +193,14 @@ import CryptoKit
                 guard current(ticket), state.permitsRegistration, state.apns == .succeeded else { return }
                 guard !token.isEmpty else { throw TokenError.empty }
                 state.receivedToken(digest: Data(SHA256.hash(data: Data(token.utf8))), ticket: ticket)
+                if let identity {
+                    let digest = SHA256.hash(data:Data(token.utf8)).map { String(format:"%02x",$0) }.joined()
+                    try await registrar().register(token:token,digest:digest,identity:identity)
+                    if current(ticket), let pendingChallenge { await receive(pendingChallenge) }
+                }
             } catch {
                 guard current(ticket) else { return }
-                state.fcm = .failed; state.errorCategory = "fcm_token"
+                state.errorCategory = "push_registration_or_token"
             }
         }
     }
@@ -158,11 +216,20 @@ extension NativePushService: MessagingDelegate {
 
 extension NativePushService: UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         // Phase 2A does not associate incoming payloads with an authenticated account.
         // Do not show unverified account content in the foreground.
-        completionHandler([])
+        let data = notification.request.content.userInfo.reduce(into:[String:String]()) { result, pair in
+            if let key = pair.key as? String, let value = pair.value as? String { result[key] = value }
+        }
+        await self.receive(data)
+        return await MainActor.run {
+            guard let identity = self.identity, self.current(self.state.epoch),
+                  let ref = data["installation_ref"],
+                  self.registration?.permitsPresentation(ref,identity:identity) == true,
+                  data["kind"] == "event" else { return [] }
+            return [.banner,.list,.sound]
+        }
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
@@ -182,7 +249,7 @@ struct NativePushDiagnosticControl: ViewModifier {
         }.sheet(isPresented: $shown) {
             NavigationStack {
                 List {
-                    Text("Phase 2A — no Backend registration or delivery verification")
+                    Text("Phase 2B — provider acceptance is not delivery verification")
                     Text("Configuration loaded: \(push.state.configurationLoaded ? "yes" : "no")")
                     Text("Dev identity validated: \(push.state.devIdentityValidated ? "yes" : "no")")
                     Text("Firebase initialized: \(push.state.configured ? "yes" : "no")")

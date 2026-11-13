@@ -12,6 +12,7 @@ from native_push_security import Config, ConfigurationError
 from vehicle_api import vehicle_pool, _call
 import native_push_registration as registration
 import native_push_refresh as refresh
+import native_push_revocation as revocation
 
 router = APIRouter(prefix='/api/native-push', tags=['native-push'])
 
@@ -20,7 +21,7 @@ class Begin(BaseModel):
     model_config = ConfigDict(extra='forbid', hide_input_in_errors=True)
     installation_ref: UUID4
     request_id: UUID4
-    platform: Literal['android']
+    platform: Literal['android','ios']
     token: str = Field(min_length=20,max_length=4096,pattern=r'^[A-Za-z0-9_:\-.]+$',repr=False)
 
 
@@ -33,6 +34,12 @@ class Confirm(BaseModel):
 class Revoke(BaseModel):
     model_config = ConfigDict(extra='forbid')
     expected_generation: int = Field(strict=True,ge=1,lt=9223372036854775807)
+
+
+class CancellationAuthority(BaseModel):
+    model_config = ConfigDict(extra='forbid', hide_input_in_errors=True)
+    secret: str = Field(min_length=64, max_length=64, pattern=r'^[0-9a-f]{64}$', repr=False)
+
 
 
 def configuration():
@@ -90,3 +97,18 @@ def events(installation_ref: UUID, response: Response,
            user: CurrentUser = Depends(get_current_user), config=Depends(configuration), pool=Depends(vehicle_pool)):
     response.headers['Cache-Control'] = 'no-store'
     return run(pool, lambda conn: refresh.events(conn, user, config, installation_ref, expected_generation, limit, cursor))
+
+@router.post('/ios/installations/{installation_ref}/prepare')
+def prepare_ios(installation_ref: UUID4, body: CancellationAuthority, response: Response,
+                user: CurrentUser=Depends(get_current_user),
+                config=Depends(configuration), pool=Depends(vehicle_pool)):
+    response.headers['Cache-Control']='no-store'
+    return run(pool,lambda conn:revocation.prepare(conn,user,config,installation_ref,body.secret))
+
+
+@router.post('/ios/installations/{installation_ref}/cancel')
+def cancel_ios(installation_ref: UUID4, body: CancellationAuthority, response: Response,
+               config=Depends(configuration), pool=Depends(vehicle_pool)):
+    # Capability-authenticated cancellation only; no data or activation authority.
+    response.headers['Cache-Control']='no-store'
+    return run(pool,lambda conn:revocation.cancel(conn,config,installation_ref,body.secret))

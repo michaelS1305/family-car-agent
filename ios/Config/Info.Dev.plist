@@ -6,6 +6,7 @@
     <key>FirebaseAppDelegateProxyEnabled</key><false/>
     <key>FirebaseMessagingAutoInitEnabled</key><false/>
     <key>FirebaseMessagingInstallationIdEnabled</key><false/>
+    <key>UIBackgroundModes</key><array><string>remote-notification</string></array>
     <!-- PUBLIC Dev publishable key only. No service-role / Apple private keys. -->
     <key>FCASupabasePublishableKey</key><string>sb_publishable_vIB_0P9H5WAnadTKRVr4mw_bd0u2K3h</string>
     <key>CFBundleURLTypes</key><array><dict>

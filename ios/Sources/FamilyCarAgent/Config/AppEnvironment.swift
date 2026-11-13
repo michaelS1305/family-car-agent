@@ -15,8 +15,7 @@ enum AppEnvironment: Sendable {
 
     /// Fail closed rather than silently using Dev services from another application.
     static func current(bundleIdentifier: String? = Bundle.main.bundleIdentifier) throws -> Self {
-        guard bundleIdentifier == Self.development.bundleIdentifier
-            || bundleIdentifier == "XTL-255E706B.com.familycaragent.app.dev" else {
+        guard bundleIdentifier == Self.development.bundleIdentifier else {
             throw ConfigurationError.unsupportedBundleIdentifier
         }
         return .development

@@ -1,4 +1,15 @@
 import Foundation
+struct NativePushReply: Decodable, Sendable {
+    let code: String
+    let challenge_ref: UUID?
+    let expected_generation: Int?
+    let generation: Int?
+    let status: String?
+}
+protocol NativePushTransport: Sendable {
+    func nativePush(path: String, fields: [String:String], token: String?) async throws -> NativePushReply
+    func revokeNativePush(ref: UUID, generation: Int, token: String) async throws -> NativePushReply
+}
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -127,7 +138,7 @@ protocol ReservationTransport: Sendable {
     func reservationData(token: String, method: String, cancel: Bool, query: [URLQueryItem], body: Data?) async throws -> Data
 }
 
-final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTransport, VehiclesTransport, VehicleDetailsTransport, HistoryTransport, ReservationTransport, Sendable {
+final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTransport, VehiclesTransport, VehicleDetailsTransport, HistoryTransport, ReservationTransport, NativePushTransport, Sendable {
     let environment: AppEnvironment
     private let publicKey: String
     private let http: URLSession
@@ -342,9 +353,21 @@ final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTrans
         let rows = try await send([Device].self, url: url, method: "GET", body: nil, token: token, auth: false)
         return rows.contains { $0.device_ref == id && $0.platform == "ios" && $0.revoked_at == nil }
     }
+    func nativePush(path: String, fields: [String: String], token: String?) async throws -> NativePushReply {
+        guard path.hasPrefix("/api/native-push/") else { throw AuthFailure.configuration }
+        return try await send(NativePushReply.self, url: environment.backendURL.appendingPathComponent(String(path.dropFirst())),
+                              method: "POST", body: JSONEncoder().encode(fields), token: token, auth: false, timeout: 8)
+    }
+    func revokeNativePush(ref: UUID, generation: Int, token: String) async throws -> NativePushReply {
+        try await send(NativePushReply.self,
+                       url:environment.backendURL.appendingPathComponent("api/native-push/installations/\(ref)/revoke"),
+                       method:"POST",body:JSONEncoder().encode(["expected_generation":generation]),token:token,auth:false,timeout:5)
+    }
     private func send<T: Decodable & Sendable>(_ type: T.Type, url: URL, method: String,
-                                               body: Data?, token: String?, auth: Bool, appleDiagnostic: Bool = false) async throws -> T {
+                                               body: Data?, token: String?, auth: Bool, appleDiagnostic: Bool = false,
+                                               timeout: TimeInterval? = nil) async throws -> T {
         var request = URLRequest(url: url)
+        if let timeout { request.timeoutInterval = timeout }
         request.httpMethod = method; request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }

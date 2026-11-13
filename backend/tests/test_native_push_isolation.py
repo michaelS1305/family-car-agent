@@ -68,7 +68,7 @@ class IsolationTests(unittest.TestCase):
     def test_unsupported_platform_never_reaches_credentials_or_network(self):
         transport,loader=Mock(),Mock()
         provider=Fcm(CONFIG,transport=transport,loader=loader)
-        for platform in ('ios','web','ANDROID',''):
+        for platform in ('web','ANDROID',''):
             self.assertEqual(provider.send('fixture',{},expires_at=datetime.now(timezone.utc),
                 platform=platform).code,'configuration')
             conn=Mock()
@@ -85,7 +85,7 @@ class IsolationTests(unittest.TestCase):
             result=registration.confirm(conn,Mock(user_id=1),CONFIG,installation_ref=uuid4(),
                                         challenge_ref=uuid4(),nonce='fixture')
         self.assertEqual(result['code'],'REGISTRATION_UNAVAILABLE')
-        self.assertIn("platform='android'",conn.execute.call_args.args[0])
+        self.assertIn("platform IN ('android','ios')",conn.execute.call_args.args[0])
 
 
 class IsolationApiTests(unittest.TestCase):
@@ -94,7 +94,7 @@ class IsolationApiTests(unittest.TestCase):
         fixture=test_native_push_api.ApiTests()
         fixture.setUp()
         with patch.object(api,'run') as run:
-            for platform in ('ios','web',''):
+            for platform in ('web',''):
                 self.assertEqual(fixture.client.post('/api/native-push/registrations',
                     json={**fixture.body,'platform':platform}).status_code,422)
             for field in ('android_package','firebase_app_id','environment'):

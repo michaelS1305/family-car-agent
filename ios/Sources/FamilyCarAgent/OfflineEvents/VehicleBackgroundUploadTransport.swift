@@ -156,6 +156,16 @@ import UIKit
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         NativePushService.shared.failedAPNs()
     }
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable:Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        let data = userInfo.reduce(into:[String:String]()) { result, pair in
+            if let key = pair.key as? String, let value = pair.value as? String { result[key] = value }
+        }
+        Task { @MainActor in
+            await NativePushService.shared.receive(data)
+            completionHandler(.noData)
+        }
+    }
 
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
                      completionHandler: @escaping () -> Void) {

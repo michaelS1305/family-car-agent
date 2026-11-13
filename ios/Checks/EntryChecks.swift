@@ -45,6 +45,8 @@ actor TestBackend: BackendTransport {
     let profile = #"{"user_id":1,"family_id":2,"name":"Test"}"#
     let vault = TestVault(); let backend = TestBackend(); let provider = TestProvider()
     let manager = SessionManager(vault: vault, transport: TestTransport(session))
+    var invalidations = 0
+    manager.onInvalidation = { _ in invalidations += 1 }
     let model = EntryModel(sessions: manager, api: backend, providers: provider)
     await backend.reply("/api/me", profile)
     await model.login(apple: false)
@@ -55,6 +57,13 @@ actor TestBackend: BackendTransport {
     AuthCheck.check(model.screen == .ready && calls == afterResume, "ordinary resume preserves ready screen")
     model.logout()
     AuthCheck.check(model.me == nil && model.screen == .intro && vault.value == nil, "logout clears screen identity")
+    await backend.reply("/api/me", profile)
+    await model.login(apple: false)
+    let beforeInvalidation = invalidations
+    try manager.clear()
+    AuthCheck.check(invalidations == beforeInvalidation + 1, "Entry preserves existing invalidation callback")
+    AuthCheck.check(model.screen == .intro && model.me == nil && manager.session == nil,
+                    "external session invalidation immediately removes authenticated screen and cached profile")
     await backend.fail("/api/me", .rejected(403, "MISSING_ACCOUNT"))
     await model.login(apple: true)
     AuthCheck.check(model.screen == .intro && model.me == nil && vault.value == nil, "unmapped existing-account login clears session")

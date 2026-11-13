@@ -1,7 +1,7 @@
 """One bounded worker per process; PostgreSQL leases coordinate all processes.
 
 Provider calls occur between transactions. A send can race revocation/deletion
-after the last read; business pushes contain only a non-authorizing refresh hint.
+after the last read. Android uses a refresh hint; iOS uses an authorized rich alert.
 Lost leases/ambiguous sends are NOT replayed as visible notifications.
 """
 from contextlib import asynccontextmanager
@@ -73,10 +73,24 @@ def delivery_payload(pool, config, claim):
             "WHERE j.auth_user_id IN (u.auth_user_id,actor.auth_user_id))", (*claim,config.project)).fetchone()
         if not row:
             return None
+        if row[2] == 'ios':
+            from native_push_ios import alert
+            detail = (",e.scheduled_for,(r.end_time::timestamp AT TIME ZONE 'Asia/Jerusalem'),m.description"
+                      if reminders.enabled() else ',NULL::timestamptz,NULL::timestamptz,NULL::text')
+            joins = ('LEFT JOIN reservations r ON r.reservation_ref=e.reservation_ref '
+                     'LEFT JOIN vehicle_maintenance m ON m.maintenance_ref=e.maintenance_ref '
+                     if reminders.enabled() else '')
+            content = conn.execute('SELECT e.event_type,actor.name,v.display_name' + detail +
+                ' FROM native_push_deliveries d JOIN native_push_events e USING(event_ref) '
+                'JOIN users actor ON actor.id=e.actor_user_id JOIN vehicles v ON v.id=e.vehicle_id '
+                + joins + 'WHERE d.delivery_ref=%s AND d.lease_token=%s', claim).fetchone()
+            visible = alert(*content) if content else None
+            if visible is None:
+                return None
+            data = {'kind':'event','version':'1','installation_ref':str(row[4]),'alert':visible}
     token = config.open(row[0],row[1],token_context(row[3],row[4]))
-    # Never derive application data from the event. An in-flight signal is not
-    # authority to display details: clients must perform a new authorized read.
-    return token,{'kind': 'refresh', 'version': '1'},row[5],row[2]
+    # Android payload remains opaque. iOS content was authorized above.
+    return token,(data if row[2] == 'ios' else {'kind': 'refresh', 'version': '1'}),row[5],row[2]
 
 
 def finish_delivery(pool, claim, result):

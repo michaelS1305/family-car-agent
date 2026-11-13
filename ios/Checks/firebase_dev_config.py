@@ -5,7 +5,7 @@ from pathlib import Path
 import plistlib
 import re
 
-BUNDLE = "XTL-255E706B.com.familycaragent.app.dev"
+BUNDLE = "com.familycaragent.app.dev"
 PROJECT = "family-car-agent-dev"
 SENDER = "452367109329"
 SDK_VERSION = "12.19.3"

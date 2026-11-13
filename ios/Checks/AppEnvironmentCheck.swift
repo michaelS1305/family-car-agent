@@ -7,10 +7,6 @@ struct AppEnvironmentCheck {
     static func main() throws {
         let dev = try AppEnvironment.current(bundleIdentifier: "com.familycaragent.app.dev")
         precondition(dev == .development)
-        let managedDev = try AppEnvironment.current(bundleIdentifier: "XTL-255E706B.com.familycaragent.app.dev")
-        precondition(managedDev == dev)
-        precondition(managedDev.bundleIdentifier == dev.bundleIdentifier)
-        precondition(managedDev.proposedOAuthCallbackURL == dev.proposedOAuthCallbackURL)
         precondition(dev.backendURL.absoluteString == "https://family-car-agent-dev.onrender.com")
         precondition(dev.supabaseURL.absoluteString == "https://jouhqvbxhsvkluwkqmdg.supabase.co")
         precondition(dev.bundleIdentifier == "com.familycaragent.app.dev")
@@ -25,6 +21,7 @@ struct AppEnvironmentCheck {
         precondition(dev.proposedOAuthCallbackURL.host == "auth")
         precondition(dev.proposedOAuthCallbackURL.path == "/callback")
         for identifier: String? in [nil, "", "com.familycaragent.app", "other.app", "COM.FAMILYCARAGENT.APP.DEV",
+                                   "XTL-255E706B.com.familycaragent.app.dev",
                                    "XTL-255E706B.com.familycaragent.app", "XTL-OTHER.com.familycaragent.app.dev",
                                    "XTL-255E706B.com.familycaragent.app.dev.extra"] {
             do {

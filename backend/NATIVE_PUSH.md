@@ -37,9 +37,9 @@ Keep Production push disabled until its separate client and rollout are approved
 This change neither enables Android Production nor changes cloud configuration.
 Do not copy active push tables between environments. No schema migration is needed.
 
-Only Android registrations and sends are supported for now. Existing non-Android
-installations cannot confirm registration; the sender refuses them without network
-I/O. iOS requires a separately reviewed application/platform isolation design.
+Android remains data-only. iOS Development registration and rich APNs sends are
+now supported after the reviewed iOS revocation migration described below.
+iOS Production remains rejected before provider I/O.
 Firebase App ID is not independently verifiable in the existing request protocol:
 neither an environment variable nor a client claim authenticates it. Supabase JWT
 verification, installation ownership, expiring challenge proof, generation and
@@ -74,6 +74,8 @@ existing `get_current_user`. Owner/family IDs cannot be supplied. Responses are
 `Cache-Control: no-store`. Invalid bodies are sanitized by the application's
 validation handler; tokens/nonces are never reflected. Configuration failure is
 503 `NATIVE_PUSH_UNAVAILABLE`; invalid body is 422 `INVALID_NATIVE_PUSH_REQUEST`.
+The iOS cancellation-only capability endpoint described below is the explicit
+exception to Bearer authentication; it cannot read data or register installations.
 
 ### POST /registrations
 
@@ -410,3 +412,83 @@ Check application logs for sanitized scheduler failures after activation; malfor
 legacy timestamp text or a large source scan hitting the 3s statement deadline
 can prevent a pass. No claim of indexed large-scale scheduling throughput or
 physical-device reminder reliability is made by local tests.
+
+
+## iOS Phase 2B (local implementation; not deployed)
+
+Development identity is `com.familycaragent.app.dev`, Apple team `GT43M39TLK`.
+The previous XTool-prefixed application is a different installed identity and
+Keychain namespace. Updating signing does not migrate its login or pending
+revocations. Do not promise session preservation across this Bundle ID change.
+
+### Registration and cancellation
+
+Before registration, the client durably stores a new UUID and 256-bit random
+cancellation secret in a separate device-only, after-first-unlock Keychain item.
+`POST /ios/installations/{ref}/prepare` uses the normal JWT and records only a
+domain-separated SHA-256 digest. It cannot attach to an existing installation.
+Then the existing registration/challenge/confirm protocol proves token receipt.
+The secret never authorizes reads, activation, other installations or vehicle APIs.
+
+`POST /ios/installations/{ref}/cancel` uses this cancellation capability instead
+of a JWT; no authentication token is retained for deferred logout cancellation.
+It terminally revokes all token generations and pending challenges for that iOS
+installation, even if cancellation precedes registration. Tombstones remain.
+Owner transaction locks serialize registration, confirmation and cancellation.
+New iOS authorities are limited to 10 per user per 10 minutes, including revoked
+rows, and at most 20 non-revoked authorities (prepared authorities included).
+iOS installation admission excludes only terminally revoked iOS rows. Android
+still counts all installation rows, exactly as before; therefore accumulated iOS
+tombstones can still count against a subsequent Android registration quota.
+
+Logout succeeds after durable retirement OR confirmed server cancellation of
+all known authorities. If both fail, explicit logout keeps the login and reports
+an error with retry instructions. Offline retirement is retried on connectivity
+or foreground activity, including after process restoration. iOS scheduling is
+not guaranteed while terminated/force-quit; the accepted offline revocation window
+lasts until cancellation actually reaches the server. Already handed-off rich
+notifications cannot be recalled. Delivered notifications are removed locally
+where possible. Invalidated sessions are not refreshed merely for cancellation.
+If Supabase/Apple has already invalidated the session, account access is blocked
+even when both persistence and server cancellation fail. In-memory cancellation
+is retried while the process remains available; a crash before durable storage
+or confirmed cancellation can leave the server registration active. This residual
+risk is explicitly accepted; an invalid session is never restored for retry.
+
+### Rich content and provider boundary
+
+TAKE/RETURN: authoritative actor name and vehicle display name.
+Reservation: vehicle and scheduled start, plus authoritative end when available.
+Maintenance: vehicle, date and description when available.
+Missing mandatory names/timing suppress content rather than inventing it.
+The existing eligibility checks, outbox, retries and generation fences remain.
+APNs alerts use development topic, priority 10 and bounded lifetime (at most 120s);
+registration challenges are silent priority 5 with content-available. Silent
+challenge delivery is not guaranteed by iOS: verify registration on device.
+FCM acceptance is not device-delivery proof. No payload authorizes navigation.
+Android continues to receive only its existing refresh data with package restriction.
+
+### Deployment prerequisites (owner actions, not executed)
+
+1. Review `supabase/manual_migrations/2026111201_native_push_ios_revocation.sql`
+   against Dev foundation and roles. Apply on Dev only after approval, before new
+   Backend code. Local tests use isolated PostgreSQL schemas; no live DB verified.
+2. Confirm RLS enabled, no client-role privileges or publication for the new table.
+   Preserve all existing encryption/fingerprint keys and rows. Do not delete
+   tombstones or roll back cancellation support while installations rely on it.
+3. Deploy reviewed Backend only with separate approval. Existing Dev configuration
+   and service-account authority are reused; Production iOS is not enabled.
+4. The operator reports the new Firebase Dev registration, matching APNs key and
+   `FCA_IOS_DEV_GOOGLE_SERVICE_INFO_BASE64` update completed (2026-11-12).
+   These external settings have not been independently inspected or verified
+   end-to-end. Validators reject old/mismatched config. Keep the old Firebase
+   registration until signed-device end-to-end validation succeeds.
+5. Signed build is a manual `ios.yml` dispatch on develop with
+   `build_signed_ipa=true` and `FCA_DEV_SIGN_ENABLED=true`. The workflow maps the
+   new certificate secrets into legacy `FCA_PROBE_*` variable names intentionally.
+   No workflow was triggered by this work. Real certificate/profile matching,
+   signing, App Intents discovery and installation remain remote/device checks.
+6. On iPhone test all four events, foreground/background, permission denial,
+   token rotation, repeated login/logout, offline logout/reconnect/relaunch,
+   account switching, expired refresh sessions, and the double-failure retry UI.
+   Ensure no secrets appear in diagnostics. Run Android Dev regression separately.

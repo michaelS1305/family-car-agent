@@ -81,7 +81,7 @@ class Fcm:
 
     def send(self, token, data, *, expires_at, platform):
         # Never let an untrusted platform select an unrestricted send path.
-        if platform != 'android':
+        if platform not in ('android','ios') or (platform == 'ios' and self.config.environment != 'dev'):
             return Result('configuration')
         try:
             access = self._access_token()
@@ -91,6 +91,20 @@ class Fcm:
             message = {'token': token, 'data': data,
                 'android': {'ttl': f'{remaining}s', 'priority': 'high',
                             'restricted_package_name': self.config.android_package}}
+            if platform == 'ios':
+                from native_push_ios import TOPIC
+                challenge = data.get('kind') == 'registration_challenge'
+                if not challenge and not isinstance(data.get('alert'),dict):
+                    return Result('invalid_payload')
+                aps = {'content-available':1} if challenge else {'alert':data['alert'],'sound':'default'}
+                message = {'token':token,
+                    'data':{key:value for key,value in data.items() if key != 'alert'},
+                    'apns':{'headers':{'apns-topic':TOPIC,
+                        'apns-push-type':'background' if challenge else 'alert',
+                        'apns-priority':'5' if challenge else '10',
+                        'apns-expiration':str(int(self.clock())+min(remaining,120))},'payload':{'aps':aps}}}
+                if len(json.dumps(message,ensure_ascii=False).encode('utf-8')) > 3800:
+                    return Result('invalid_payload')
             response = self.http.post(
                 f'https://fcm.googleapis.com/v1/projects/{self.config.project}/messages:send',
                 json={'message': message}, headers={'Authorization': 'Bearer ' + access},

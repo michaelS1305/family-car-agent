@@ -46,9 +46,13 @@ def key_cohort(conn, config):
 
 
 def begin(conn, user, config, *, installation_ref, request_id, platform, token):
-    if platform != 'android':
+    if platform not in ('android', 'ios') or (platform == 'ios' and config.environment != 'dev'):
         return response('REGISTRATION_UNAVAILABLE')
     scope(conn, user)
+    if platform == 'ios':
+        from native_push_revocation import permitted
+        if not permitted(conn,user.user_id,config.project,installation_ref):
+            return response('REGISTRATION_UNAVAILABLE')
     key_cohort(conn,config)
     now = conn.execute('SELECT clock_timestamp()').fetchone()[0]
     fingerprint = config.fingerprint(token)
@@ -74,7 +78,12 @@ def begin(conn, user, config, *, installation_ref, request_id, platform, token):
                          or installation[2] != config.project):
         return response('REGISTRATION_UNAVAILABLE')
     if not installation:
-        count = conn.execute('SELECT count(*) FROM native_push_installations WHERE user_id=%s',
+        quota = (' AND NOT (platform=\'ios\' AND status=\'revoked\' AND EXISTS '
+                 '(SELECT 1 FROM native_push_ios_revocations r '
+                 'WHERE r.installation_ref=native_push_installations.installation_ref '
+                 'AND r.user_id=native_push_installations.user_id AND r.revoked_at IS NOT NULL))'
+                 if platform == 'ios' else '')
+        count = conn.execute('SELECT count(*) FROM native_push_installations WHERE user_id=%s' + quota,
                              (user.user_id,)).fetchone()[0]
         if count >= 20:
             return response('INSTALLATION_LIMIT')
@@ -107,11 +116,15 @@ def begin(conn, user, config, *, installation_ref, request_id, platform, token):
 
 def confirm(conn, user, config, *, installation_ref, challenge_ref, nonce):
     scope(conn, user)
-    installation = conn.execute('SELECT generation,status FROM native_push_installations '
-        "WHERE installation_ref=%s AND user_id=%s AND provider_project=%s AND platform='android' FOR UPDATE",
+    installation = conn.execute('SELECT generation,status,platform FROM native_push_installations '
+        "WHERE installation_ref=%s AND user_id=%s AND provider_project=%s AND platform IN ('android','ios') FOR UPDATE",
         (installation_ref,user.user_id,config.project)).fetchone()
     if not installation:
         return response('REGISTRATION_UNAVAILABLE')
+    if installation[2] == 'ios':
+        from native_push_revocation import permitted
+        if config.environment != 'dev' or not permitted(conn,user.user_id,config.project,installation_ref):
+            return response('REGISTRATION_UNAVAILABLE')
     challenge = conn.execute('SELECT status,expected_generation,expires_at,verify_attempts,nonce_hash,'
         'candidate_token_ciphertext,candidate_fingerprint,encryption_key_id,activated_generation '
         'FROM native_push_registration_challenges WHERE challenge_ref=%s AND installation_ref=%s AND user_id=%s FOR UPDATE',
@@ -160,6 +173,15 @@ def confirm(conn, user, config, *, installation_ref, challenge_ref, nonce):
 
 def revoke(conn, user, config, installation_ref, expected_generation):
     scope(conn,user)
+    ios = conn.execute("SELECT 1 FROM native_push_installations WHERE installation_ref=%s "
+        "AND user_id=%s AND provider_project=%s AND platform='ios' FOR UPDATE",
+        (installation_ref,user.user_id,config.project)).fetchone()
+    if ios:
+        # A user's explicit iOS retirement is terminal across token generations.
+        conn.execute('UPDATE native_push_ios_revocations SET revoked_at=COALESCE(revoked_at,clock_timestamp()) '
+                     'WHERE installation_ref=%s AND user_id=%s', (installation_ref,user.user_id))
+        expected_generation = conn.execute('SELECT generation FROM native_push_installations '
+            'WHERE installation_ref=%s', (installation_ref,)).fetchone()[0]
     changed = conn.execute("UPDATE native_push_installations SET status='revoked',generation=generation+1,"
         'token_ciphertext=NULL,token_fingerprint=NULL,encryption_key_id=NULL,revoked_at=clock_timestamp(),'
         "updated_at=clock_timestamp() WHERE installation_ref=%s AND user_id=%s AND generation=%s "
