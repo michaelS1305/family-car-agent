@@ -13,6 +13,8 @@ import sys
 import threading
 import time
 
+from native_push_diagnostics import Channel
+
 PASS_SECONDS = 20.0
 REAP_SECONDS = 1.0
 log = logging.getLogger(__name__)
@@ -58,10 +60,11 @@ class Supervisor:
         if self.quarantined or self.child is not None or stop.is_set():
             return 'stopped'
         deadline = time.monotonic() + self.seconds
+        diagnostics = Channel()
         try:
             self.child = subprocess.Popen(self.command, cwd=str(Path(__file__).resolve().parent),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                close_fds=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                env=diagnostics.environment(), close_fds=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             while self.child.poll() is None:
                 if stop.is_set() or time.monotonic() >= deadline:
                     return 'uncertain'
@@ -71,7 +74,11 @@ class Supervisor:
         except OSError:
             return 'failed'
         finally:
-            await self.close()
+            try:
+                await self.close()
+                diagnostics.report()
+            finally:
+                diagnostics.close()
 
 
 class ChildConnections:

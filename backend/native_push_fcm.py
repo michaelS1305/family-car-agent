@@ -13,6 +13,7 @@ import jwt
 import requests
 
 from native_push_security import ConfigurationError
+import native_push_diagnostics as diagnostics
 
 TOKEN_URL = 'https://oauth2.googleapis.com/token'
 SCOPE = 'https://www.googleapis.com/auth/firebase.messaging'
@@ -49,6 +50,8 @@ class Fcm:
             self.http.trust_env = False
         self._lock = threading.Lock()
         self._token, self._until = None, 0
+        self.diagnostic_http_status = None
+        self.diagnostic_fcm_code = None
 
     def _access_token(self):
         with self._lock:
@@ -80,6 +83,10 @@ class Fcm:
                 raise ConfigurationError() from None
 
     def send(self, token, data, *, expires_at, platform):
+        self.diagnostic_http_status = None
+        self.diagnostic_fcm_code = None
+        diagnostic = (diagnostics.enabled() and self.config.environment == 'dev'
+                      and platform == 'ios' and data.get('kind') == 'registration_challenge')
         # Never let an untrusted platform select an unrestricted send path.
         if platform not in ('android','ios') or (platform == 'ios' and self.config.environment != 'dev'):
             return Result('configuration')
@@ -109,6 +116,8 @@ class Fcm:
                 f'https://fcm.googleapis.com/v1/projects/{self.config.project}/messages:send',
                 json={'message': message}, headers={'Authorization': 'Bearer ' + access},
                 timeout=(3, 5), allow_redirects=False)
+            if diagnostic:
+                self.diagnostic_http_status = response.status_code
             if response.status_code == 200:
                 return Result('accepted')
             try:
@@ -117,6 +126,8 @@ class Fcm:
                          and item.get('@type') == 'type.googleapis.com/google.firebase.fcm.v1.FcmError'}
             except (ValueError, AttributeError, TypeError):
                 codes = set()
+            if diagnostic:
+                self.diagnostic_fcm_code = next(iter(sorted(codes & diagnostics.FCM_CODES)), None)
             if 'UNREGISTERED' in codes:
                 return Result('unregistered')
             if response.status_code in (401, 403):

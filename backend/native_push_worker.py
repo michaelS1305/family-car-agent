@@ -11,6 +11,7 @@ import logging
 from uuid import uuid4
 
 from native_push_fcm import Result
+import native_push_diagnostics as diagnostics
 from native_push_outbox import enabled, wakeup
 from native_push_registration import ERASE
 from native_push_security import Config, ConfigurationError, token_context, nonce_context
@@ -169,10 +170,14 @@ def challenge_pass(pool, config, provider):
         conn.execute("UPDATE native_push_registration_challenges SET lease_token=%s,"
             "lease_until=LEAST(expires_at,clock_timestamp()+interval '30 seconds'),send_attempts=send_attempts+1 "
             "WHERE challenge_ref=%s", (lease,row[0]))
+    stage = 'credentials_preparation'
+    cancelled = False
     try:
         provider.prepare()
+        stage = 'token_decryption'
         token = config.open(row[3],row[4],token_context(row[2],row[1]))
         nonce = config.open(row[5],row[4],nonce_context(row[2],row[0]))
+        stage = 'eligibility_validation'
         with _transaction(pool) as conn:
             _limits(conn)
             valid = conn.execute("SELECT 1 FROM native_push_registration_challenges c "
@@ -182,6 +187,8 @@ def challenge_pass(pool, config, provider):
                 "AND i.generation=c.expected_generation AND i.user_id=c.user_id AND i.provider_project=%s "
                 "AND u.family_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM account_deletion_jobs j WHERE j.auth_user_id=u.auth_user_id)",
                 (row[0],lease,config.project)).fetchone()
+        if valid:
+            stage = 'fcm_request_response'
         result = provider.send(token, {'kind':'registration_challenge','challenge_ref':str(row[0]),
             'installation_ref':str(row[1]),'nonce':nonce,'generation':str(row[8])},
             expires_at=row[6],platform=row[7]) if valid else Result('identity_unavailable')
@@ -199,8 +206,14 @@ def challenge_pass(pool, config, provider):
                 "next_attempt_at=LEAST(expires_at-interval '1 microsecond',clock_timestamp()+(%s * interval '1 second')) "
                 "WHERE challenge_ref=%s AND lease_token=%s AND status='pending'", (max(60,result.retry_after),row[0],lease))
         else:
-            conn.execute("UPDATE native_push_registration_challenges SET status='cancelled'," + ERASE +
+            cursor = conn.execute("UPDATE native_push_registration_challenges SET status='cancelled'," + ERASE +
                          " WHERE challenge_ref=%s AND lease_token=%s AND status='pending'", (row[0],lease))
+            cancelled = cursor.rowcount == 1
+    diagnostics.emit(config, row[7], {
+        'stage': stage, 'result': result.code, 'cancelled': cancelled,
+        'http_status': getattr(provider, 'diagnostic_http_status', None) if stage == 'fcm_request_response' else None,
+        'fcm_code': getattr(provider, 'diagnostic_fcm_code', None) if stage == 'fcm_request_response' else None,
+    })
     return True
 
 
