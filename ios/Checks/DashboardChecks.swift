@@ -44,6 +44,16 @@ import Foundation
         }
         nav.open(.history); nav.synchronize(identity)
         check(nav.path == [.history], "unchanged identity retains navigation")
+        nav.back(); nav.open(.settings)
+        nav.openFromSettings(.family)
+        check(nav.path == [.settings, .family] && !nav.vehicleHelpPresented, "Settings opens existing Family")
+        nav.back(); check(nav.path == [.settings], "Family returns to Settings")
+        nav.openFromSettings(.vehicles)
+        check(nav.path == [.settings, .vehicles] && nav.vehicleHelpPresented, "Settings vehicle help")
+        nav.vehicleHelpPresented = false
+        check(nav.path.last == .vehicles, "dismissing help stays on Vehicles")
+        nav.back(); nav.back(); nav.open(.vehicles)
+        check(!nav.vehicleHelpPresented, "ordinary Vehicles has no alert")
         nav.synchronize(ChatIdentity(owner: identity.owner, user: 1, family: 3, generation: 0, version: 0))
         check(nav.isRoot, "family change clears navigation")
         nav.open(.vehicles)

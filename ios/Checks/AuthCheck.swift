@@ -214,9 +214,53 @@ actor TestTransport: AuthTransport {
         try await runVehiclesSessionChecks()
         try await runHistorySessionChecks()
         try await runBookingSessionChecks()
+        try await runSettingsSessionChecks()
         try await runEntryUIChecks()
         print("Auth checks passed: \(checks). Mock identities only; no provider/device claims.")
     }
+}
+
+actor SettingsSessionBackend: BackendTransport, SettingsProfileTransport {
+    let owner: UUID
+    var calls = 0
+    var paused = false
+    var continuation: CheckedContinuation<Void, Never>?
+    init(owner: UUID) { self.owner = owner }
+    func pause() { paused = true }
+    func release() { continuation?.resume(); continuation = nil; paused = false }
+    func backend<T: Decodable & Sendable>(_ type: T.Type, path: String, token: String, fields: [String: Field]?) async throws -> T {
+        guard path == "/api/me" else { throw AuthFailure.invalidResponse }
+        return try JSONDecoder().decode(type, from: Data(#"{"user_id":1,"family_id":2,"name":"Synthetic Name"}"#.utf8))
+    }
+    func settingsProfile(token: String) async throws -> SettingsAuthProfile {
+        calls += 1
+        if calls == 1 { throw AuthFailure.rejected(401, "") }
+        if paused { await withCheckedContinuation { continuation = $0 } }
+        return SettingsAuthProfile(id: owner, email: " test@example.invalid ")
+    }
+}
+@MainActor func runSettingsSessionChecks() async throws {
+    let session = AuthSession(owner: UUID(), accessToken: "synthetic", refreshToken: "synthetic", expires: Date().addingTimeInterval(3600))
+    let auth = TestTransport(session), backend = SettingsSessionBackend(owner: session.owner)
+    let entry = EntryModel(sessions: SessionManager(vault: TestVault(), transport: auth), api: backend, providers: TestProvider())
+    await entry.login(apple: false)
+    let identity = entry.chatIdentity!
+    AuthCheck.check(try await entry.settingsEmail(identity: identity) == "test@example.invalid", "Settings authenticated email")
+    let profileCalls = await backend.calls, refreshCalls = await auth.calls
+    AuthCheck.check(profileCalls == 2 && refreshCalls == 2, "Settings uses shared refresh after 401")
+    AuthCheck.check(try SettingsAuthProfile(id: session.owner, email: nil).email(for: session.owner) == nil, "missing email safe")
+    AuthCheck.check(try SettingsAuthProfile(id: session.owner, email: " ").email(for: session.owner) == nil, "blank email safe")
+    await AuthCheck.rejects("foreign profile rejected", .invalidResponse) {
+        _ = try SettingsAuthProfile(id: UUID(), email: "other@example.invalid").email(for: session.owner)
+    }
+    await backend.pause()
+    let late = Task { try await entry.settingsEmail(identity: identity) }
+    while await backend.continuation == nil { await Task.yield() }
+    entry.logout(); await backend.release()
+    await AuthCheck.rejects("late Settings result fenced", .stale) { _ = try await late.value }
+    let before = await backend.calls
+    await AuthCheck.rejects("old Settings identity rejected", .stale) { _ = try await entry.settingsEmail(identity: identity) }
+    AuthCheck.check(await backend.calls == before, "no request for old identity")
 }
 
 

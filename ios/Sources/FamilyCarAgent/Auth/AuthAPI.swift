@@ -127,6 +127,25 @@ protocol BackendTransport: Sendable {
                                           fields: [String: Field]?) async throws -> T
 }
 
+struct SettingsAuthProfile: Decodable, Sendable {
+    let id: UUID
+    let email: String?
+    func email(for owner: UUID) throws -> String? {
+        guard id == owner else { throw AuthFailure.invalidResponse }
+        let value = email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value?.isEmpty == false ? value : nil
+    }
+}
+protocol SettingsProfileTransport: Sendable {
+    func settingsProfile(token: String) async throws -> SettingsAuthProfile
+}
+extension AuthAPI: SettingsProfileTransport {
+    func settingsProfile(token: String) async throws -> SettingsAuthProfile {
+        try await send(SettingsAuthProfile.self, url: environment.supabaseURL.appendingPathComponent("auth/v1/user"),
+                       method: "GET", body: nil, token: token, auth: true)
+    }
+}
+
 private final class NoRedirect: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,

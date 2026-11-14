@@ -49,12 +49,19 @@ struct AuthenticatedAppShell: View {
                 FamilyScreen(entry: entry, back: { navigation.back() })
             } else if destination == .vehicles {
                 VehiclesScreen(model: vehicles, back: { navigation.back() })
+                    .alert("זיהוי וחיבור אוטומטי", isPresented: $navigation.vehicleHelpPresented) {
+                        Button("הבנתי", role: .cancel) { navigation.vehicleHelpPresented = false }
+                    } message: {
+                        Text("כדי להגדיר זיהוי וחיבור אוטומטי, בחר רכב מרשימת הרכבים. ניתן להגדיר את האפשרות עבור כל רכב בנפרד.")
+                    }
             } else if destination == .history {
                 HistoryScreen(entry: entry, back: { navigation.back() })
             } else if destination == .bookingCenter {
                 BookingCenterPreview(model: bookings, back: { navigation.back() })
             } else if destination == .settings {
-                SettingsScreen(back: { navigation.back() })
+                SettingsScreen(entry: entry, back: { navigation.back() },
+                               openFamily: { navigation.openFromSettings(.family) },
+                               openVehicles: { navigation.openFromSettings(.vehicles) })
             } else {
                 DashboardDestinationPlaceholder(destination: destination, back: { navigation.back() })
                     .toolbar(.visible, for: .navigationBar)
@@ -70,7 +77,7 @@ struct AuthenticatedAppShell: View {
             bookings.synchronize()
         }
         .onChange(of: navigation.path) { _, path in
-            if !path.contains(.vehicles) { vehicles.stop() }
+            if !path.contains(.vehicles) { vehicles.stop(); navigation.vehicleHelpPresented = false }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
             guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }

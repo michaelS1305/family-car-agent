@@ -1,9 +1,13 @@
 import SwiftUI
 
-/// Visual scaffold only. No account, permission or preference state is read or written.
+/// Account display and existing destinations only; other settings remain unavailable.
 struct SettingsScreen: View {
+    @ObservedObject var entry: EntryModel
     let back: () -> Void
-    @ScaledMetric(relativeTo: .body) private var iconSize = 32
+    let openFamily: () -> Void
+    let openVehicles: () -> Void
+    @State private var email: String?
+    @State private var emailIdentity: ChatIdentity?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,6 +22,7 @@ struct SettingsScreen: View {
                 .accessibilityLabel("חזרה לדשבורד")
                 AppAssetImage(path: ChatStyle.wordmark)
                     .frame(maxWidth: 240).frame(height: 58)
+                    .blendMode(.multiply)
                     .accessibilityHidden(true)
                 Color.clear.frame(width: 48, height: 48).accessibilityHidden(true)
             }.padding(.horizontal, 18).frame(height: 76)
@@ -27,15 +32,25 @@ struct SettingsScreen: View {
                     AppAssetImage(path: "icons/archive/settings_icon.png")
                         .frame(width: 200, height: 200)
                         .accessibilityLabel("הגדרות").accessibilityAddTraits(.isHeader)
-                    Text("תצוגה מקדימה — האפשרויות במסך זה עדיין אינן פעילות")
+                    Text("אפשרויות התצוגה, ההרשאות ופעולות החשבון עדיין אינן פעילות")
                         .font(.footnote).foregroundStyle(SettingsPalette.secondary)
                         .multilineTextAlignment(.center)
                     SettingsCard(title: "חשבון") {
-                        row("שם", icon: "user", value: "—")
+                        row("שם", icon: "user", value: entry.chatIdentity == nil ? "—" : entry.me?.name.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? "—")
                         Divider()
-                        row("המשפחה שלי", icon: "family", detail: "פתיחת ניהול המשפחה", chevron: true)
+                        Button(action: openFamily) {
+                            row("המשפחה שלי", icon: "family", detail: "פתיחת ניהול המשפחה", chevron: true)
+                        }.buttonStyle(.plain)
                         Divider()
-                        row("כתובת אימייל", icon: "envelope", value: "—")
+                        HStack(spacing: 12) {
+                            Text(emailIdentity == entry.chatIdentity ? email ?? "—" : "—")
+                                .font(.body).foregroundStyle(SettingsPalette.secondary)
+                                .environment(\.layoutDirection, .leftToRight)
+                                .multilineTextAlignment(.trailing)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            icon("envelope")
+                        }.padding(.vertical, 16).accessibilityLabel("אימייל: \(emailIdentity == entry.chatIdentity ? email ?? "לא זמין" : "לא זמין")")
                     }
                     SettingsCard(title: "תצוגה") {
                         HStack(spacing: 12) {
@@ -58,10 +73,12 @@ struct SettingsScreen: View {
                         Divider()
                         row("התראות", icon: "bell", chevron: true, permission: true)
                         Divider()
-                        row("זיהוי וחיבור אוטומטי", icon: "car", chevron: true)
+                        Button(action: openVehicles) {
+                            row("זיהוי וחיבור אוטומטי", icon: "single_car", chevron: true)
+                        }.buttonStyle(.plain)
                     }
                     SettingsCard(title: "תנאי שימוש ופרטיות") {
-                        row("תנאי שימוש", icon: "history", chevron: true)
+                        row("תנאי שימוש", icon: "about", chevron: true)
                         Divider()
                         row("מדיניות פרטיות", icon: "privacy", chevron: true)
                     }
@@ -82,11 +99,17 @@ struct SettingsScreen: View {
         .foregroundStyle(SettingsPalette.ink)
         .environment(\.layoutDirection, .rightToLeft)
         .toolbar(.hidden, for: .navigationBar)
+        .task(id: entry.chatIdentity) {
+            email = nil; emailIdentity = nil
+            guard let identity = entry.chatIdentity else { return }
+            let value = try? await entry.settingsEmail(identity: identity)
+            guard !Task.isCancelled, entry.chatIdentity == identity else { return }
+            email = value; emailIdentity = identity
+        }
     }
 
     private func icon(_ name: String) -> some View {
-        AppAssetImage(path: "icons/archive/\(name)_icon.png")
-            .frame(width: iconSize, height: iconSize).accessibilityHidden(true)
+        SettingsRowIcon(name: name)
     }
 
     private func row(_ title: String, icon name: String, value: String? = nil,
@@ -115,6 +138,37 @@ struct SettingsScreen: View {
             .overlay(RoundedRectangle(cornerRadius: 18).stroke(SettingsPalette.destructive.opacity(0.18)))
             .accessibilityElement(children: .combine)
             .accessibilityHint("לא זמין בתצוגה המקדימה")
+    }
+}
+
+/// Alpha bounds measured from the unmodified 512px archive assets.
+/// Normalize painted extent to the envelope's original 428/512 × 32pt extent.
+private struct SettingsRowIcon: View {
+    let name: String
+    @ScaledMetric(relativeTo: .body) private var slot: CGFloat = 32
+    private static let bounds: [String: CGRect] = [
+        "envelope": CGRect(x: 20, y: 128, width: 428, height: 259),
+        "user": CGRect(x: 169, y: 173, width: 174, height: 195),
+        "family": CGRect(x: 131, y: 154, width: 212, height: 245),
+        "theme": CGRect(x: 76, y: 95, width: 389, height: 338),
+        "location": CGRect(x: 107, y: 103, width: 271, height: 318),
+        "bell": CGRect(x: 85, y: 66, width: 342, height: 386),
+        "single_car": CGRect(x: 116, y: 163, width: 280, height: 207),
+        "about": CGRect(x: 122, y: 107, width: 270, height: 326),
+        "privacy": CGRect(x: 90, y: 89, width: 332, height: 348),
+        "info": CGRect(x: 82, y: 85, width: 347, height: 388),
+        "support": CGRect(x: 48, y: 35, width: 428, height: 399),
+        "logout": CGRect(x: 131, y: 111, width: 279, height: 294),
+        "delete_account": CGRect(x: 103, y: 91, width: 315, height: 342)
+    ]
+    var body: some View {
+        let rect = Self.bounds[name] ?? CGRect(x: 0, y: 0, width: 512, height: 512)
+        let scale = (slot * 428 / 512) / max(rect.width, rect.height)
+        AppAssetImage(path: "icons/archive/\(name)_icon.png")
+            .frame(width: 512 * scale, height: 512 * scale)
+            .offset(x: (256 - rect.midX) * scale, y: (256 - rect.midY) * scale)
+            .frame(width: slot, height: slot)
+            .accessibilityHidden(true)
     }
 }
 

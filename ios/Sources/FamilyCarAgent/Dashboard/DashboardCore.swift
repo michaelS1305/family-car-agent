@@ -54,15 +54,24 @@ struct DashboardLayout {
 
 struct DashboardNavigation {
     var path: [DashboardDestination] = []
+    var vehicleHelpPresented = false
     private var identity: ChatIdentity?
     var isRoot: Bool { path.isEmpty }
     mutating func synchronize(_ current: ChatIdentity?) {
         guard current != identity else { return }
-        identity = current; path = []
+        identity = current; path = []; vehicleHelpPresented = false
     }
     mutating func open(_ destination: DashboardDestination) {
         guard identity != nil, path.isEmpty else { return }
         path = [destination]
     }
-    mutating func back() { path = [] }
+    mutating func openFromSettings(_ destination: DashboardDestination) {
+        guard identity != nil, path == [.settings], [.family, .vehicles].contains(destination) else { return }
+        path.append(destination)
+        vehicleHelpPresented = destination == .vehicles
+    }
+    mutating func back() {
+        if !path.isEmpty { path.removeLast() }
+        vehicleHelpPresented = false
+    }
 }

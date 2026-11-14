@@ -42,6 +42,23 @@ import Combine
                             generation: sessions.generation, version: version)
     }
     var vehiclesIdentity: ChatIdentity? { chatIdentity }
+    func settingsEmail(identity: ChatIdentity) async throws -> String? {
+        guard let transport = api as? any SettingsProfileTransport, let sessions else { throw AuthFailure.configuration }
+        func check() throws {
+            try Task.checkCancellation()
+            guard chatIdentity == identity else { throw AuthFailure.stale }
+        }
+        func attempt(force: Bool) async throws -> String? {
+            try check()
+            let token = try await sessions.access(owner: identity.owner, force: force)
+            try check()
+            let profile = try await transport.settingsProfile(token: token)
+            try check()
+            return try profile.email(for: identity.owner)
+        }
+        do { return try await attempt(force: false) }
+        catch AuthFailure.rejected(401, _) { try check(); return try await attempt(force: true) }
+    }
     func reservationData(identity: ChatIdentity, method: String, cancel: Bool, query: [URLQueryItem], body: Data?) async throws -> Data {
         guard let transport = api as? any ReservationTransport, let sessions else { throw AuthFailure.configuration }
         func check() throws {
