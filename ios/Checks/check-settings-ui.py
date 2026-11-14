@@ -15,9 +15,24 @@ positions = [screen.index(f'SettingsCard(title: "{title}")') for title in sectio
 assert positions == sorted(positions)
 assert 'ScrollView {' in screen and '.rightToLeft' in screen
 assert 'Button(action: back)' in screen
-assert len(re.findall(r'\bButton\s*\(', screen)) == 3
-assert '.constant(false)).labelsHidden().disabled(true)' in screen
-for forbidden in ['@AppStorage', 'SessionManager', 'AuthAPI', 'openURL', 'requestAuthorization']:
+assert 'Button(action: logout)' in screen and '.disabled(entry.busy)' in screen
+assert 'logout: entry.logout)' in shell
+assert 'אפשרויות התצוגה, ההרשאות ופעולות החשבון עדיין אינן פעילות' not in screen
+assert '.offset(y: -15).frame(height: 108)' in screen
+assert '.task(id: scenePhase)' in screen and 'scenePhase == .active' in screen
+assert 'CLLocationManager().authorizationStatus == .authorizedAlways' in screen
+assert 'UNUserNotificationCenter.current().notificationSettings()' in screen
+assert 'notificationsEnabled = settings.authorizationStatus == .authorized' in screen
+assert '.authorizedWhenInUse' not in screen and '.provisional' not in screen and '.ephemeral' not in screen
+assert 'UIApplication.openSettingsURLString' in screen
+assert 'openURL(url) { accepted in settingsOpenFailed = !accepted }' in screen
+assert 'permissionRow("מיקום", icon: "location", enabled: locationEnabled)' in screen
+assert 'permissionRow("התראות", icon: "bell", enabled: notificationsEnabled)' in screen
+assert 'Color.green' in screen and 'Toggle(' not in screen
+assert '.accessibilityValue(enabled ? "פעיל" : "לא פעיל")' in screen
+for forbidden in ['@AppStorage', 'SessionManager', 'AuthAPI', 'requestAuthorization',
+                  'requestAlwaysAuthorization', 'requestWhenInUseAuthorization', 'startUpdatingLocation',
+                  'registerForRemoteNotifications', 'finishLogout', 'sessions.clear']:
     assert forbidden not in screen, forbidden
 assert 'icon: "about"' in screen and 'icon: "history"' not in screen
 assert '.blendMode(.multiply)' in screen
@@ -31,4 +46,4 @@ assets = root / 'Sources/FamilyCarAgent/Resources/AppAssets/icons/archive'
 names = set(re.findall(r'icon: "([a-z_]+)"', screen)) | {'settings', 'theme'}
 for name in names:
     assert (assets / f'{name}_icon.png').is_file(), name
-print('PASS: Settings assets, normalized icons, account display, routes and inactive permission/actions (static)')
+print('PASS: Settings assets/header, account/routes, system-only permission indicators and shared logout (static; device validation required)')

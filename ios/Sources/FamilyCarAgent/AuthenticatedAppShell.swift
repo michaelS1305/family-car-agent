@@ -61,7 +61,7 @@ struct AuthenticatedAppShell: View {
             } else if destination == .settings {
                 SettingsScreen(entry: entry, back: { navigation.back() },
                                openFamily: { navigation.openFromSettings(.family) },
-                               openVehicles: { navigation.openFromSettings(.vehicles) })
+                               openVehicles: { navigation.openFromSettings(.vehicles) }, logout: entry.logout)
             } else {
                 DashboardDestinationPlaceholder(destination: destination, back: { navigation.back() })
                     .toolbar(.visible, for: .navigationBar)

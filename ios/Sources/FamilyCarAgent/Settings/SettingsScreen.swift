@@ -1,11 +1,19 @@
 import SwiftUI
+import CoreLocation
+import UserNotifications
 
-/// Account display and existing destinations only; other settings remain unavailable.
+/// Account, system permission indicators and shared logout; remaining actions stay unavailable.
 struct SettingsScreen: View {
     @ObservedObject var entry: EntryModel
     let back: () -> Void
     let openFamily: () -> Void
     let openVehicles: () -> Void
+    let logout: () -> Void
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
+    @State private var locationEnabled = false
+    @State private var notificationsEnabled = false
+    @State private var settingsOpenFailed = false
     @State private var email: String?
     @State private var emailIdentity: ChatIdentity?
 
@@ -30,11 +38,8 @@ struct SettingsScreen: View {
             ScrollView {
                 VStack(spacing: 18) {
                     AppAssetImage(path: "icons/archive/settings_icon.png")
-                        .frame(width: 200, height: 200)
+                        .frame(width: 200, height: 200).offset(y: -15).frame(height: 108)
                         .accessibilityLabel("הגדרות").accessibilityAddTraits(.isHeader)
-                    Text("אפשרויות התצוגה, ההרשאות ופעולות החשבון עדיין אינן פעילות")
-                        .font(.footnote).foregroundStyle(SettingsPalette.secondary)
-                        .multilineTextAlignment(.center)
                     SettingsCard(title: "חשבון") {
                         row("שם", icon: "user", value: entry.chatIdentity == nil ? "—" : entry.me?.name.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? "—")
                         Divider()
@@ -69,9 +74,9 @@ struct SettingsScreen: View {
                         .accessibilityLabel("תצוגה: מערכת, בהיר, כהה. תצוגה מקדימה בלבד; בחירה אינה זמינה")
                     }
                     SettingsCard(title: "הרשאות") {
-                        row("מיקום", icon: "location", chevron: true, permission: true)
+                        permissionRow("מיקום", icon: "location", enabled: locationEnabled)
                         Divider()
-                        row("התראות", icon: "bell", chevron: true, permission: true)
+                        permissionRow("התראות", icon: "bell", enabled: notificationsEnabled)
                         Divider()
                         Button(action: openVehicles) {
                             row("זיהוי וחיבור אוטומטי", icon: "single_car", chevron: true)
@@ -88,10 +93,13 @@ struct SettingsScreen: View {
                         Divider()
                         row("צור קשר לתמיכה", icon: "support", chevron: true)
                     }
-                    destructive("התנתקות", icon: "logout")
+                    Button(action: logout) {
+                        destructive("התנתקות", icon: "logout")
+                    }.buttonStyle(.plain).disabled(entry.busy)
                     destructive("מחיקת חשבון", icon: "delete_account")
+                        .accessibilityHint("לא זמין בתצוגה המקדימה")
                 }
-                .padding(.horizontal, 18).padding(.bottom, 24)
+                .padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 24)
                 .frame(maxWidth: 620).frame(maxWidth: .infinity)
             }
         }
@@ -99,6 +107,19 @@ struct SettingsScreen: View {
         .foregroundStyle(SettingsPalette.ink)
         .environment(\.layoutDirection, .rightToLeft)
         .toolbar(.hidden, for: .navigationBar)
+        .alert("לא ניתן לפתוח את הגדרות המכשיר", isPresented: $settingsOpenFailed) {
+            Button("הבנתי", role: .cancel) { }
+        } message: {
+            Text("אפשר לפתוח את הגדרות iOS ולבחור באפליקציית FCA.")
+        }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            // Reading status does not start location monitoring or request permission.
+            locationEnabled = CLLocationManager().authorizationStatus == .authorizedAlways
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
+            guard !Task.isCancelled, scenePhase == .active else { return }
+            notificationsEnabled = settings.authorizationStatus == .authorized
+        }
         .task(id: entry.chatIdentity) {
             email = nil; emailIdentity = nil
             guard let identity = entry.chatIdentity else { return }
@@ -112,8 +133,25 @@ struct SettingsScreen: View {
         SettingsRowIcon(name: name)
     }
 
+    private func permissionRow(_ title: String, icon name: String, enabled: Bool) -> some View {
+        Button {
+            guard let url = URL(string: UIApplication.openSettingsURLString) else {
+                settingsOpenFailed = true; return
+            }
+            openURL(url) { accepted in settingsOpenFailed = !accepted }
+        } label: {
+            row(title, icon: name, chevron: true, permission: enabled)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(enabled ? "פעיל" : "לא פעיל")
+        .accessibilityHint("פתיחת הגדרות ההרשאות של האפליקציה ב־iOS")
+    }
+
     private func row(_ title: String, icon name: String, value: String? = nil,
-                     detail: String? = nil, chevron: Bool = false, permission: Bool = false) -> some View {
+                     detail: String? = nil, chevron: Bool = false, permission: Bool? = nil) -> some View {
         HStack(spacing: 12) {
             if chevron { Image(systemName: "chevron.left").font(.caption).accessibilityHidden(true) }
             VStack(alignment: .leading, spacing: 5) {
@@ -121,10 +159,15 @@ struct SettingsScreen: View {
                 if let detail { Text(detail).font(.subheadline).foregroundStyle(SettingsPalette.secondary) }
             }.frame(maxWidth: .infinity, alignment: .leading)
             if let value { Text(value).font(.body).foregroundStyle(SettingsPalette.secondary) }
-            if permission {
-                // Deliberately unavailable: this is not the actual OS permission state.
-                Toggle(title, isOn: .constant(false)).labelsHidden().disabled(true)
-                    .accessibilityLabel("\(title): לא זמין בתצוגה המקדימה")
+            if let permission {
+                // Read-only visual indicator; the containing row is the sole tap target.
+                Capsule().fill(permission ? Color.green : Color(uiColor: .systemGray4))
+                    .frame(width: 51, height: 31)
+                    .overlay(alignment: permission ? .trailing : .leading) {
+                        Circle().fill(.white).frame(width: 27, height: 27).padding(2)
+                    }
+                    .environment(\.layoutDirection, .leftToRight)
+                    .accessibilityHidden(true)
             }
             icon(name)
         }.padding(.vertical, 16)
@@ -137,7 +180,6 @@ struct SettingsScreen: View {
             .background(SettingsPalette.destructive.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
             .overlay(RoundedRectangle(cornerRadius: 18).stroke(SettingsPalette.destructive.opacity(0.18)))
             .accessibilityElement(children: .combine)
-            .accessibilityHint("לא זמין בתצוגה המקדימה")
     }
 }
 
