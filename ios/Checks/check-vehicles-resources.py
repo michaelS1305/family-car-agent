@@ -11,7 +11,9 @@ view = (source / "Vehicles/VehiclesScreen.swift").read_text(encoding="utf-8")
 add = (source / "Vehicles/AddVehicleScreen.swift").read_text(encoding="utf-8")
 shell = (source / "AuthenticatedAppShell.swift").read_text(encoding="utf-8")
 assert "VehiclesScreen(model: vehicles" in shell and "destination == .vehicles" in shell
-assert "if !path.contains(.vehicles) { vehicles.stop() }" in shell
+assert "if !path.contains(.vehicles) {" in shell
+assert "vehicles.stop()" in shell
+assert "navigation.vehicleHelpPresented = false" in shell
 assert "vehicles.stop(); navigation.synchronize(identity)" in shell
 assert "if !keyboardVisible && navigation.isRoot" in shell
 assert "NavigationStack" not in view + add and "Form {" not in add
