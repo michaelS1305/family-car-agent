@@ -53,6 +53,8 @@ struct AuthenticatedAppShell: View {
                 HistoryScreen(entry: entry, back: { navigation.back() })
             } else if destination == .bookingCenter {
                 BookingCenterPreview(model: bookings, back: { navigation.back() })
+            } else if destination == .settings {
+                SettingsScreen(back: { navigation.back() })
             } else {
                 DashboardDestinationPlaceholder(destination: destination, back: { navigation.back() })
                     .toolbar(.visible, for: .navigationBar)
