@@ -8,8 +8,8 @@ struct ErrorPrimaryButtonStyle: ButtonStyle {
             .multilineTextAlignment(.center)
             .padding(.horizontal, 24).padding(.vertical, 12)
             .frame(maxWidth: .infinity, minHeight: 52)
-            .foregroundStyle(.white)
-            .background(ChatStyle.ink, in: Capsule())
+            .foregroundStyle(FCAColors.color(.onPrimaryAction))
+            .background(FCAColors.color(.primaryAction), in: Capsule())
             .opacity(enabled ? (configuration.isPressed ? 0.75 : 1) : 0.5)
     }
 }
@@ -32,7 +32,7 @@ struct AppErrorDialog: View {
                         else { Task { await presentation.retry() } }
                     } label: {
                         HStack(spacing: 8) {
-                            if presentation.stage == .retrying { ProgressView().tint(.white) }
+                            if presentation.stage == .retrying { ProgressView().tint(FCAColors.color(.onPrimaryAction)) }
                             Text(presentation.stage == .failed ? "הבנתי" : "נסה שוב")
                         }
                     }
@@ -42,7 +42,7 @@ struct AppErrorDialog: View {
                 }
                 .multilineTextAlignment(.center).padding(24)
                 .frame(maxWidth: 360)
-                .background(ChatStyle.background, in: RoundedRectangle(cornerRadius: 24))
+                .background(FCAColors.color(.dialog), in: RoundedRectangle(cornerRadius: 24))
                 .padding(24)
                 .frame(maxWidth: .infinity)
             }

@@ -13,7 +13,7 @@ struct VehicleDetailsScreen: View {
             if list.current && model.current {
                 if model.loading { ProgressView("טוען…").padding(32) }
                 if model.requiresReview {
-                    Text(model.operationError ?? "יש לבדוק את נתוני השרת לפני פעולה נוספת").foregroundStyle(.red).padding()
+                    Text(model.operationError ?? "יש לבדוק את נתוני השרת לפני פעולה נוספת").foregroundStyle(FCAColors.color(.error)).padding()
                     Button("רענון ובדיקת נתוני השרת", action: model.reviewServerState).disabled(model.loading)
                 } else if model.loadError {
                     Text("לא ניתן לטעון את פרטי הרכב")
@@ -42,8 +42,8 @@ struct VehicleDetailsScreen: View {
                                         icon("trash_icon.png", size: 40)
                                         Text("הוצאת הרכב משימוש")
                                     }.frame(maxWidth: .infinity).padding(6)
-                                        .foregroundStyle(Color(red: 189/255, green: 38/255, blue: 38/255))
-                                        .overlay(Capsule().stroke(Color(red: 235/255, green: 202/255, blue: 202/255)))
+                                        .foregroundStyle(FCAColors.color(.retireAction))
+                                        .overlay(Capsule().stroke(FCAColors.color(.retireBorder)))
                                 }.disabled(!model.canWrite)
                             }
                             if detail.vehicle.retired {
@@ -73,15 +73,15 @@ struct VehicleDetailsScreen: View {
             }
     }
     private func statusColor(_ detail: VehicleDetail) -> Color {
-        if detail.vehicle.retired { return Color(red: 122/255, green: 135/255, blue: 149/255) }
-        return detail.inUse ? Color(red: 155/255, green: 99/255, blue: 26/255) : Color(red: 22/255, green: 129/255, blue: 83/255)
+        if detail.vehicle.retired { return FCAColors.color(.retired) }
+        return detail.inUse ? FCAColors.color(.warning) : FCAColors.color(.success)
     }
     private func icon(_ name: String, size: CGFloat) -> some View {
         AppAssetImage(path: "icons/archive/" + name).frame(width: size, height: size).accessibilityHidden(true)
     }
     private func panel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10, content: content).frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14).background(.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 18))
+            .padding(14).background(FCAColors.color(.surface).opacity(0.72), in: RoundedRectangle(cornerRadius: 18))
             .overlay(RoundedRectangle(cornerRadius: 18).stroke(ChatStyle.border))
     }
     private func heading(_ text: String, symbol: String, action: @escaping () -> Void) -> some View {
@@ -177,14 +177,14 @@ private struct VehicleDetailsEditor: View {
                         .environment(\.calendar, VehicleDay.calendar).environment(\.timeZone, TimeZone(secondsFromGMT: 0)!)
                         .disabled(!model.canWrite)
                     }
-                    if let error = model.operationError { Text(error).foregroundStyle(.red) }
+                    if let error = model.operationError { Text(error).foregroundStyle(FCAColors.color(.error)) }
                     if model.requiresReview {
                         Button("רענון ובדיקת נתוני השרת", action: model.reviewServerState).disabled(model.loading || model.maintenanceLoading)
                     } else if sheet != .connection {
                         Button(action: model.submit) {
                             Text(model.busy ? "ממתינים לאישור…" : sheet == .retire ? "הוצאה משימוש" : sheet == .maintenance && model.maintenanceID == nil ? "הוספת טיפול" : "שמירה")
-                                .frame(maxWidth: .infinity, minHeight: 50).foregroundStyle(.white)
-                                .background(sheet == .retire ? Color.red : ChatStyle.ink, in: RoundedRectangle(cornerRadius: 20))
+                                .frame(maxWidth: .infinity, minHeight: 50).foregroundStyle(FCAColors.color(sheet == .retire ? .onDestructiveAction : .onPrimaryAction))
+                                .background(sheet == .retire ? FCAColors.color(.destructiveAction) : FCAColors.color(.primaryAction), in: RoundedRectangle(cornerRadius: 20))
                         }.disabled(!model.canWrite || !valid || model.maintenanceLoading)
                     }
                     if sheet == .maintenance, let id = model.maintenanceID {

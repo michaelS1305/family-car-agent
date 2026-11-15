@@ -2,7 +2,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1] / 'Sources/FamilyCarAgent'
 content = (root / 'ContentView.swift').read_text(encoding='utf-8')
 loading = content.split('private struct BootstrapLoadingView: View {', 1)[1]
-assert 'AppAssetImage(path: ChatStyle.wordmark)\n                .frame(maxWidth: 255).frame(height: 85).scaleEffect(0.9).blendMode(.multiply)' in loading
+assert 'AppAssetImage(path: ChatStyle.wordmark)\n                .frame(maxWidth: 255).frame(height: 85).scaleEffect(0.9).modifier(FCAWordmarkBlend())' in loading
 assert 'חזרה לכניסה' not in loading and 'let exit:' not in loading
 assert 'guard !busy, !retrying else { return }' in loading
 assert '.disabled(busy || retrying)' in loading

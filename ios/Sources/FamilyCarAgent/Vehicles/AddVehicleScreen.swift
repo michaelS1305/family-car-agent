@@ -44,8 +44,8 @@ struct AddVehicleScreen: View {
                         }
                         field("דגם", hint: "דגם", icon: "single_car_icon.png", focus: .model, value: binding(\.model))
                         field("מספר רכב", hint: "לדוגמה: 123-45-678", icon: "license_plate.png", focus: .plate, value: binding(\.plate))
-                        if let error = model.submitError { Text(error).foregroundStyle(.red) }
-                        else if !model.canCreate { Text("אין הרשאה להוספת רכב").foregroundStyle(.red) }
+                        if let error = model.submitError { Text(error).foregroundStyle(FCAColors.color(.error)) }
+                        else if !model.canCreate { Text("אין הרשאה להוספת רכב").foregroundStyle(FCAColors.color(.error)) }
                         Button {
                             focused = nil; model.submit()
                             if let first = model.firstInvalidField {
@@ -57,10 +57,10 @@ struct AddVehicleScreen: View {
                             }
                         } label: {
                             Group {
-                                if model.submitting { ProgressView().tint(.white).accessibilityLabel("ממתינים לאישור הוספת הרכב") }
+                                if model.submitting { ProgressView().tint(FCAColors.color(.onPrimaryAction)).accessibilityLabel("ממתינים לאישור הוספת הרכב") }
                                 else { Text(model.pending == nil ? "הוספת רכב" : "נסה שוב").font(.system(size: 20)) }
-                            }.frame(maxWidth: .infinity, minHeight: 56).foregroundStyle(.white)
-                                .background(ChatStyle.ink, in: RoundedRectangle(cornerRadius: 20))
+                            }.frame(maxWidth: .infinity, minHeight: 56).foregroundStyle(FCAColors.color(.onPrimaryAction))
+                                .background(FCAColors.color(.primaryAction), in: RoundedRectangle(cornerRadius: 20))
                         }.disabled(!model.maySubmit)
                         Spacer(minLength: 8)
                     }.padding(.horizontal, 20).padding(.vertical, 8).frame(maxWidth: 620).frame(maxWidth: .infinity)
@@ -79,8 +79,8 @@ struct AddVehicleScreen: View {
                         AppAssetImage(path: category.asset).frame(height: 44)
                         Text(category.label).font(.system(size: 5)).lineSpacing(2).lineLimit(2)
                     }.padding(2).frame(maxWidth: .infinity).frame(height: 86)
-                        .background(model.draft.category == category ? ChatStyle.selected : .white.opacity(0.6), in: RoundedRectangle(cornerRadius: 18))
-                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(model.fieldErrors[.category] != nil ? .red : model.draft.category == category ? ChatStyle.ink : ChatStyle.border, lineWidth: model.draft.category == category ? 2 : 1))
+                        .background(model.draft.category == category ? ChatStyle.selected : FCAColors.color(.surface).opacity(0.6), in: RoundedRectangle(cornerRadius: 18))
+                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(model.fieldErrors[.category] != nil ? FCAColors.color(.error) : model.draft.category == category ? ChatStyle.ink : ChatStyle.border, lineWidth: model.draft.category == category ? 2 : 1))
                 }.buttonStyle(.plain).disabled(!model.editable)
                     .accessibilityLabel(category.label).accessibilityAddTraits(model.draft.category == category ? .isSelected : [])
             }
@@ -103,15 +103,15 @@ struct AddVehicleScreen: View {
                         switch focus { case .name: focused = .manufacturer; case .manufacturer: focused = .model; case .model: focused = .plate; case .plate, .category: focused = nil }
                     }
             }.padding(.horizontal, 12).frame(minHeight: 56)
-                .background(.white.opacity(0.65), in: RoundedRectangle(cornerRadius: 20))
-                .overlay(RoundedRectangle(cornerRadius: 20).stroke(model.fieldErrors[focus] == nil ? ChatStyle.border : .red))
+                .background(FCAColors.color(.surface).opacity(0.65), in: RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).stroke(model.fieldErrors[focus] == nil ? ChatStyle.border : FCAColors.color(.error)))
                 .disabled(!model.editable)
             fieldError(focus)
         }.id(focus)
     }
     @ViewBuilder private func fieldError(_ field: Field) -> some View {
         if let message = model.fieldErrors[field] {
-            Text(message).font(.footnote).foregroundStyle(.red)
+            Text(message).font(.footnote).foregroundStyle(FCAColors.color(.error))
                 .accessibilityLabel("שגיאה: " + message).accessibilityFocused($errorFocus, equals: field)
         }
     }

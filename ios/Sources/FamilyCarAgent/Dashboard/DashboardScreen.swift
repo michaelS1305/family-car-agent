@@ -19,7 +19,7 @@ struct DashboardScreen: View {
     private func content(_ layout: DashboardLayout) -> some View {
         VStack(spacing: 0) {
             AppAssetImage(path: ChatStyle.wordmark)
-                .frame(maxWidth: 255).frame(height: layout.headerHeight).scaleEffect(0.9).blendMode(.multiply)
+                .frame(maxWidth: 255).frame(height: layout.headerHeight).scaleEffect(0.9).modifier(FCAWordmarkBlend())
                 .accessibilityLabel("Family Car Agent")
             Text(DashboardLayout.greeting(name))
                 .font(.system(size: layout.compact ? 24 : 28, weight: .bold))
@@ -35,8 +35,8 @@ struct DashboardScreen: View {
                             .accessibilityHidden(true)
                         Text("התנתקות").font(.system(size: 18, weight: .semibold))
                     }.padding(.horizontal, 12).frame(minWidth: 144).frame(height: 48)
-                        .background(Color.white.opacity(0.65), in: Capsule())
-                        .overlay(Capsule().stroke(.white, lineWidth: 1))
+                        .background(FCAColors.color(.surface).opacity(0.65), in: Capsule())
+                        .overlay(Capsule().stroke(FCAColors.color(.surface), lineWidth: 1))
                 }.buttonStyle(.plain).disabled(busy).accessibilityLabel("התנתקות")
                 Spacer(minLength: 0)
             }.frame(height: layout.logoutHeight)
@@ -49,7 +49,10 @@ struct DashboardScreen: View {
 private struct DashboardWheel: View {
     let diameter: Double
     let open: (DashboardDestination) -> Void
-    private let pale = Color(red: 228/255, green: 235/255, blue: 239/255)
+    @Environment(\.colorScheme) private var colorScheme
+    private func paint(_ role: FCAColors.Role) -> Color {
+        FCAColors.color(role, dark: colorScheme == .dark)
+    }
     var body: some View {
         ZStack(alignment: .topLeading) {
             Canvas { context, size in
@@ -61,10 +64,10 @@ private struct DashboardWheel: View {
                 }
                 let depthCenter = CGPoint(x: center.x, y: center.y + radius * 0.06)
                 context.fill(circle(radius * 1.1, depthCenter), with: .radialGradient(
-                    Gradient(colors: [ChatStyle.secondary.opacity(0.16), .clear]),
+                    Gradient(colors: [paint(.secondaryText).opacity(0.16), .clear]),
                     center: depthCenter, startRadius: 0, endRadius: radius * 1.1))
                 context.fill(circle(radius, center), with: .linearGradient(
-                    Gradient(colors: [.white.opacity(0.9), pale, .white.opacity(0.8)]),
+                    Gradient(colors: [paint(.wheelSurface).opacity(0.9), paint(.wheelBase), paint(.wheelSurface).opacity(0.8)]),
                     startPoint: .zero, endPoint: CGPoint(x: size.width, y: size.height)))
                 for index in 0..<5 {
                     let start = DashboardLayout.startAngle + Double(index) * DashboardLayout.sweep
@@ -73,21 +76,21 @@ private struct DashboardWheel: View {
                     sector.addArc(center: center, radius: radius, startAngle: .degrees(start),
                                   endAngle: .degrees(start + DashboardLayout.sweep), clockwise: false)
                     sector.closeSubpath()
-                    context.fill(sector, with: .color(.white.opacity(index.isMultiple(of: 2) ? 0.12 : 0.04)))
+                    context.fill(sector, with: .color(paint(.wheelHighlight).opacity(index.isMultiple(of: 2) ? 0.12 : 0.04)))
                 }
                 for index in 0..<5 {
                     let angle = (DashboardLayout.startAngle + Double(index) * DashboardLayout.sweep) * .pi / 180
                     var divider = Path()
                     divider.move(to: CGPoint(x: center.x + cos(angle)*hub, y: center.y + sin(angle)*hub))
                     divider.addLine(to: CGPoint(x: center.x + cos(angle)*radius, y: center.y + sin(angle)*radius))
-                    context.stroke(divider, with: .color(.white.opacity(0.8)), lineWidth: 1)
+                    context.stroke(divider, with: .color(paint(.wheelLine).opacity(0.8)), lineWidth: 1)
                 }
-                context.stroke(circle(radius, center), with: .color(.white.opacity(0.7)), lineWidth: radius*0.012)
-                context.stroke(circle(radius*1.05, center), with: .color(.white.opacity(0.45)), lineWidth: 1)
-                context.fill(circle(hub*1.15, CGPoint(x: center.x, y: center.y+hub*0.07)), with: .color(ChatStyle.secondary.opacity(0.1)))
-                context.fill(circle(hub, center), with: .linearGradient(Gradient(colors: [.white, pale]),
+                context.stroke(circle(radius, center), with: .color(paint(.wheelLine).opacity(0.7)), lineWidth: radius*0.012)
+                context.stroke(circle(radius*1.05, center), with: .color(paint(.wheelLine).opacity(0.45)), lineWidth: 1)
+                context.fill(circle(hub*1.15, CGPoint(x: center.x, y: center.y+hub*0.07)), with: .color(paint(.secondaryText).opacity(0.1)))
+                context.fill(circle(hub, center), with: .linearGradient(Gradient(colors: [paint(.wheelSurface), paint(.wheelBase)]),
                     startPoint: CGPoint(x: center.x-hub, y: center.y-hub), endPoint: CGPoint(x: center.x+hub, y: center.y+hub)))
-                context.stroke(circle(hub, center), with: .color(.white.opacity(0.85)), lineWidth: hub*0.12)
+                context.stroke(circle(hub, center), with: .color(paint(.wheelLine).opacity(0.85)), lineWidth: hub*0.12)
             }.accessibilityHidden(true)
             ForEach(DashboardDestination.allCases, id: \.self) { destination in
                 Button { open(destination) } label: {

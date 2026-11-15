@@ -17,7 +17,7 @@ for label in ("אנשי המשפחה", "כתובת", "קוד משפחתי", "ח�
     assert label in screen
 assert "VerifiedAddressPreview(location: model.candidate?.location)" in screen
 assert "MapKit" not in screen and "CLGeocoder" not in screen
-assert ".rightToLeft" in screen and ".preferredColorScheme(.light)" in screen
+assert ".rightToLeft" in screen and ".preferredColorScheme(" not in screen
 assert "confirmationDialog" in screen and "Button(\"אשר\", action: model.regenerate)" in screen
 assert ".localOnly: true" in screen and ".expirationDate:" in screen
 assert "UIActivityViewController" in screen and "model.closeShare()" in screen

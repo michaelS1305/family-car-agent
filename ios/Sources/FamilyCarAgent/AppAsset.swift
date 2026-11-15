@@ -23,10 +23,12 @@ enum AppAsset {
 /// Displays an FCA asset without changing its original aspect ratio.
 struct AppAssetImage: View {
     let path: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Group {
-            if let image = AppAsset.load(path) {
+            if let image = AppAsset.load(path == FCABranding.lightWordmark
+                                        ? FCABranding.wordmark(dark: colorScheme == .dark) : path) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
@@ -34,5 +36,14 @@ struct AppAssetImage: View {
                 EmptyView()
             }
         }
+    }
+}
+
+/// Keep the original Light compositing at each existing call site. The approved
+/// white Dark wordmark must not be multiplied into a dark background.
+struct FCAWordmarkBlend: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    func body(content: Content) -> some View {
+        content.blendMode(colorScheme == .dark ? .normal : .multiply)
     }
 }

@@ -8,7 +8,7 @@ struct VerifiedAddressPreview: View {
             CandidateMap(location: location).id(location)
         } else {
             Text("תצוגת מפה אינה זמינה").frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(white: 0.95))
+                .background(FCAColors.color(.mapFallback))
         }
     }
 }
@@ -21,7 +21,7 @@ private struct CandidateMap: View {
             ReadOnlyMap(location: location) { failed = true }
             if failed {
                 Text("תצוגת מפה אינה זמינה").frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(white: 0.95))
+                    .background(FCAColors.color(.mapFallback))
             }
         }
     }
@@ -43,7 +43,9 @@ private struct ReadOnlyMap: UIViewRepresentable {
         map.setRegion(MKCoordinateRegion(center: point, latitudinalMeters: 500, longitudinalMeters: 500), animated: false)
         return map
     }
-    func updateUIView(_ map: MKMapView, context: Context) {}
+    func updateUIView(_ map: MKMapView, context: Context) {
+        map.overrideUserInterfaceStyle = context.environment.colorScheme == .dark ? .dark : .light
+    }
     static func dismantleUIView(_ map: MKMapView, coordinator: Coordinator) {
         coordinator.active = false; map.delegate = nil
     }

@@ -1,8 +1,8 @@
 import SwiftUI
 
-private let onboardingInk = Color(red: 17/255, green: 38/255, blue: 66/255)
-private let onboardingSecondary = Color(red: 99/255, green: 123/255, blue: 151/255)
-private let onboardingOutline = Color(red: 215/255, green: 217/255, blue: 220/255)
+private let onboardingInk = FCAColors.color(.entryHeading)
+private let onboardingSecondary = FCAColors.color(.secondaryText)
+private let onboardingOutline = FCAColors.color(.onboardingBorder)
 
 private struct OnboardingField: View {
     let title: String
@@ -32,8 +32,8 @@ private struct OnboardingAction: View {
     var body: some View {
         Button(action: action) {
             Text(title).font(.system(size: 18, weight: .semibold))
-                .frame(maxWidth: .infinity, minHeight: 54).foregroundStyle(.white)
-                .background(Color(red: 36/255, green: 51/255, blue: 65/255),
+                .frame(maxWidth: .infinity, minHeight: 54).foregroundStyle(FCAColors.color(.onPrimaryAction))
+                .background(FCAColors.color(.primaryAction),
                             in: RoundedRectangle(cornerRadius: 16))
         }.buttonStyle(.plain).disabled(!enabled)
     }

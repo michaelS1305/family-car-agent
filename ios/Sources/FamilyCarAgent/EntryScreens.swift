@@ -2,8 +2,8 @@ import SwiftUI
 import AuthenticationServices
 import UIKit
 
-private let entryInk = Color(red: 36/255, green: 51/255, blue: 65/255)
-private let entrySecondary = Color(red: 99/255, green: 123/255, blue: 151/255)
+private let entryInk = FCAColors.color(.text)
+private let entrySecondary = FCAColors.color(.secondaryText)
 
 // Raw resources are copied by SwiftPM, never sent through actool.
 private struct EntryImage: View {
@@ -58,7 +58,7 @@ struct IntroScreen: View {
                         .font(.system(size: compact ? 30 : 34, weight: .bold))
                         .lineLimit(1).minimumScaleFactor(0.65)
                         .environment(\.layoutDirection, .leftToRight)
-                    Capsule().fill(Color(red: 226/255, green: 223/255, blue: 220/255))
+                    Capsule().fill(FCAColors.color(.entryDivider))
                         .frame(width: 80, height: 2).frame(maxWidth: .infinity)
                     VStack(spacing: 0) {
                         Text("הדרך החכמה")
@@ -68,7 +68,7 @@ struct IntroScreen: View {
                     .lineLimit(1).minimumScaleFactor(0.65)
                     Text("בדקו מי עם הרכב, נהלו הזמנות וקבלו עדכונים עם סוכן אישי")
                         .font(dynamicType.isAccessibilitySize ? .body : .system(size: compact ? 15 : 16, weight: .medium))
-                        .foregroundStyle(Color(red: 83/255, green: 98/255, blue: 114/255))
+                        .foregroundStyle(FCAColors.color(.entryBody))
                         .lineSpacing(6).fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 10) {
                         routeButton("יצירת\nמשפחה", symbol: "plus.circle", route: .create)
@@ -77,7 +77,7 @@ struct IntroScreen: View {
                     Button { select(.existing) } label: {
                         Text("כבר יש לי חשבון").underline()
                             .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(Color(red: 83/255, green: 106/255, blue: 128/255))
+                            .foregroundStyle(FCAColors.color(.entryLink))
                             .frame(minHeight: 48)
                     }
                 }
@@ -95,7 +95,7 @@ struct IntroScreen: View {
             }
             .padding(.horizontal, 8).padding(.vertical, 8).frame(maxWidth: .infinity, minHeight: 60)
             .contentShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color(red: 217/255, green: 214/255, blue: 210/255), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(FCAColors.color(.entryBorder), lineWidth: 1))
         }.buttonStyle(.plain).accessibilityLabel(route.title)
     }
 }
@@ -105,13 +105,13 @@ struct EntryBackHeader: View {
     let back: () -> Void
     var body: some View {
         Text(title).font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(Color(red: 83/255, green: 103/255, blue: 125/255))
+            .foregroundStyle(FCAColors.color(.entryNavigation))
             .frame(maxWidth: .infinity, minHeight: 48)
             .overlay(alignment: .leading) {
                 Button(action: back) {
                     Image(systemName: "arrow.right").font(.system(size: 25)).foregroundStyle(entryInk)
                         .frame(width: 48, height: 48)
-                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color(red: 229/255, green: 227/255, blue: 224/255)))
+                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(FCAColors.color(.entryBackBorder)))
                 }.buttonStyle(.plain).accessibilityLabel("חזרה")
             }
     }
@@ -122,9 +122,10 @@ struct EntryBackHeader: View {
 private struct AppleProviderButton: UIViewRepresentable {
     let enabled: Bool
     let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
     func makeCoordinator() -> Coordinator { Coordinator(action) }
     func makeUIView(context: Context) -> ASAuthorizationAppleIDButton {
-        let button = ASAuthorizationAppleIDButton(type: .signIn, style: .black)
+        let button = ASAuthorizationAppleIDButton(type: .signIn, style: colorScheme == .dark ? .white : .black)
         button.cornerRadius = 24
         button.addTarget(context.coordinator, action: #selector(Coordinator.tap), for: .touchUpInside)
         return button
@@ -145,6 +146,7 @@ struct LoginScreen: View {
     let login: (Bool) -> Void
     @State private var legal: EntryLegalDocument?
     @Environment(\.dynamicTypeSize) private var dynamicType
+    @Environment(\.colorScheme) private var colorScheme
     var body: some View {
         GeometryReader { geometry in
             let compact = geometry.size.height < 740 || dynamicType.isAccessibilitySize
@@ -170,24 +172,25 @@ struct LoginScreen: View {
                                         .frame(height: buttonHeight).contentShape(Capsule())
                                 }.buttonStyle(.plain).accessibilityLabel("התחברות באמצעות Google").disabled(!enabled)
                                 AppleProviderButton(enabled: enabled) { login(true) }
+                                    .id(colorScheme) // Apple's immutable button style follows effective appearance.
                                     .frame(maxWidth: .infinity).frame(height: buttonHeight)
                             }
                             VStack(spacing: 6) {
                                 Text("פרטי ההתחברות נשמרים ומנוהלים על ידי Supabase Auth.")
                                 Text(EntryLegalDocument.linkedNotice)
-                                    .tint(Color(red: 17/255, green: 38/255, blue: 66/255))
+                                    .tint(FCAColors.color(.entryHeading))
                                     .environment(\.openURL, OpenURLAction { url in
                                         guard let document = EntryLegalDocument(link: url) else { return .discarded }
                                         legal = document; return .handled
                                     })
                             }
                             .font(dynamicType.isAccessibilitySize ? .footnote : .system(size: 11.5))
-                            .foregroundStyle(Color(red: 107/255, green: 119/255, blue: 133/255))
+                            .foregroundStyle(FCAColors.color(.entryFootnote))
                             .lineSpacing(4).fixedSize(horizontal: false, vertical: true)
                         }
                         .frame(maxWidth: .infinity).padding(.horizontal, 16).padding(.vertical, compact ? 10 : 18)
-                        .background(Color.white)
-                        .overlay(RoundedRectangle(cornerRadius: 26).stroke(Color(red: 234/255, green: 232/255, blue: 229/255)))
+                        .background(FCAColors.color(.surface))
+                        .overlay(RoundedRectangle(cornerRadius: 26).stroke(FCAColors.color(.loginBorder)))
                         Spacer(minLength: 0)
                     }.frame(minHeight: max(0, geometry.size.height - 72))
                 }.scrollIndicators(.hidden)

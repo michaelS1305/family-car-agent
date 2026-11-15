@@ -80,7 +80,7 @@ struct ChatScreen: View {
                 }
                 .overlay(alignment: .top) {
                         AppAssetImage(path: ChatStyle.wordmark)
-                            .frame(maxWidth: 255).frame(height: 85).scaleEffect(0.9).blendMode(.multiply)
+                            .frame(maxWidth: 255).frame(height: 85).scaleEffect(0.9).modifier(FCAWordmarkBlend())
                             .frame(maxWidth: .infinity)
                             .allowsHitTesting(false).accessibilityHidden(true)
                 }
@@ -94,7 +94,7 @@ struct ChatScreen: View {
                                 Text(text).font(.system(size: 14))
                             }.frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 43)
                                 .padding(.horizontal, 12)
-                                .background(Color.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 16))
+                                .background(FCAColors.color(.surface).opacity(0.7), in: RoundedRectangle(cornerRadius: 16))
                                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(ChatStyle.border, lineWidth: 1))
                         }.buttonStyle(.plain)
                     }
@@ -117,7 +117,7 @@ struct ChatScreen: View {
                     .environment(\.layoutDirection, .leftToRight)
                     .focused($composing).submitLabel(.send).onSubmit { model.send() }
                     .padding(.horizontal, 16).frame(height: 52)
-                    .background(.white, in: Capsule()).overlay(Capsule().stroke(ChatStyle.border, lineWidth: 1))
+                    .background(FCAColors.color(.input), in: Capsule()).overlay(Capsule().stroke(ChatStyle.border, lineWidth: 1))
                     .accessibilityLabel("הודעה לסוכן")
                 Button { model.send() } label: {
                     Image(systemName: "arrow.up.circle").font(.system(size: 28, weight: .semibold))
@@ -129,15 +129,15 @@ struct ChatScreen: View {
     private func bubble(_ message: ChatMessage) -> some View {
         VStack(alignment: message.role == .user ? .leading : .trailing, spacing: 8) {
             Text(message.content).font(.system(size: 14)).lineSpacing(6)
-                .foregroundStyle(message.role == .user ? Color.white : ChatStyle.ink)
+                .foregroundStyle(message.role == .user ? FCAColors.color(.outgoingText) : FCAColors.color(.incomingText))
                 .padding(.horizontal, 14).padding(.vertical, 12)
-                .background(message.role == .user ? ChatStyle.ink : ChatStyle.incoming,
+                .background(message.role == .user ? FCAColors.color(.outgoingBubble) : ChatStyle.incoming,
                             in: RoundedRectangle(cornerRadius: 18))
             HStack(spacing: 5) {
                 if message.role == .user { avatar }
                 Text(message.timestamp, format: .dateTime.hour().minute()).font(.system(size: 10)).foregroundStyle(ChatStyle.secondary)
                 if message.role == .assistant {
-                    AppAssetImage(path: ChatStyle.logo).frame(width: 26, height: 26).background(.white, in: Circle())
+                    AppAssetImage(path: ChatStyle.logo).frame(width: 26, height: 26).background(FCAColors.color(.surface), in: Circle())
                 }
             }
             if message.delivery == .failed && message.role == .user {

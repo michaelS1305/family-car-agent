@@ -15,7 +15,7 @@ struct FamilyScreen: View {
         VStack(spacing: 0) {
             ZStack {
                 AppAssetImage(path: ChatStyle.wordmark).frame(width: 220, height: 58)
-                    .blendMode(.multiply).accessibilityHidden(true)
+                    .modifier(FCAWordmarkBlend()).accessibilityHidden(true)
                 HStack {
                     circle("chevron.right", label: "חזרה לדשבורד", action: back)
                     Spacer()
@@ -42,7 +42,7 @@ struct FamilyScreen: View {
             }.scrollDismissesKeyboard(.interactively)
         }
         .background(ChatStyle.background.ignoresSafeArea()).foregroundStyle(ChatStyle.ink)
-        .environment(\.layoutDirection, .rightToLeft).preferredColorScheme(.light)
+        .environment(\.layoutDirection, .rightToLeft)
         .toolbar(.hidden, for: .navigationBar)
         .task { model.start() }
         .onChange(of: entry.familyIdentity) { _, _ in copied = false; confirmCode = false; model.start() }
@@ -92,8 +92,8 @@ struct FamilyScreen: View {
                                 .accessibilityLabel("שינוי תפקיד עבור \(member.name)")
                         } else { Text(member.role.label).font(.system(size: 12)) }
                     }.frame(minHeight: 60)
-                    if model.roleErrors.contains(member.id) { Text("לא ניתן לעדכן את התפקיד. נסו שוב.").font(.caption).foregroundStyle(.red) }
-                }.padding(10).background(.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 18))
+                    if model.roleErrors.contains(member.id) { Text("לא ניתן לעדכן את התפקיד. נסו שוב.").font(.caption).foregroundStyle(FCAColors.color(.error)) }
+                }.padding(10).background(FCAColors.color(.surface).opacity(0.85), in: RoundedRectangle(cornerRadius: 18))
                     .overlay(RoundedRectangle(cornerRadius: 18).stroke(ChatStyle.border))
             }
         }
@@ -132,7 +132,7 @@ struct FamilyScreen: View {
                     Button("ביטול", action: model.cancelAddress)
                 }.disabled(model.addressBusy || !model.canManage)
             }
-            if let error = model.addressError { Text(error).font(.caption).foregroundStyle(.red) }
+            if let error = model.addressError { Text(error).font(.caption).foregroundStyle(FCAColors.color(.error)) }
         }
     }
     private func code(_ profile: FamilyProfile) -> some View {
@@ -155,18 +155,18 @@ struct FamilyScreen: View {
                 }
                     .disabled(!model.canManage || model.codePending || model.invitation != nil)
             }
-            if model.codeError { Text("לא ניתן לאשר יצירת קוד חדש. נסו שוב.").font(.caption).foregroundStyle(.red) }
+            if model.codeError { Text("לא ניתן לאשר יצירת קוד חדש. נסו שוב.").font(.caption).foregroundStyle(FCAColors.color(.error)) }
         }
     }
     private func panel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10, content: content).frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14).background(.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 18))
+            .padding(14).background(FCAColors.color(.surface).opacity(0.72), in: RoundedRectangle(cornerRadius: 18))
             .overlay(RoundedRectangle(cornerRadius: 18).stroke(ChatStyle.border))
     }
     private func circle(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 23)).frame(width: 48, height: 48)
-                .background(Color(red: 241/255, green: 245/255, blue: 249/255), in: Circle())
+                .background(FCAColors.color(.familyControl), in: Circle())
         }.buttonStyle(.plain).accessibilityLabel(label)
     }
     private func initials(_ name: String) -> String {

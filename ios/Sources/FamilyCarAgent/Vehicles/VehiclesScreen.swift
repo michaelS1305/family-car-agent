@@ -82,7 +82,7 @@ struct VehiclesScreen: View {
                 AppAssetImage(path: VehicleCategory.illustration(vehicle.category))
                     .frame(width: 112, height: 64).environment(\.layoutDirection, .leftToRight)
             }.padding(16).frame(minHeight: 94)
-                .background(.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 24))
+                .background(FCAColors.color(.surface).opacity(0.7), in: RoundedRectangle(cornerRadius: 24))
                 .overlay(RoundedRectangle(cornerRadius: 24).stroke(ChatStyle.border))
                 .opacity(vehicle.retired ? 0.5 : 1)
         }.buttonStyle(.plain).accessibilityLabel(vehicle.name + (vehicle.retired ? ", רכב לא פעיל" : ""))
@@ -93,11 +93,11 @@ struct VehiclesHeader: View {
     let back: () -> Void
     var body: some View {
         ZStack {
-            AppAssetImage(path: ChatStyle.wordmark).frame(width: 220, height: 58).blendMode(.multiply).accessibilityHidden(true)
+            AppAssetImage(path: ChatStyle.wordmark).frame(width: 220, height: 58).modifier(FCAWordmarkBlend()).accessibilityHidden(true)
             HStack {
                 Button(action: back) {
                     Image(systemName: "chevron.right").font(.system(size: 22)).frame(width: 46, height: 46)
-                        .background(.white.opacity(0.85), in: Circle())
+                        .background(FCAColors.color(.surface).opacity(0.85), in: Circle())
                 }.accessibilityLabel("חזרה")
                 Spacer()
             }
@@ -107,7 +107,7 @@ struct VehiclesHeader: View {
 struct VehiclesAppearance: ViewModifier {
     func body(content: Content) -> some View {
         content.background(ChatStyle.background.ignoresSafeArea()).foregroundStyle(ChatStyle.ink)
-            .environment(\.layoutDirection, .rightToLeft).preferredColorScheme(.light)
+            .environment(\.layoutDirection, .rightToLeft)
             .toolbar(.hidden, for: .navigationBar).navigationBarBackButtonHidden(true)
     }
 }

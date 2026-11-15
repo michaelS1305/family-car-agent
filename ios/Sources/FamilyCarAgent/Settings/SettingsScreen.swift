@@ -1,5 +1,4 @@
 import SwiftUI
-import CoreLocation
 import UserNotifications
 
 /// Account, system permission indicators and shared logout; remaining actions stay unavailable.
@@ -11,7 +10,9 @@ struct SettingsScreen: View {
     let logout: () -> Void
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
-    @State private var locationEnabled = false
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(AppAppearance.storageKey) private var appearancePreference = AppAppearance.system.rawValue
+    private var appearance: AppAppearance { AppAppearance(storedValue: appearancePreference) }
     @State private var notificationsEnabled = false
     @State private var settingsOpenFailed = false
     @State private var email: String?
@@ -30,7 +31,7 @@ struct SettingsScreen: View {
                 .accessibilityLabel("חזרה לדשבורד")
                 AppAssetImage(path: ChatStyle.wordmark)
                     .frame(maxWidth: 240).frame(height: 58)
-                    .blendMode(.multiply)
+                    .modifier(FCAWordmarkBlend())
                     .accessibilityHidden(true)
                 Color.clear.frame(width: 48, height: 48).accessibilityHidden(true)
             }.padding(.horizontal, 18).frame(height: 76)
@@ -60,21 +61,26 @@ struct SettingsScreen: View {
                     SettingsCard(title: "תצוגה") {
                         HStack(spacing: 12) {
                             HStack(spacing: 0) {
-                                ForEach(["מערכת", "בהיר", "כהה"], id: \.self) { title in
-                                    Text(title).font(.body)
-                                        .frame(maxWidth: .infinity).padding(.vertical, 12)
-                                        .foregroundStyle(title == "בהיר" ? Color.white : SettingsPalette.ink)
-                                        .background(title == "בהיר" ? SettingsPalette.accent : .clear,
-                                                    in: RoundedRectangle(cornerRadius: 14))
+                                ForEach(AppAppearance.allCases, id: \.self) { mode in
+                                    Button { appearancePreference = mode.rawValue } label: {
+                                        Text(mode.title).font(.body)
+                                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                            .frame(minHeight: 44)
+                                            .foregroundStyle(appearance == mode ? FCAColors.color(.onPrimaryAction) : SettingsPalette.ink)
+                                            .background(appearance == mode ? FCAColors.appearanceAccent(dark: colorScheme == .dark) : .clear,
+                                                        in: RoundedRectangle(cornerRadius: 14))
+                                    }.buttonStyle(.plain)
+                                        .accessibilityLabel(mode.title)
+                                        .accessibilityAddTraits(appearance == mode ? .isSelected : [])
                                 }
                             }.padding(4).background(SettingsPalette.selection, in: RoundedRectangle(cornerRadius: 18))
                             icon("theme")
                         }.padding(.vertical, 10)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("תצוגה: מערכת, בהיר, כהה. תצוגה מקדימה בלבד; בחירה אינה זמינה")
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel("תצוגה")
                     }
                     SettingsCard(title: "הרשאות") {
-                        permissionRow("מיקום", icon: "location", enabled: locationEnabled)
+                        permissionRow("מיקום", icon: "location", enabled: nil)
                         Divider()
                         permissionRow("התראות", icon: "bell", enabled: notificationsEnabled)
                         Divider()
@@ -114,8 +120,6 @@ struct SettingsScreen: View {
         }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
-            // Reading status does not start location monitoring or request permission.
-            locationEnabled = CLLocationManager().authorizationStatus == .authorizedAlways
             let settings = await UNUserNotificationCenter.current().notificationSettings()
             guard !Task.isCancelled, scenePhase == .active else { return }
             notificationsEnabled = settings.authorizationStatus == .authorized
@@ -133,7 +137,7 @@ struct SettingsScreen: View {
         SettingsRowIcon(name: name)
     }
 
-    private func permissionRow(_ title: String, icon name: String, enabled: Bool) -> some View {
+    private func permissionRow(_ title: String, icon name: String, enabled: Bool?) -> some View {
         Button {
             guard let url = URL(string: UIApplication.openSettingsURLString) else {
                 settingsOpenFailed = true; return
@@ -146,7 +150,7 @@ struct SettingsScreen: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
-        .accessibilityValue(enabled ? "פעיל" : "לא פעיל")
+        .accessibilityValue(enabled.map { $0 ? "פעיל" : "לא פעיל" } ?? "")
         .accessibilityHint("פתיחת הגדרות ההרשאות של האפליקציה ב־iOS")
     }
 
@@ -225,7 +229,7 @@ private struct SettingsCard<Content: View>: View {
             content
         }
         .padding(.horizontal, 16)
-        .background(SettingsPalette.background, in: RoundedRectangle(cornerRadius: 24))
+        .background(SettingsPalette.card, in: RoundedRectangle(cornerRadius: 24))
         .overlay(RoundedRectangle(cornerRadius: 24).stroke(SettingsPalette.border))
     }
 }
@@ -233,11 +237,11 @@ private struct SettingsCard<Content: View>: View {
 /// Semantic roles keep future appearance support local; the existing shell stays light.
 private enum SettingsPalette {
     static let background = ChatStyle.background
-    static let surface = Color(uiColor: .systemBackground)
+    static let card = FCAColors.color(.settingsCard)
+    static let surface = FCAColors.color(.systemSurface)
     static let ink = ChatStyle.ink
     static let secondary = ChatStyle.secondary
     static let border = ChatStyle.border
     static let selection = ChatStyle.selected
-    static let accent = Color.accentColor
-    static let destructive = Color(uiColor: .systemRed)
+    static let destructive = FCAColors.color(.error)
 }

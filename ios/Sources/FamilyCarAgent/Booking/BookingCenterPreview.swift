@@ -54,16 +54,15 @@ struct BookingCenterPreview: View {
                 .presentationBackgroundInteraction(model.sheet == .cancellation ? .disabled : .enabled(upThrough: peek))
                 .presentationContentInteraction(.resizes)
                 .interactiveDismissDisabled()
-                .presentationBackground(ChatStyle.incoming)
+                .presentationBackground(FCAColors.color(.sheet))
                 .environment(\.layoutDirection, .rightToLeft)
-                .preferredColorScheme(.light)
                 .sheet(item: Binding(get: { model.current && model.sheet != .cancellation ? model.sheet : nil }, set: { if $0 == nil && model.sheet != .cancellation { model.dismiss() } })) { sheet in
                     BookingForms(model: model, sheet: sheet)
                         .environment(\.layoutDirection, .rightToLeft)
                         .environment(\.timeZone, BookingPreviewCalendar.calendar.timeZone)
                         .environment(\.calendar, BookingPreviewCalendar.calendar)
                         .environment(\.locale, Locale(identifier: "he_IL"))
-                        .preferredColorScheme(.light).interactiveDismissDisabled(model.busy)
+                        .interactiveDismissDisabled(model.busy)
                 }
         }
     }
@@ -89,7 +88,7 @@ struct BookingCenterPreview: View {
                     dayButton(day)
                 }
             }
-        }.padding(12).background(.white.opacity(0.88), in: RoundedRectangle(cornerRadius: 22))
+        }.padding(12).background(FCAColors.color(.surface).opacity(0.88), in: RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(ChatStyle.border))
     }
 
@@ -99,10 +98,10 @@ struct BookingCenterPreview: View {
         return Button { model.select(day) } label: {
             Text(BookingPreviewCalendar.label(day, format: "d"))
                 .font(.title3).frame(maxWidth: .infinity, minHeight: 44)
-                .foregroundStyle(selected ? .white : currentMonth ? ChatStyle.ink : ChatStyle.secondary.opacity(0.6))
-                .background(selected ? Color.blue : .clear, in: Circle())
+                .foregroundStyle(selected ? FCAColors.color(.onCalendarSelection) : currentMonth ? ChatStyle.ink : ChatStyle.secondary.opacity(0.6))
+                .background(selected ? FCAColors.color(.calendarSelection) : .clear, in: Circle())
                 .overlay(alignment: .bottom) {
-                    if !model.onDay(day).isEmpty { Circle().fill(selected ? Color.white : Color.blue).frame(width: 5, height: 5) }
+                    if !model.onDay(day).isEmpty { Circle().fill(selected ? FCAColors.color(.onCalendarSelection) : FCAColors.color(.calendarIndicator)).frame(width: 5, height: 5) }
                 }
         }.buttonStyle(.plain)
             .accessibilityLabel(BookingPreviewCalendar.label(day, format: "EEEE d MMMM yyyy"))
@@ -136,7 +135,7 @@ struct BookingCenterPreview: View {
                                 if model.selection != .none && model.canWrite && model.eligible(row) {
                                     Button { model.choose(row) } label: {
                                         reservationCard(row)
-                                            .shadow(color: ChatStyle.ink.opacity(0.16), radius: 5, y: 3)
+                                            .shadow(color: FCAColors.color(.shadow).opacity(0.16), radius: 5, y: 3)
                                     }.buttonStyle(.plain)
                                         .accessibilityHint("בחירת הזמנה לעריכה או לביטול")
                                 } else {
@@ -170,7 +169,7 @@ struct BookingCenterPreview: View {
                     toolbarButton("הוספה", symbol: "plus", enabled: model.canWrite) { model.openCreate() }
                     Button { model.today() } label: {
                         Text(BookingPreviewCalendar.label(calendar.selected, format: "d"))
-                            .font(.title2.bold()).frame(width: 48, height: 48).background(.white, in: Circle())
+                            .font(.title2.bold()).frame(width: 48, height: 48).background(FCAColors.color(.surface), in: Circle())
                     }.buttonStyle(.plain).disabled(model.busy).accessibilityLabel("מעבר להיום")
                 }.padding(.horizontal, 18).frame(minWidth: geometry.size.width)
             }.scrollBounceBehavior(.basedOnSize, axes: .horizontal)
@@ -194,7 +193,7 @@ struct BookingCenterPreview: View {
     }
     private var cancellationPrompt: some View {
         ZStack {
-            ChatStyle.ink.opacity(0.18).ignoresSafeArea().accessibilityHidden(true)
+            FCAColors.color(.scrim).opacity(0.18).ignoresSafeArea().accessibilityHidden(true)
             VStack(spacing: 20) {
                 Text("לבטל את ההזמנה?").font(.headline).multilineTextAlignment(.center)
                 HStack(spacing: 12) {
@@ -206,15 +205,15 @@ struct BookingCenterPreview: View {
                         .buttonStyle(BookingCapsuleStyle(secondary: true)).disabled(model.busy)
                 }
             }.padding(24).frame(maxWidth: 340)
-                .background(.white, in: RoundedRectangle(cornerRadius: 24))
-                .shadow(color: ChatStyle.ink.opacity(0.15), radius: 16, y: 6)
+                .background(FCAColors.color(.surface), in: RoundedRectangle(cornerRadius: 24))
+                .shadow(color: FCAColors.color(.shadow).opacity(0.15), radius: 16, y: 6)
                 .padding(24).accessibilityAddTraits(.isModal)
         }
     }
     private func toolbarButton(_ label: String, symbol: String, enabled: Bool, active: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol).font(.title2).frame(width: 48, height: 48)
-                .background(active ? ChatStyle.selected : .white.opacity(0.85), in: Circle())
+                .background(active ? ChatStyle.selected : FCAColors.color(.surface).opacity(0.85), in: Circle())
         }.buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.5).accessibilityLabel(label)
     }
     private func reservationCard(_ row: BookingReservation) -> some View {
@@ -222,7 +221,7 @@ struct BookingCenterPreview: View {
             HStack(spacing: 14) { vehicle(row); member(row); times(row) }
             VStack(spacing: 14) { vehicle(row); member(row); times(row) }
         }.padding(18).frame(maxWidth: .infinity)
-            .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 22))
+            .background(FCAColors.color(.surface).opacity(0.9), in: RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(ChatStyle.border))
     }
     private func vehicle(_ row: BookingReservation) -> some View {

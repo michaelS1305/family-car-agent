@@ -32,7 +32,11 @@ assert 'ToolbarItem(placement: .cancellationAction)' in header
 assert 'Button("חזרה") { model.dismiss() }.disabled(model.busy)' in header
 assert "if sheet != .editor" not in header
 assert "בחירת המועד המוצג" not in forms and "מעבר שעון" not in forms
-assert "!model.canSubmitDraft" in editor and "יש לבחור רכב זמין וטווח שעות תקין." in editor
+assert "!model.canSubmitDraft" in editor
+# The generic instruction was intentionally removed in the approved final polish.
+# Continue checking the authoritative validation rather than requiring obsolete copy.
+model = (root / "BookingModel.swift").read_text(encoding="utf-8")
+assert 'canWrite && catalogLoaded && !catalogLoading && !catalogError && draft?.valid(now: clock(), vehicles: vehicles) == true' in model
 assert "DatePicker(start ?" in forms
 assert "Toggle(" not in forms
 assert "model.filters.start = nil" in forms and "model.filters.end = nil" in forms

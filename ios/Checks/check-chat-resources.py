@@ -53,14 +53,16 @@ assert '.frame(maxWidth: 280' in chat
 content = (root / 'Sources/FamilyCarAgent/ContentView.swift').read_text(encoding='utf-8')
 assert 'if model.restoring || model.screen == .bootstrap' in content
 assert 'Family Car Agent · Dev' not in content
-assert 'model.screen == .onboarding || model.screen == .ready ? .light : nil' in content
+assert '.preferredColorScheme(' not in content
 assert shell.index('.background(ChatStyle.background.ignoresSafeArea())') < shell.index('.toolbar(.hidden, for: .navigationBar)')
 
-# Source-level policy: ready chooses explicit light, regardless of the inherited scheme.
+# Source-level policy: Chat inherits the shared root preference.
 # Runtime Material/Glass rendering under device Light/Dark is not exercised by this check.
-assert '.preferredColorScheme(.light)' in shell
+assert '.preferredColorScheme(' not in shell
+app = (root / 'Sources/FamilyCarAgent/FamilyCarAgentApp.swift').read_text(encoding='utf-8')
+assert '.preferredColorScheme(AppAppearance(storedValue: appearancePreference).colorScheme)' in app
 
-print('PASS: ready explicitly requests Light for either system appearance; Chat background is inside NavigationStack (static check)')
+print('PASS: Chat inherits root appearance; background remains inside NavigationStack (static check)')
 
 loading = content.split('private struct BootstrapLoadingView: View {', 1)[1]
 assert 'model.me' not in loading and 'SessionManager' not in loading

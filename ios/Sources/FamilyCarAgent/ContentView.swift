@@ -37,15 +37,14 @@ struct ContentView: View {
                 }.padding(8)
             }
             if let error = model.error {
-                Text(error).font(.footnote).foregroundStyle(.red)
+                Text(error).font(.footnote).foregroundStyle(FCAColors.color(.error))
                     .multilineTextAlignment(.center).padding(.horizontal, 20).padding(.vertical, 8)
             }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.white.ignoresSafeArea())
+        .background(FCAColors.color(.entryBackground).ignoresSafeArea())
         .environment(\.layoutDirection, .rightToLeft)
-        .preferredColorScheme(model.screen == .intro || model.screen == .login || model.screen == .onboarding || model.screen == .ready ? .light : nil)
         .task { await model.start() }
         .onChange(of: model.chatIdentity, initial: true) { _, value in NativePushService.shared.authenticatedEntry(value) }
         .onChange(of: phase) { _, value in if value == .active { Task {
@@ -66,7 +65,7 @@ private struct BootstrapLoadingView: View {
     var body: some View {
         VStack(spacing: 24) {
             AppAssetImage(path: ChatStyle.wordmark)
-                .frame(maxWidth: 255).frame(height: 85).scaleEffect(0.9).blendMode(.multiply)
+                .frame(maxWidth: 255).frame(height: 85).scaleEffect(0.9).modifier(FCAWordmarkBlend())
             if error != nil || retrying {
                 Text("לא הצלחנו להתחבר כרגע. אפשר לנסות שוב.")
                     .font(.body).multilineTextAlignment(.center)
@@ -77,7 +76,7 @@ private struct BootstrapLoadingView: View {
                     Task { await retry(); retrying = false }
                 } label: {
                     HStack(spacing: 8) {
-                        if retrying { ProgressView().tint(.white) }
+                        if retrying { ProgressView().tint(FCAColors.color(.onPrimaryAction)) }
                         Text("נסה שוב")
                     }
                 }
@@ -90,6 +89,5 @@ private struct BootstrapLoadingView: View {
             }
         }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
             .foregroundStyle(ChatStyle.ink).background(ChatStyle.background.ignoresSafeArea())
-            .preferredColorScheme(.light)
     }
 }

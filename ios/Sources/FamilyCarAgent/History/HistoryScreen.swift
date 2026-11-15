@@ -44,7 +44,7 @@ struct HistoryScreen: View {
                                 .font(.system(size: 20 * textScale))
                                 .padding(.horizontal, 18)
                                 .padding(.vertical, 15)
-                                .background(.white.opacity(0.88), in: Capsule())
+                                .background(FCAColors.color(.surface).opacity(0.88), in: Capsule())
                                 .overlay(Capsule().stroke(ChatStyle.border))
                             }
                             .buttonStyle(.plain)
@@ -111,7 +111,6 @@ struct HistoryScreen: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .environment(\.layoutDirection, .rightToLeft)
-                .preferredColorScheme(.light)
         }
     }
 
@@ -134,21 +133,13 @@ struct HistoryScreen: View {
             if model.active.isEmpty {
                 HStack(spacing: 10) {
                     Circle()
-                        .fill(Color(
-                            red: 39/255,
-                            green: 151/255,
-                            blue: 89/255
-                        ))
+                        .fill(FCAColors.color(.historyIndicator))
                         .frame(width: 8, height: 8)
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("כל הרכבים פנויים")
                             .font(.system(size: 22 * textScale, weight: .semibold))
-                            .foregroundStyle(Color(
-                                red: 49/255,
-                                green: 93/255,
-                                blue: 101/255
-                            ))
+                            .foregroundStyle(FCAColors.color(.historyAvailable))
 
                         Text("אין רכבים בשימוש כרגע")
                             .foregroundStyle(ChatStyle.secondary)
@@ -307,7 +298,7 @@ struct HistoryScreen: View {
 
                 if model.rangeError {
                     Text("זמן ההתחלה חייב להיות לפני זמן הסיום או זהה לו")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(FCAColors.color(.error))
                 }
 
                 HStack(spacing: 12) {
@@ -427,7 +418,7 @@ private struct HistoryCard: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(
-                .white.opacity(0.82),
+                FCAColors.color(.surface).opacity(0.82),
                 in: RoundedRectangle(cornerRadius: 18)
             )
             .overlay(

@@ -49,10 +49,10 @@ struct VehicleConnectionSetupView: View {
         HStack(spacing: 6) {
             Button { revision += 1; operation?.cancel(); close() } label: {
                 Image(systemName: "xmark").font(.title2).frame(width: 44, height: 44)
-                    .background(.white.opacity(0.85), in: Circle())
+                    .background(FCAColors.color(.surface).opacity(0.85), in: Circle())
             }.buttonStyle(.plain).accessibilityLabel("סגירה")
             AppAssetImage(path: ChatStyle.wordmark).frame(maxWidth: 240).frame(height: 62)
-                .blendMode(.multiply).accessibilityHidden(true)
+                .modifier(FCAWordmarkBlend()).accessibilityHidden(true)
             Group {
                 if presentation.canGoBack {
                     Button { presentation.back(); message = nil } label: {
@@ -88,7 +88,7 @@ struct VehicleConnectionSetupView: View {
                     Text(title).font(.title2.bold())
                 }.frame(maxWidth: .infinity).padding(.vertical, 6)
             }.padding(18).frame(maxWidth: .infinity, minHeight: 130)
-                .background(.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 22))
+                .background(FCAColors.color(.surface).opacity(0.8), in: RoundedRectangle(cornerRadius: 22))
                 .overlay(RoundedRectangle(cornerRadius: 22).stroke(ChatStyle.border))
                 .shadow(color: .black.opacity(0.04), radius: 10, y: 5)
         }.buttonStyle(.plain).accessibilityLabel("בחירת " + title)
@@ -112,7 +112,7 @@ struct VehicleConnectionSetupView: View {
                 )
             }
             Button { perform(refreshOnly: true) } label: {
-                Text("רענון").font(.title3).foregroundStyle(Color.blue).frame(minWidth: 80, minHeight: 44)
+                Text("רענון").font(.title3).foregroundStyle(FCAColors.color(.link)).frame(minWidth: 80, minHeight: 44)
             }.buttonStyle(.plain).disabled(busy)
         }
     }
@@ -124,7 +124,7 @@ struct VehicleConnectionSetupView: View {
                     Text("המכשיר הזה").font(.title2.bold()).accessibilityAddTraits(.isHeader)
                     HStack(spacing: 8) {
                         if presentation.authorization.isAuthorized {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityHidden(true)
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(FCAColors.color(.positiveIndicator)).accessibilityHidden(true)
                         }
                         Text(status).font(.title3).foregroundStyle(ChatStyle.secondary)
                     }
@@ -135,12 +135,12 @@ struct VehicleConnectionSetupView: View {
             if !presentation.authorization.isAuthorized {
                 Button { perform(refreshOnly: !presentation.showsActivation) } label: {
                     HStack(spacing: 8) {
-                        if busy { ProgressView().tint(.white) }
+                        if busy { ProgressView().tint(FCAColors.color(.onPrimaryAction)) }
                         Text(busy ? "מאמתים את החיבור…" : presentation.showsActivation ? "חיבור המכשיר" : "אימות החיבור")
                             .font(.headline).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                    }.foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 14)
+                    }.foregroundStyle(FCAColors.color(.onPrimaryAction)).padding(.horizontal, 12).padding(.vertical, 14)
                         .frame(maxWidth: .infinity, minHeight: 50)
-                        .background(ChatStyle.ink.opacity(busy ? 0.55 : 1), in: RoundedRectangle(cornerRadius: 14))
+                        .background(FCAColors.color(.primaryAction).opacity(busy ? 0.55 : 1), in: RoundedRectangle(cornerRadius: 14))
                 }.buttonStyle(.plain).disabled(busy)
             }
         }
@@ -167,7 +167,7 @@ struct VehicleConnectionSetupView: View {
     }
     private func panel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 14, content: content).padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 22))
+            .background(FCAColors.color(.surface).opacity(0.8), in: RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(ChatStyle.border))
             .shadow(color: .black.opacity(0.04), radius: 10, y: 5)
     }

@@ -1,12 +1,12 @@
 import SwiftUI
 
 enum ChatStyle {
-    static let background = Color(red: 246/255, green: 247/255, blue: 247/255)
-    static let ink = Color(red: 36/255, green: 51/255, blue: 65/255)
-    static let incoming = Color(red: 233/255, green: 238/255, blue: 240/255)
-    static let selected = Color(red: 221/255, green: 229/255, blue: 234/255)
-    static let secondary = Color(red: 99/255, green: 123/255, blue: 151/255)
-    static let border = Color(red: 217/255, green: 222/255, blue: 231/255)
+    static let background = FCAColors.color(.background)
+    static let ink = FCAColors.color(.text)
+    static let incoming = FCAColors.color(.incomingBubble)
+    static let selected = FCAColors.color(.selection)
+    static let secondary = FCAColors.color(.secondaryText)
+    static let border = FCAColors.color(.border)
     static let wordmark = "branding/in-app-brand/Family Car Agent Road Logo(1).png"
     static let logo = "branding/app-icon/family-car-agent-logo.png"
 }
@@ -71,7 +71,6 @@ struct AuthenticatedAppShell: View {
         }
         .background(ChatStyle.background.ignoresSafeArea())
         .foregroundStyle(ChatStyle.ink)
-        .preferredColorScheme(.light)
         .allowsHitTesting(!errors.isPresented)
         .accessibilityHidden(errors.isPresented)
         .overlay { if errors.isPresented { AppErrorDialog(presentation: errors) } }

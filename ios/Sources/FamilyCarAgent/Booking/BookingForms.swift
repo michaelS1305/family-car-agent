@@ -52,7 +52,7 @@ struct BookingForms: View {
             dateInput(start: false)
             Button { model.submit() } label: {
                 HStack(spacing: 8) {
-                    if model.busy { ProgressView().tint(.white) }
+                    if model.busy { ProgressView().tint(FCAColors.color(.onPrimaryAction)) }
                     Text("שמירת הזמנה")
                 }
             }.buttonStyle(BookingCapsuleStyle()).disabled(!model.canSubmitDraft)
@@ -148,8 +148,8 @@ struct BookingCapsuleStyle: ButtonStyle {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 12).padding(.vertical, 10)
             .frame(maxWidth: .infinity, minHeight: 44)
-            .foregroundStyle(destructive ? Color.red : secondary ? ChatStyle.ink : .white)
-            .background(secondary || destructive ? Color.white : ChatStyle.ink, in: Capsule())
+            .foregroundStyle(destructive ? FCAColors.color(.error) : secondary ? ChatStyle.ink : FCAColors.color(.onPrimaryAction))
+            .background(secondary || destructive ? FCAColors.color(.surface) : FCAColors.color(.primaryAction), in: Capsule())
             .overlay(Capsule().stroke(secondary || destructive ? ChatStyle.border : .clear))
             .opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
     }
