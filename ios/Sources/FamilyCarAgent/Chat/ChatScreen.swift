@@ -8,6 +8,7 @@ private struct ChatBottomPreference: PreferenceKey {
 struct ChatScreen: View {
     @ObservedObject var model: ChatModel
     let userName: String
+    let retryHistory: () -> Void
     @State private var scroll = ChatScrollPolicy()
     @State private var bottomY: CGFloat = 0
     @State private var dragging = false
@@ -25,7 +26,7 @@ struct ChatScreen: View {
                             if model.historyLoading { ProgressView().accessibilityLabel("טוען שיחה") }
                             if model.historyError != nil {
                                 Text("לא ניתן לטעון את השיחה כרגע").font(.footnote)
-                                Button("נסה שוב", action: model.loadHistory)
+                                Button("נסה שוב", action: retryHistory)
                             }
                             ForEach(model.messages) { message in bubble(message) }
                             if model.sending {

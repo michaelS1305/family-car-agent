@@ -16,6 +16,7 @@ struct AuthenticatedAppShell: View {
     @StateObject private var chat: ChatModel
     @StateObject private var vehicles: VehiclesModel
     @StateObject private var bookings: BookingModel
+    @StateObject private var errors = AppErrorPresentation()
     @State private var keyboardVisible = false
     @State private var navigation = DashboardNavigation()
     init(entry: EntryModel) {
@@ -28,7 +29,7 @@ struct AuthenticatedAppShell: View {
         NavigationStack(path: $navigation.path) {
         ZStack(alignment: .bottom) {
             ZStack {
-                ChatScreen(model: chat, userName: entry.me?.name ?? "")
+                ChatScreen(model: chat, userName: entry.me?.name ?? "", retryHistory: retryHistory)
                     .opacity(chat.mode == .chat ? 1 : 0)
                     .allowsHitTesting(chat.mode == .chat)
                     .accessibilityHidden(chat.mode != .chat)
@@ -71,12 +72,19 @@ struct AuthenticatedAppShell: View {
         .background(ChatStyle.background.ignoresSafeArea())
         .foregroundStyle(ChatStyle.ink)
         .preferredColorScheme(.light)
+        .allowsHitTesting(!errors.isPresented)
+        .accessibilityHidden(errors.isPresented)
+        .overlay { if errors.isPresented { AppErrorDialog(presentation: errors) } }
+        .onChange(of: chat.historyError) { _, _ in presentHistoryError() }
+        .onChange(of: chat.mode) { _, _ in errors.reset() }
         .task { navigation.synchronize(entry.chatIdentity); chat.enter() }
         .onChange(of: entry.chatIdentity) { _, identity in
+            errors.reset()
             vehicles.stop(); navigation.synchronize(identity); chat.enter()
             bookings.synchronize()
         }
         .onChange(of: navigation.path) { _, path in
+            errors.reset()
             if !path.contains(.vehicles) { vehicles.stop(); navigation.vehicleHelpPresented = false }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
@@ -84,7 +92,31 @@ struct AuthenticatedAppShell: View {
             keyboardVisible = frame.minY < UIScreen.main.bounds.height
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardVisible = false }
-        .onDisappear { vehicles.stop(); chat.synchronize() }
+        .onDisappear { errors.reset(); vehicles.stop(); chat.synchronize() }
+    }
+
+    // Only a read-only history load is integrated. Writes and contextual failures
+    // retain their existing retry/uncertainty handling.
+    private var historyDialogKind: AppErrorKind? {
+        guard let failure = chat.historyError, failure.retryAfter == 0,
+              failure.kind == .uncertain || (failure.kind == .unknown && (failure.status ?? 0) >= 500)
+        else { return nil }
+        // Chat currently erases transport details: never infer offline from uncertainty.
+        return AppErrorKind.classify(status: failure.status)
+    }
+    private func retryHistory() {
+        if historyDialogKind != nil { presentHistoryError() }
+        else { chat.loadHistory() }
+    }
+    private func presentHistoryError() {
+        guard navigation.isRoot, chat.mode == .chat, let identity = entry.chatIdentity,
+              let kind = historyDialogKind else { return }
+        errors.present(kind) {
+            guard entry.chatIdentity == identity else { return false }
+            chat.loadHistory()
+            await chat.waitForOperation()
+            return entry.chatIdentity == identity && chat.historyLoaded && chat.historyError == nil
+        }
     }
 }
 

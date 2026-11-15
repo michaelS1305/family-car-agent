@@ -8,7 +8,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             if model.restoring || model.screen == .bootstrap {
                 BootstrapLoadingView(busy: model.restoring || model.busy, error: model.error,
-                                     retry: { Task { await model.retry() } }, exit: model.logout)
+                                     retry: { await model.retry() })
             } else {
             switch model.screen {
             case .intro:
@@ -61,18 +61,32 @@ struct ContentView: View {
 private struct BootstrapLoadingView: View {
     let busy: Bool
     let error: String?
-    let retry: () -> Void
-    let exit: () -> Void
+    let retry: () async -> Void
+    @State private var retrying = false
     var body: some View {
         VStack(spacing: 24) {
             AppAssetImage(path: ChatStyle.wordmark)
                 .frame(maxWidth: 255).frame(height: 85).scaleEffect(0.9).blendMode(.multiply)
-            if busy { ProgressView().accessibilityLabel("מתחברים לחשבון") }
-            else if error != nil {
+            if error != nil || retrying {
                 Text("לא הצלחנו להתחבר כרגע. אפשר לנסות שוב.")
-                    .multilineTextAlignment(.center)
-                Button("נסה שוב", action: retry)
-                Button("חזרה לכניסה", action: exit)
+                    .font(.body).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    guard !busy, !retrying else { return }
+                    retrying = true
+                    Task { await retry(); retrying = false }
+                } label: {
+                    HStack(spacing: 8) {
+                        if retrying { ProgressView().tint(.white) }
+                        Text("נסה שוב")
+                    }
+                }
+                .buttonStyle(ErrorPrimaryButtonStyle())
+                .frame(maxWidth: 260)
+                .disabled(busy || retrying)
+                .accessibilityValue(retrying ? "מנסה שוב" : "")
+            } else if busy {
+                ProgressView().accessibilityLabel("מתחברים לחשבון")
             }
         }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
             .foregroundStyle(ChatStyle.ink).background(ChatStyle.background.ignoresSafeArea())
