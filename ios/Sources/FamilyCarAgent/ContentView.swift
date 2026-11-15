@@ -52,9 +52,6 @@ struct ContentView: View {
             await model.resume()
             NativePushService.shared.authenticatedEntry(model.chatIdentity)
         } } }
-        #if DEBUG
-        .modifier(NativePushDiagnosticControl(enabled: model.chatIdentity != nil))
-        #endif
         .onReceive(NotificationCenter.default.publisher(for: ASAuthorizationAppleIDProvider.credentialRevokedNotification)) { _ in
             Task { await model.resume() }
         }

@@ -17,6 +17,17 @@ spec.loader.exec_module(sign)
 
 
 class PushChecks(unittest.TestCase):
+    def test_temporary_debug_controls_are_removed(self):
+        source = Path(__file__).resolve().parents[1] / "Sources/FamilyCarAgent"
+        self.assertFalse((source / "OfflineEvents/Phase4DeviceDiagnostics.swift").exists())
+        for path in source.rglob("*.swift"):
+            with self.subTest(source=path.name):
+                text = path.read_text(encoding="utf-8")
+                for obsolete in ('Button("P4")', "Push DEBUG", "Phase4DiagnosticControl",
+                                 "Phase4DeviceDiagnostics", "NativePushDiagnosticControl",
+                                 "phase4.migration", "func diagnosticRead()"):
+                    self.assertNotIn(obsolete, text)
+
     def test_identity_requires_exact_profile_certificate(self):
         certificate = b"SYNTHETIC_CERTIFICATE"
         fingerprint = hashlib.sha1(certificate).hexdigest().upper()

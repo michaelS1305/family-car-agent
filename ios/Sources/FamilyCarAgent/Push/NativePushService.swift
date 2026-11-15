@@ -238,31 +238,4 @@ extension NativePushService: UNUserNotificationCenterDelegate {
     }
 }
 
-#if DEBUG
-struct NativePushDiagnosticControl: ViewModifier {
-    @ObservedObject private var push = NativePushService.shared
-    @State private var shown = false
-    let enabled: Bool
-    func body(content: Content) -> some View {
-        content.overlay(alignment: .topLeading) {
-            if enabled { Button("Push DEBUG") { shown = true }.font(.caption2).padding(6) }
-        }.sheet(isPresented: $shown) {
-            NavigationStack {
-                List {
-                    Text("Phase 2B — provider acceptance is not delivery verification")
-                    Text("Configuration loaded: \(push.state.configurationLoaded ? "yes" : "no")")
-                    Text("Dev identity validated: \(push.state.devIdentityValidated ? "yes" : "no")")
-                    Text("Firebase initialized: \(push.state.configured ? "yes" : "no")")
-                    Text("Permission: \(push.state.permission.rawValue)")
-                    Text("APNs token: \(push.state.apns.rawValue)")
-                    Text("FCM token: \(push.state.fcm.rawValue)")
-                    Text("Token changes: \(push.state.tokenChanges)")
-                    Text("Error category: \(push.state.errorCategory)")
-                }.navigationTitle("Push DEBUG")
-                    .toolbar { Button("סגירה") { shown = false } }
-            }
-        }.onChange(of: enabled) { _, value in if !value { shown = false } }
-    }
-}
-#endif
 #endif

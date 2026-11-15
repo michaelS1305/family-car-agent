@@ -171,12 +171,6 @@ import UIKit
                      completionHandler: @escaping () -> Void) {
         Task { @MainActor in
             do {
-                #if DEBUG && os(iOS)
-                if identifier == Phase4DeviceDiagnostics.identifier {
-                    try Phase4DeviceDiagnostics.restore(completionHandler)
-                    return
-                }
-                #endif
                 let transport = try await VehicleSessionRuntime.shared.get().restore(identifier)
                 guard transport.identifier == identifier else { throw VehicleQueueError.contextUnavailable }
                 transport.handleBackgroundEvents(completion: completionHandler)

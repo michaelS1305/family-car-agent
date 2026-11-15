@@ -8,9 +8,6 @@ struct FamilyCarAgentApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                #if DEBUG && os(iOS)
-                .modifier(Phase4DiagnosticControl())
-                #endif
         }
     }
 }
