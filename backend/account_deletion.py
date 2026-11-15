@@ -7,6 +7,7 @@ from uuid import UUID
 import requests
 
 from deletion_gate import lock_identity
+import apple_revocation
 
 
 logger = logging.getLogger(__name__)
@@ -208,16 +209,47 @@ def delete_auth_identity(auth_user_id):
 
 
 def recover_one(pool, auth_user_id):
-    if not cleanup(pool, auth_user_id):
+    attempt = apple_revocation.begin(pool, auth_user_id)
+    if attempt is None:
         return
-    with pool.connection() as conn:
-        exists = conn.execute('SELECT 1 FROM auth.users WHERE id=%s', (auth_user_id,)).fetchone()
-    if exists:
-        delete_auth_identity(auth_user_id)  # No DB connection or lock spans HTTP.
-    with pool.connection() as conn:
-        lock_identity(conn, auth_user_id, exclusive=True)
-        conn.execute("""DELETE FROM account_deletion_jobs WHERE auth_user_id=%s AND phase='auth_pending'
-                     AND NOT EXISTS(SELECT 1 FROM auth.users WHERE id=%s)""", (auth_user_id, auth_user_id))
+    operation, failure = 'prepare', 'deletion_preparation_failed'
+    try:
+        if not apple_revocation.prepare(pool, attempt):
+            return
+        operation, failure = 'application_cleanup', 'deletion_cleanup_failed'
+        if not apple_revocation.note(pool, attempt, operation) or not cleanup(pool, auth_user_id):
+            return
+        operation, failure = 'apple_revoke', 'apple_revocation_internal_error'
+        if not apple_revocation.advance(pool, attempt):
+            return
+        operation, failure = 'supabase_auth_verify', 'supabase_auth_verification_failed'
+        if not apple_revocation.note(pool, attempt, operation):
+            return
+        with apple_revocation.transaction(pool, auth_user_id) as conn:
+            exists = conn.execute('SELECT 1 FROM auth.users WHERE id=%s', (auth_user_id,)).fetchone()
+        if exists:
+            operation, failure = 'supabase_auth_delete', 'supabase_auth_deletion_failed'
+            if not apple_revocation.note(pool, attempt, operation):
+                return
+            delete_auth_identity(auth_user_id)  # No DB connection or lock spans HTTP.
+        operation, failure = 'supabase_auth_verify', 'supabase_auth_verification_failed'
+        with apple_revocation.transaction(pool, auth_user_id) as conn:
+            exists = conn.execute('SELECT 1 FROM auth.users WHERE id=%s', (auth_user_id,)).fetchone()
+        if exists:
+            apple_revocation.note(pool, attempt, 'supabase_auth_delete', 'supabase_auth_deletion_failed')
+            return
+        operation, failure = 'finalize', 'deletion_finalization_failed'
+        if apple_revocation.note(pool, attempt, operation):
+            if not apple_revocation.finalize(pool, attempt):
+                apple_revocation.note(pool, attempt, operation, failure)
+    except Exception:
+        # Preserve the original failure/retry behavior even if diagnostics cannot
+        # be persisted. Do not log the exception or any provider material.
+        try:
+            apple_revocation.note(pool, attempt, operation, failure)
+        except Exception:
+            _log('diagnostic_persistence_failed')
+        raise
 
 
 def run_due(pool, should_stop=lambda: False):
