@@ -481,6 +481,14 @@ final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTrans
         return AuthSession(owner: value.user.id, accessToken: value.access_token, refreshToken: value.refresh_token,
                            expires: now.addingTimeInterval(value.expires_in))
     }
+    func captureApple(_ credential: AppleCredentialCapture, token: String) async throws {
+        struct Reply: Decodable, Sendable { let status: String }
+        let result = try await send(Reply.self,
+            url: environment.backendURL.appendingPathComponent("api/account/apple-credential"),
+            method: "POST", body: JSONEncoder().encode(["code": credential.code, "nonce": credential.nonce]),
+            token: token, auth: false)
+        guard result.status == "stored" else { throw AuthFailure.invalidResponse }
+    }
     func backend<T: Decodable & Sendable>(_ type: T.Type, path: String, token: String,
                                           fields: [String: Field]? = nil) async throws -> T {
         let paths: Set<String> = ["/api/me", "/api/family", "/api/onboarding/create-family/address", "/api/onboarding/create-family",

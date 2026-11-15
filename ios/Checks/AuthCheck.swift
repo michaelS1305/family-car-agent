@@ -16,13 +16,30 @@ actor TestTransport: AuthTransport {
     var result: AuthSession
     var failure: AuthFailure?
     var calls = 0
+    var lastFields: [String: String] = [:]
     var paused = false
     var continuation: CheckedContinuation<Void, Never>?
+    var captureCalls = 0
+    var capturesFinished = 0
+    var capturedToken: String?
+    var captureFailure = false
+    var capturePaused = false
+    var captureContinuation: CheckedContinuation<Void, Never>?
+    func configureCapture(fail: Bool = false, pause: Bool = false) { captureFailure = fail; capturePaused = pause }
+    func setResult(_ value: AuthSession) { result = value }
+    func releaseCapture() { capturePaused = false; captureContinuation?.resume(); captureContinuation = nil }
+    func captureApple(_ credential: AppleCredentialCapture, token: String) async throws {
+        defer { capturesFinished += 1 }
+        captureCalls += 1; capturedToken = token
+        if capturePaused { await withCheckedContinuation { captureContinuation = $0 } }
+        if captureFailure { throw AuthFailure.network }
+    }
     init(_ result: AuthSession) { self.result = result }
     func pause() { paused = true }
     func fail(_ value: AuthFailure) { failure = value }
     func release() { paused = false; continuation?.resume(); continuation = nil }
     func exchange(grant: String, fields: [String: String]) async throws -> AuthSession {
+        lastFields = fields
         calls += 1
         if paused { await withCheckedContinuation { continuation = $0 } }
         if let failure { throw failure }
@@ -40,6 +57,7 @@ actor TestTransport: AuthTransport {
         catch { check(error as? AuthFailure == expected, name) }
     }
     @MainActor static func main() async throws {
+        try await runAppleCaptureChecks()
         let env = AppEnvironment.development
         let now = Date(timeIntervalSince1970: 1000)
         let pending = PendingAuthorization(verifier: "test-verifier", nonce: "test-nonce", started: now, callbackURL: env.proposedOAuthCallbackURL)
@@ -218,6 +236,44 @@ actor TestTransport: AuthTransport {
         try await runEntryUIChecks()
         print("Auth checks passed: \(checks). Mock identities only; no provider/device claims.")
     }
+}
+
+@MainActor func runAppleCaptureChecks() async throws {
+    let original = AuthSession(owner: UUID(), accessToken: "synthetic-original", refreshToken: "synthetic-refresh", expires: Date().addingTimeInterval(3600))
+    let credential = AppleCredentialCapture(code: "synthetic-code", nonce: "synthetic-nonce")
+    for fails in [false, true] {
+        let completedTransport = TestTransport(original)
+        await completedTransport.configureCapture(fail: fails)
+        let completed = SessionManager(vault: TestVault(), transport: completedTransport)
+        try await completed.login(grant: "id_token", fields: ["provider":"apple"], appleCredential: credential)
+        while await completedTransport.capturesFinished == 0 { await Task.yield() }
+        AuthCheck.check(completed.session?.owner == original.owner, "capture completion never breaks Apple login")
+        AuthCheck.check(await completedTransport.lastFields == ["provider":"apple"], "authorization code not forwarded through Supabase grant")
+        let transport = TestTransport(original), vault = TestVault()
+        await transport.configureCapture(fail: fails, pause: true)
+        let sessions = SessionManager(vault: vault, transport: transport)
+        try await sessions.login(grant: "id_token", fields: ["provider":"apple"], appleCredential: credential)
+        AuthCheck.check(sessions.session?.owner == original.owner, "Apple login does not wait for capture")
+        while await transport.captureContinuation == nil { await Task.yield() }
+        AuthCheck.check(await transport.captureCalls == 1, "one best-effort capture")
+        AuthCheck.check(await transport.capturedToken == original.accessToken, "capture pinned to authenticated owner")
+        let encoded = try JSONEncoder().encode(vault.value)
+        AuthCheck.check(!String(decoding: encoded, as: UTF8.self).contains("synthetic-code"), "code never persisted in vault")
+        try sessions.clear()
+        let other = AuthSession(owner: UUID(), accessToken: "synthetic-other", refreshToken: "synthetic-other-refresh", expires: original.expires)
+        await transport.setResult(other)
+        try await sessions.login(grant: "pkce", fields: ["code":"google-code"])
+        await transport.releaseCapture()
+        while await transport.capturesFinished == 0 { await Task.yield() }
+        AuthCheck.check(sessions.session?.owner == other.owner, "late capture failure/success cannot clear new account")
+        AuthCheck.check(await transport.captureCalls == 1, "Google does not capture Apple credentials")
+    }
+    let transport = TestTransport(original)
+    let sessions = SessionManager(vault: TestVault(), transport: transport)
+    try await sessions.login(grant: "id_token", fields: ["provider":"apple"], appleCredential: credential)
+    try sessions.clear() // MainActor has not yielded: scheduled capture must observe the fence.
+    for _ in 0..<10 { await Task.yield() }
+    AuthCheck.check(await transport.captureCalls == 0, "logout before submission prevents capture")
 }
 
 actor SettingsSessionBackend: BackendTransport, SettingsProfileTransport {

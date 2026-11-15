@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import JSONResponse
 from account_deletion_api import router as deletion_router, deletion_lifespan
+from apple_credentials_api import router as apple_credentials_router
 from vehicle_api import router as vehicle_router
 from vehicle_reference_api import router as vehicle_reference_router
 from device_api import router as device_router
@@ -131,6 +132,7 @@ async def app_lifespan(app):
 
 app = FastAPI(lifespan=app_lifespan)
 app.include_router(deletion_router)
+app.include_router(apple_credentials_router)
 app.include_router(vehicle_router)
 app.include_router(vehicle_reference_router)
 app.include_router(device_router)

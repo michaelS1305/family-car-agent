@@ -142,7 +142,13 @@ import UIKit
         #if DEBUG
         AppleAuthDiagnostics.event("credential_validation_passed")
         #endif
-        finish(.success(ProviderResult(grant: "id_token", fields: ["provider": "apple", "id_token": token, "nonce": nonce], appleUser: credential.user)))
+        let code = credential.authorizationCode.flatMap { String(data: $0, encoding: .utf8) }
+        let capture = code.flatMap { value -> AppleCredentialCapture? in
+            guard !value.isEmpty, value.utf8.count <= 4096 else { return nil }
+            return AppleCredentialCapture(code: value, nonce: nonce)
+        }
+        finish(.success(ProviderResult(grant: "id_token", fields: ["provider": "apple", "id_token": token, "nonce": nonce],
+                                       appleUser: credential.user, appleCredential: capture)))
     }
     func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
         #if DEBUG

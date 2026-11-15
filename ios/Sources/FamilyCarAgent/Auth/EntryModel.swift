@@ -301,7 +301,8 @@ import Combine
             #if DEBUG
             if apple { AppleAuthDiagnostics.event("supabase_operation_reached") }
             #endif
-            try await sessions.login(grant: result.grant, fields: result.fields, appleUser: result.appleUser)
+            try await sessions.login(grant: result.grant, fields: result.fields, appleUser: result.appleUser,
+                                     appleCredential: result.appleCredential)
             #if DEBUG
             if !apple { GoogleAuthDiagnostics.event("session_persisted") }
             #endif

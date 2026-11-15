@@ -98,6 +98,13 @@ struct ProviderResult {
     let grant: String
     let fields: [String: String]
     var appleUser: String? = nil
+    var appleCredential: AppleCredentialCapture? = nil
+}
+
+/// Single-use provider material; deliberately not Codable or part of AuthSession.
+struct AppleCredentialCapture: Sendable {
+    let code: String
+    let nonce: String
 }
 
 @MainActor protocol NativeAuthProvider: AnyObject {
@@ -233,6 +240,11 @@ struct VehicleSessionScope: Codable, Equatable, Sendable {
 
 protocol AuthTransport: Sendable {
     func exchange(grant: String, fields: [String: String]) async throws -> AuthSession
+    func captureApple(_ credential: AppleCredentialCapture, token: String) async throws
+}
+
+extension AuthTransport {
+    func captureApple(_ credential: AppleCredentialCapture, token: String) async throws {}
 }
 
 /// One session owner and one refresh flight. Every async result is fenced by generation.
@@ -242,6 +254,7 @@ protocol AuthTransport: Sendable {
     private(set) var session: AuthSession?
     private(set) var generation = 0
     private var refreshing: Task<AuthSession, Error>?
+    private var appleCapture: Task<Void, Never>?
 
     init(vault: any SessionVault, transport: any AuthTransport) {
         self.vault = vault; self.transport = transport
@@ -286,17 +299,29 @@ protocol AuthTransport: Sendable {
     }
     func clear() throws {
         let previous = session
+        appleCapture?.cancel(); appleCapture = nil
         generation += 1; refreshing?.cancel(); refreshing = nil; session = nil
         onInvalidation?(previous)
         try vault.clear() // caller must not begin another login if erasure fails
     }
-    func login(grant: String, fields: [String: String], appleUser: String? = nil) async throws {
+    func login(grant: String, fields: [String: String], appleUser: String? = nil,
+               appleCredential: AppleCredentialCapture? = nil) async throws {
         let version = generation
         guard session == nil else { throw AuthFailure.stale }
         var result = try await transport.exchange(grant: grant, fields: fields)
         guard version == generation, session == nil else { throw AuthFailure.stale }
         result.appleUser = appleUser
         try vault.write(result); session = result
+        if grant == "id_token", fields["provider"] == "apple", let appleCredential {
+            let owner = result.owner
+            let token = result.accessToken // Pin this session, never obtain another account's token later.
+            appleCapture = Task { @MainActor [weak self, transport] in
+                guard let self, !Task.isCancelled, self.generation == version,
+                      self.session?.owner == owner else { return }
+                // Best effort, once, no offline replay and no session/UI changes on completion.
+                try? await transport.captureApple(appleCredential, token: token)
+            }
+        }
     }
     func activate(owner: UUID) throws {
         guard var value = session, value.owner == owner else { throw AuthFailure.stale }
