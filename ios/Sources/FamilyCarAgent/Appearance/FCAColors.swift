@@ -9,6 +9,8 @@ enum FCABranding {
     static func wordmark(dark: Bool) -> String { dark ? darkWordmark : lightWordmark }
 }
 
+/// Dark blue values are a user-approved visual adaptation of Android photographs,
+/// NOT values from the local Android FcaTheme (which uses charcoal).
 /// Adaptive presentation only. Light values preserve the existing iOS palette;
 /// distinct legacy values remain separate roles rather than being normalized.
 enum FCAColors {
@@ -31,30 +33,32 @@ enum FCAColors {
     static func value(_ role: Role, dark: Bool) -> Value {
         if dark {
             switch role {
-            case .background, .entryBackground: return .rgb(0x121A22)
-            case .surface, .input, .systemSurface, .settingsCard, .mapFallback, .dialog: return .rgb(0x1D2833)
-            case .elevated, .selection: return .rgb(0x303D49)
-            case .text, .incomingText, .outgoingText, .onSelection, .entryHeading: return .rgb(0xEDF2F7)
-            case .secondaryText, .entryBody, .entryNavigation, .entryFootnote: return .rgb(0xBAC8D5)
-            case .mutedText, .retired: return .rgb(0xADB9C5)
-            case .primaryAction, .secondaryAction, .calendarSelection, .calendarIndicator, .entryLink: return .rgb(0xA9CDF8)
-            case .onPrimaryAction, .onCalendarSelection: return .rgb(0x102D4F)
-            case .border, .divider, .entryDivider, .entryBorder, .entryBackBorder, .loginBorder, .onboardingBorder, .wheelLine: return .rgb(0x596B7C)
-            case .incomingBubble, .sheet, .familyControl, .wheelBase: return .rgb(0x2D3945)
-            case .wheelSurface: return .rgb(0x303D49)
-            case .wheelHighlight: return .rgb(0x596B7C)
-            case .outgoingBubble: return .rgb(0x244663)
+            case .background, .entryBackground: return .rgb(0x102D62)
+            case .surface, .input, .systemSurface, .settingsCard, .mapFallback, .dialog: return .rgb(0x173B78)
+            case .elevated, .selection: return .rgb(0x2856A0)
+            case .text, .incomingText, .outgoingText, .onSelection, .entryHeading: return .rgb(0xFFFFFF)
+            case .secondaryText, .entryBody, .entryNavigation, .entryFootnote: return .rgb(0xD2E3FA)
+            case .mutedText, .retired: return .rgb(0xB7CDEB)
+            case .primaryAction: return .rgb(0x2859AB)
+            case .secondaryAction, .calendarSelection, .calendarIndicator, .entryLink: return .rgb(0xDCEBFF)
+            case .onPrimaryAction: return .rgb(0xFFFFFF)
+            case .onCalendarSelection: return .rgb(0x102D62)
+            case .border, .divider, .entryDivider, .entryBorder, .entryBackBorder, .loginBorder, .onboardingBorder, .wheelLine: return .rgb(0x8EB9F0)
+            case .incomingBubble, .sheet, .familyControl, .wheelBase: return .rgb(0x1A4080)
+            case .wheelSurface: return .rgb(0x2856A0)
+            case .wheelHighlight: return .rgb(0x8EB9F0)
+            case .outgoingBubble: return .rgb(0x24549A)
             case .success, .historyAvailable, .historyIndicator: return .rgb(0x8BD8AD)
             case .warning: return .rgb(0xFFD18A)
             case .error, .retireAction, .destructiveAction: return .rgb(0xFFB4AB)
             case .retireBorder: return .rgb(0x8E5654)
-            case .onDestructiveAction: return .rgb(0x121A22)
-            case .shadow, .scrim: return .rgb(0x000000)
-            case .link: return .rgb(0xA9CDF8)
+            case .onDestructiveAction: return .rgb(0x102D62)
+            case .shadow, .scrim: return .rgb(0x071B3B)
+            case .link: return .rgb(0xDCEBFF)
             case .positiveIndicator: return .rgb(0x8BD8AD)
             // iOS semantic assignment: text on a solid light status fill.
             // For translucent status surfaces use the status color as foreground instead.
-            case .onStatus: return .rgb(0x121A22)
+            case .onStatus: return .rgb(0x102D62)
             }
         }
         switch role {
@@ -99,7 +103,7 @@ enum FCAColors {
     #if canImport(UIKit)
     // Preserve the app's existing accent in Light (including system resolution).
     static func appearanceAccent(dark: Bool) -> Color {
-        dark ? color(.primaryAction) : .accentColor
+        dark ? color(.calendarSelection) : .accentColor
     }
     static func color(_ role: Role) -> Color { Color(uiColor: uiColor(role)) }
     // Canvas needs explicit resolution from SwiftUI's effective environment.

@@ -9,7 +9,7 @@ struct VehiclesScreen: View {
             GeometryReader { geometry in
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        AppAssetImage(path: "icons/archive/vehicles_icon.png")
+                        AppAssetImage(path: "icons/archive/vehicles_icon.png", monochromeControl: true)
                             .frame(width: 200, height: 200).offset(y: -15).frame(height: 108)
                             .accessibilityLabel("רכבים")
                         if model.current {
@@ -59,7 +59,7 @@ struct VehiclesScreen: View {
     }
     private var empty: some View {
         VStack(spacing: 0) {
-            AppAssetImage(path: "icons/archive/no_cars_icon.png").frame(width: 132, height: 132).accessibilityHidden(true)
+            AppAssetImage(path: "icons/archive/no_cars_icon.png", monochromeControl: true).frame(width: 132, height: 132).accessibilityHidden(true)
             Text("אין עדיין רכבים").font(.system(size: 26, weight: .bold)).padding(.top, 24)
             Text(model.mayAdd ? "הוסיפו את הרכב הראשון של המשפחה\nכדי להתחיל לנהל אותו כאן" : "כרגע אין רכבים במשפחה\nרק מנהל המשפחה יכול להוסיף רכבים")
                 .font(.system(size: 18)).foregroundStyle(ChatStyle.secondary).multilineTextAlignment(.center).padding(.top, 16)

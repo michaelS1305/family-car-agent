@@ -119,7 +119,7 @@ struct VehicleConnectionSetupView: View {
     private var deviceCard: some View {
         panel {
             HStack(alignment: .top, spacing: 12) {
-                AppAssetImage(path: "icons/archive/phone_icon.png").frame(width: 52, height: 60).accessibilityHidden(true)
+                AppAssetImage(path: "icons/archive/phone_icon.png", monochromeControl: true).frame(width: 52, height: 60).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("המכשיר הזה").font(.title2.bold()).accessibilityAddTraits(.isHeader)
                     HStack(spacing: 8) {
@@ -148,7 +148,7 @@ struct VehicleConnectionSetupView: View {
     private func shortcutCard(action: VehicleConnectionPresentation.ShortcutAction, title: String, description: String) -> some View {
         panel {
             HStack(alignment: .top, spacing: 12) {
-                AppAssetImage(path: "icons/archive/single_car_icon.png").frame(width: 64, height: 64).accessibilityHidden(true)
+                AppAssetImage(path: "icons/archive/single_car_icon.png", monochromeControl: true).frame(width: 64, height: 64).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(title).font(.title2.bold()).accessibilityAddTraits(.isHeader)
                     Text(presentation.shortcutURL(for: action) == nil ? "לא ניתן לזהות את שיטת החיבור לרכב" : "ההתקנה מתבצעת באפליקציית קיצורים").font(.callout).foregroundStyle(ChatStyle.secondary)

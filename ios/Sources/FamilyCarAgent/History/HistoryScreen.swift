@@ -16,13 +16,14 @@ struct HistoryScreen: View {
         _model = StateObject(wrappedValue: HistoryModel(gateway: entry))
     }
 
+    @Environment(\.colorScheme) private var colorScheme
     var body: some View {
         VStack(spacing: 0) {
             VehiclesHeader(back: back)
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 18) {
-                        AppAssetImage(path: "icons/archive/history_icon.png")
+                        AppAssetImage(path: "icons/archive/history_icon.png", monochromeControl: true)
                             .frame(width: 200, height: 200)
                             .offset(y: -15)
                             .frame(height: 108)
@@ -251,74 +252,78 @@ struct HistoryScreen: View {
     private var filters: some View {
         NavigationStack {
             Form {
-                Picker("רכב", selection: $model.draft.vehicle) {
-                    Text("כל הרכבים").tag(UUID?.none)
+                Group {
+                    Picker("רכב", selection: $model.draft.vehicle) {
+                        Text("כל הרכבים").tag(UUID?.none)
 
-                    if let selected = model.draft.vehicle,
-                       !model.vehicles.contains(where: { $0.id == selected }) {
-                        Text("נבחר").tag(Optional(selected))
+                        if let selected = model.draft.vehicle,
+                           !model.vehicles.contains(where: { $0.id == selected }) {
+                            Text("נבחר").tag(Optional(selected))
+                        }
+
+                        ForEach(model.vehicles) { vehicle in
+                            Text(vehicle.name).tag(Optional(vehicle.id))
+                        }
                     }
 
-                    ForEach(model.vehicles) { vehicle in
-                        Text(vehicle.name).tag(Optional(vehicle.id))
+                    Picker("בן משפחה", selection: $model.draft.member) {
+                        Text("כל בני המשפחה").tag(UUID?.none)
+
+                        if let selected = model.draft.member,
+                           !model.members.contains(where: { $0.id == selected }) {
+                            Text("נבחר").tag(Optional(selected))
+                        }
+
+                        ForEach(model.members) { member in
+                            Text(member.name).tag(Optional(member.id))
+                        }
                     }
-                }
 
-                Picker("בן משפחה", selection: $model.draft.member) {
-                    Text("כל בני המשפחה").tag(UUID?.none)
-
-                    if let selected = model.draft.member,
-                       !model.members.contains(where: { $0.id == selected }) {
-                        Text("נבחר").tag(Optional(selected))
+                    if model.membersLoading {
+                        ProgressView("טוען בני משפחה…")
                     }
 
-                    ForEach(model.members) { member in
-                        Text(member.name).tag(Optional(member.id))
+                    if model.membersError {
+                        Button("לא ניתן לטעון בני משפחה — נסה שוב") {
+                            model.refreshMembers()
+                        }
                     }
-                }
 
-                if model.membersLoading {
-                    ProgressView("טוען בני משפחה…")
-                }
-
-                if model.membersError {
-                    Button("לא ניתן לטעון בני משפחה — נסה שוב") {
-                        model.refreshMembers()
+                    if model.currentStatus != .ready {
+                        Button("רענון רשימת רכבים") {
+                            model.refreshCurrent()
+                        }
                     }
-                }
 
-                if model.currentStatus != .ready {
-                    Button("רענון רשימת רכבים") {
-                        model.refreshCurrent()
+                    filterDate(start: true)
+                    filterDate(start: false)
+
+                    if model.rangeError {
+                        Text("זמן ההתחלה חייב להיות לפני זמן הסיום או זהה לו")
+                            .foregroundStyle(FCAColors.color(.error))
                     }
-                }
 
-                filterDate(start: true)
-                filterDate(start: false)
+                    HStack(spacing: 12) {
+                        Button("החלת מסננים") {
+                            model.apply()
+                        }
+                        .buttonStyle(BookingCapsuleStyle())
+                        .disabled(!model.current)
 
-                if model.rangeError {
-                    Text("זמן ההתחלה חייב להיות לפני זמן הסיום או זהה לו")
-                        .foregroundStyle(FCAColors.color(.error))
-                }
-
-                HStack(spacing: 12) {
-                    Button("החלת מסננים") {
-                        model.apply()
+                        Button("איפוס מסננים") {
+                            model.draft = HistoryFilters()
+                            pickingStart = false
+                            pickingEnd = false
+                        }
+                        .buttonStyle(BookingCapsuleStyle(secondary: true))
+                        .disabled(!model.current)
                     }
-                    .buttonStyle(BookingCapsuleStyle())
-                    .disabled(!model.current)
-
-                    Button("איפוס מסננים") {
-                        model.draft = HistoryFilters()
-                        pickingStart = false
-                        pickingEnd = false
-                    }
-                    .buttonStyle(BookingCapsuleStyle(secondary: true))
-                    .disabled(!model.current)
-                }
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                }.listRowBackground(colorScheme == .dark ? FCAColors.color(.surface) : nil)
             }
+            .scrollContentBackground(colorScheme == .dark ? .hidden : .automatic)
+            .background(colorScheme == .dark ? FCAColors.color(.background) : nil)
             .navigationTitle("סינון היסטוריה")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -23,7 +23,7 @@ struct FamilyScreen: View {
             }.frame(height: 76).padding(.horizontal, 18)
             ScrollView {
                 VStack(spacing: 18) {
-                    AppAssetImage(path: "icons/archive/family_icon.png")
+                    AppAssetImage(path: "icons/archive/family_icon.png", monochromeControl: true)
                         .frame(width: 200, height: 200).offset(y: -15)
                         .frame(height: 108).accessibilityLabel("משפחה")
                     if let profile = model.visibleProfile {

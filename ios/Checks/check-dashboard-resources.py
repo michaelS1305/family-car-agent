@@ -29,7 +29,7 @@ assert 'logout: entry.logout' in shell and 'busy: entry.busy' in shell
 assert 'navigation.synchronize(identity)' in shell
 assert 'ChatScreen(model: chat' in shell and '.opacity(chat.mode == .chat ? 1 : 0)' in shell
 assert 'Canvas {' in screen and 'ForEach(DashboardDestination.allCases' in screen
-assert 'AppAssetImage(path: destination.asset)' in screen and '.accessibilityLabel(destination.label)' in screen
+assert 'AppAssetImage(path: destination.asset, monochromeControl: true)' in screen and '.accessibilityLabel(destination.label)' in screen
 assert '.contentShape(Rectangle())' in screen and r'.environment(\.layoutDirection, .leftToRight)' in screen
 assert 'glassEffect' not in screen and '.clipped()' not in screen
 print('PASS: seven Dashboard PNGs' + (' packaged byte-for-byte' if len(sys.argv) > 1 else ' present') + '; navigation/logout wiring (static, not device-tested)')

@@ -77,7 +77,7 @@ struct VehicleDetailsScreen: View {
         return detail.inUse ? FCAColors.color(.warning) : FCAColors.color(.success)
     }
     private func icon(_ name: String, size: CGFloat) -> some View {
-        AppAssetImage(path: "icons/archive/" + name).frame(width: size, height: size).accessibilityHidden(true)
+        AppAssetImage(path: "icons/archive/" + name, monochromeControl: true).frame(width: size, height: size).accessibilityHidden(true)
     }
     private func panel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10, content: content).frame(maxWidth: .infinity, alignment: .leading)
@@ -166,7 +166,7 @@ private struct VehicleDetailsEditor: View {
                     case .connection:
                         EmptyView() // Connection has its own full-screen flow.
                     case .retire:
-                        AppAssetImage(path: "icons/archive/trash_icon.png").frame(height: 36).frame(maxWidth: .infinity)
+                        AppAssetImage(path: "icons/archive/trash_icon.png", monochromeControl: true).frame(height: 36).frame(maxWidth: .infinity)
                         Text("הרכב יישאר בהיסטוריה ולא יהיה זמין לשימוש ולהזמנות חדשות. הזמנות פעילות שטרם הסתיימו, כולל הזמנות עתידיות, יבוטלו. לא ניתן להחזיר את הרכב לפעילות.")
                     case .edit: editFields
                     case .maintenance:

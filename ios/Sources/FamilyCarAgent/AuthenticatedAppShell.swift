@@ -134,7 +134,7 @@ struct AppModeBar: View {
         Button { mode = value } label: {
             // Display the entire original PNG, including lettering. Match the previous
             // cropped artwork's pixel scale and center without changing the control layout.
-            AppAssetImage(path: "icons/archive/" + asset).frame(width: 34, height: 34)
+            AppAssetImage(path: "icons/archive/" + asset, monochromeControl: true).frame(width: 34, height: 34)
             .scaleEffect(scale)
             .offset(y: offset)
             .frame(maxWidth: .infinity).frame(height: 50)
@@ -147,8 +147,12 @@ struct AppModeBar: View {
 }
 
 private struct ModeBarGlass: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
     @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
+        if colorScheme == .dark {
+            content.background(FCAColors.color(.surface), in: Capsule())
+                .overlay(Capsule().stroke(FCAColors.color(.border)))
+        } else if #available(iOS 26.0, *) {
             content.glassEffect(.regular.interactive(), in: Capsule())
         } else {
             content.background(.ultraThinMaterial, in: Capsule())

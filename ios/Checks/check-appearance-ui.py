@@ -70,3 +70,14 @@ assert 'NavigationStack(path: $navigation.path)' in shell
 assert '.presentationDetents([peek, .large], selection: $detent)' in booking
 assert '.presentationDragIndicator(.visible)' in booking
 print('PASS: root-only appearance, shared preference and accessible selector; 19 adaptive view files, inherited sheets, unchanged navigation and branding')
+
+# Explicit monochrome control opt-in, never a global image recolor.
+assert 'var monochromeControl = false' in asset
+assert '.renderingMode(monochromeControl && colorScheme == .dark ? .template : .original)' in asset
+for text in views.values():
+    for line in text.splitlines():
+        if 'monochromeControl: true' in line:
+            assert not any(x in line for x in ['wordmark', 'branding/', 'category.asset', 'VehicleCategory.illustration', 'bluetooth_icon']), line
+for file in ['Booking/BookingForms.swift', 'History/HistoryScreen.swift']:
+    assert '.scrollContentBackground(colorScheme == .dark ? .hidden : .automatic)' in views[file]
+    assert '.listRowBackground(colorScheme == .dark ? FCAColors.color(.surface) : nil)' in views[file]

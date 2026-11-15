@@ -23,6 +23,7 @@ enum AppAsset {
 /// Displays an FCA asset without changing its original aspect ratio.
 struct AppAssetImage: View {
     let path: String
+    var monochromeControl = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -30,8 +31,10 @@ struct AppAssetImage: View {
             if let image = AppAsset.load(path == FCABranding.lightWordmark
                                         ? FCABranding.wordmark(dark: colorScheme == .dark) : path) {
                 Image(uiImage: image)
+                    .renderingMode(monochromeControl && colorScheme == .dark ? .template : .original)
                     .resizable()
                     .scaledToFit()
+                    .foregroundStyle(FCAColors.color(.text))
             } else {
                 EmptyView()
             }

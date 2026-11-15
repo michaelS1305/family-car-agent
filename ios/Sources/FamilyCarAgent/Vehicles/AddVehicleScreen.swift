@@ -10,7 +10,7 @@ struct AddVehicleScreen: View {
             VehiclesHeader { focused = nil; model.pop() }
             if model.current {
                 HStack(spacing: 12) {
-                    AppAssetImage(path: "icons/archive/single_car_icon.png").frame(width: 40, height: 40)
+                    AppAssetImage(path: "icons/archive/single_car_icon.png", monochromeControl: true).frame(width: 40, height: 40)
                     Text("הוספת רכב").font(.system(size: 27, weight: .bold))
                 }.padding(.top, 12).padding(.bottom, 24)
                 ScrollViewReader { proxy in
@@ -95,7 +95,7 @@ struct AddVehicleScreen: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(label)
             HStack(spacing: 10) {
-                AppAssetImage(path: "icons/archive/" + icon).frame(width: 24, height: 24).accessibilityHidden(true)
+                AppAssetImage(path: "icons/archive/" + icon, monochromeControl: true).frame(width: 24, height: 24).accessibilityHidden(true)
                 TextField(hint, text: value).font(.system(size: 16)).multilineTextAlignment(.trailing)
                     .environment(\.layoutDirection, .leftToRight).focused($focused, equals: focus)
                     .accessibilityLabel(label).submitLabel(focus == .plate ? .done : .next)

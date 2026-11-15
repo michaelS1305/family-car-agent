@@ -6,19 +6,24 @@ struct BookingForms: View {
     let sheet: BookingModel.Sheet
     @State private var pickingStart = false
     @State private var pickingEnd = false
+    @Environment(\.colorScheme) private var colorScheme
     var body: some View {
         NavigationStack {
             Form {
-                if let notice = model.notice, sheet != .editor {
-                    Text(notice).foregroundStyle(ChatStyle.ink)
-                }
-                if model.busy { ProgressView("שומר…") }
-                switch sheet {
-                case .editor: editor
-                case .filters: filters
-                case .cancellation: EmptyView() // Presented over the Booking Center, never as a form.
-                }
+                Group {
+                    if let notice = model.notice, sheet != .editor {
+                        Text(notice).foregroundStyle(ChatStyle.ink)
+                    }
+                    if model.busy { ProgressView("שומר…") }
+                    switch sheet {
+                    case .editor: editor
+                    case .filters: filters
+                    case .cancellation: EmptyView() // Presented over the Booking Center, never as a form.
+                    }
+                }.listRowBackground(colorScheme == .dark ? FCAColors.color(.surface) : nil)
             }
+            .scrollContentBackground(colorScheme == .dark ? .hidden : .automatic)
+            .background(colorScheme == .dark ? FCAColors.color(.background) : nil)
             .navigationTitle(sheet == .filters ? "סינון הזמנות" : "פרטי הזמנה")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

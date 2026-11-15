@@ -200,6 +200,8 @@ struct LoginScreen: View {
         .sheet(item: $legal) { document in
             NavigationStack {
                 ScrollView { Text(document.body).frame(maxWidth: .infinity, alignment: .leading).padding(20) }
+                    .background(colorScheme == .dark ? FCAColors.color(.background) : nil)
+                    .foregroundStyle(colorScheme == .dark ? FCAColors.color(.text) : .primary)
                     .navigationTitle(document.title).navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("סגור") { legal = nil } } }
             }.environment(\.layoutDirection, .rightToLeft)

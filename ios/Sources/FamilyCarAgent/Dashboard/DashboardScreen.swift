@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct DashboardScreen: View {
+    @Environment(\.colorScheme) private var colorScheme
     let name: String
     let busy: Bool
     let open: (DashboardDestination) -> Void
@@ -31,11 +32,11 @@ struct DashboardScreen: View {
                 Spacer(minLength: 0)
                 Button(action: logout) {
                     HStack(spacing: 4) {
-                        AppAssetImage(path: "icons/archive/logout_icon.png").frame(width: 36, height: 36)
+                        AppAssetImage(path: "icons/archive/logout_icon.png", monochromeControl: true).frame(width: 36, height: 36)
                             .accessibilityHidden(true)
                         Text("התנתקות").font(.system(size: 18, weight: .semibold))
                     }.padding(.horizontal, 12).frame(minWidth: 144).frame(height: 48)
-                        .background(FCAColors.color(.surface).opacity(0.65), in: Capsule())
+                        .background((colorScheme == .dark ? FCAColors.color(.primaryAction) : FCAColors.color(.surface).opacity(0.65)), in: Capsule())
                         .overlay(Capsule().stroke(FCAColors.color(.surface), lineWidth: 1))
                 }.buttonStyle(.plain).disabled(busy).accessibilityLabel("התנתקות")
                 Spacer(minLength: 0)
@@ -98,7 +99,7 @@ private struct DashboardWheel: View {
                         .overlay {
                             // The entire square PNG is rendered. Transparent margins may
                             // extend beyond the independent, non-overlapping hit rectangle.
-                            AppAssetImage(path: destination.asset)
+                            AppAssetImage(path: destination.asset, monochromeControl: true)
                                 .frame(width: diameter*0.5, height: diameter*0.5)
                                 .offset(y: -diameter*0.5*0.07).allowsHitTesting(false)
                         }

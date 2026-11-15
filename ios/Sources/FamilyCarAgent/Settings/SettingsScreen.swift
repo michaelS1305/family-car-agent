@@ -38,16 +38,16 @@ struct SettingsScreen: View {
 
             ScrollView {
                 VStack(spacing: 18) {
-                    AppAssetImage(path: "icons/archive/settings_icon.png")
+                    AppAssetImage(path: "icons/archive/settings_icon.png", monochromeControl: true)
                         .frame(width: 200, height: 200).offset(y: -15).frame(height: 108)
                         .accessibilityLabel("הגדרות").accessibilityAddTraits(.isHeader)
                     SettingsCard(title: "חשבון") {
                         row("שם", icon: "user", value: entry.chatIdentity == nil ? "—" : entry.me?.name.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? "—")
-                        Divider()
+                        Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
                         Button(action: openFamily) {
                             row("המשפחה שלי", icon: "family", detail: "פתיחת ניהול המשפחה", chevron: true)
                         }.buttonStyle(.plain)
-                        Divider()
+                        Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
                         HStack(spacing: 12) {
                             Text(emailIdentity == entry.chatIdentity ? email ?? "—" : "—")
                                 .font(.body).foregroundStyle(SettingsPalette.secondary)
@@ -66,7 +66,7 @@ struct SettingsScreen: View {
                                         Text(mode.title).font(.body)
                                             .frame(maxWidth: .infinity).padding(.vertical, 12)
                                             .frame(minHeight: 44)
-                                            .foregroundStyle(appearance == mode ? FCAColors.color(.onPrimaryAction) : SettingsPalette.ink)
+                                            .foregroundStyle(appearance == mode ? FCAColors.color(.onCalendarSelection) : SettingsPalette.ink)
                                             .background(appearance == mode ? FCAColors.appearanceAccent(dark: colorScheme == .dark) : .clear,
                                                         in: RoundedRectangle(cornerRadius: 14))
                                     }.buttonStyle(.plain)
@@ -81,22 +81,22 @@ struct SettingsScreen: View {
                     }
                     SettingsCard(title: "הרשאות") {
                         permissionRow("מיקום", icon: "location", enabled: nil)
-                        Divider()
+                        Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
                         permissionRow("התראות", icon: "bell", enabled: notificationsEnabled)
-                        Divider()
+                        Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
                         Button(action: openVehicles) {
                             row("זיהוי וחיבור אוטומטי", icon: "single_car", chevron: true)
                         }.buttonStyle(.plain)
                     }
                     SettingsCard(title: "תנאי שימוש ופרטיות") {
                         row("תנאי שימוש", icon: "about", chevron: true)
-                        Divider()
+                        Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
                         row("מדיניות פרטיות", icon: "privacy", chevron: true)
                     }
                     SettingsCard(title: "אודות") {
                         row("גרסת האפליקציה", icon: "info",
                             value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
-                        Divider()
+                        Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
                         row("צור קשר לתמיכה", icon: "support", chevron: true)
                     }
                     Button(action: logout) {
@@ -210,7 +210,7 @@ private struct SettingsRowIcon: View {
     var body: some View {
         let rect = Self.bounds[name] ?? CGRect(x: 0, y: 0, width: 512, height: 512)
         let scale = (slot * 428 / 512) / max(rect.width, rect.height)
-        AppAssetImage(path: "icons/archive/\(name)_icon.png")
+        AppAssetImage(path: "icons/archive/\(name)_icon.png", monochromeControl: true)
             .frame(width: 512 * scale, height: 512 * scale)
             .offset(x: (256 - rect.midX) * scale, y: (256 - rect.midY) * scale)
             .frame(width: slot, height: slot)
@@ -219,13 +219,14 @@ private struct SettingsRowIcon: View {
 }
 
 private struct SettingsCard<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
     let title: String
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title).font(.title2.weight(.bold)).padding(.vertical, 14)
                 .accessibilityAddTraits(.isHeader)
-            Divider()
+            Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
             content
         }
         .padding(.horizontal, 16)

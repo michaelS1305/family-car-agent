@@ -41,7 +41,10 @@ assert '.clipped()' not in bar and '.clipShape' not in bar
 assert 'scale: 2.00, offset: -1.1' in bar
 assert 'scale: 2.01, offset: 1.5' in bar
 
-assert '.overlay(Capsule().stroke' not in bar
+assert 'if colorScheme == .dark {' in bar
+assert 'content.background(FCAColors.color(.surface), in: Capsule())' in bar
+assert '.overlay(Capsule().stroke(FCAColors.color(.border)))' in bar
+assert 'else if #available(iOS 26.0, *)' in bar
 assert '.padding(.bottom, keyboardVisible || !navigation.isRoot ? 0 : 60)' in shell
 
 chat = (root / 'Sources/FamilyCarAgent/Chat/ChatScreen.swift').read_text(encoding='utf-8')

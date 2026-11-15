@@ -21,7 +21,7 @@ struct BookingCenterPreview: View {
             VehiclesHeader(back: leave)
             ScrollView {
                 VStack(spacing: 18) {
-                    AppAssetImage(path: "icons/archive/booking_center_icon.png")
+                    AppAssetImage(path: "icons/archive/booking_center_icon.png", monochromeControl: true)
                         .frame(width: 200, height: 200).offset(y: -15).frame(height: 130)
                         .accessibilityLabel("מרכז הזמנות")
                     monthGrid

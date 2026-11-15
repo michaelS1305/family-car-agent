@@ -64,18 +64,19 @@ import UIKit
             (.secondaryText,.surface),(.incomingText,.incomingBubble),(.outgoingText,.outgoingBubble),
             (.onPrimaryAction,.primaryAction),(.onSelection,.selection),(.onCalendarSelection,.calendarSelection),
             (.error,.surface),(.success,.surface),(.warning,.surface),(.text,.dialog),(.text,.sheet),
-            (.onDestructiveAction,.destructiveAction)]
+            (.onDestructiveAction,.destructiveAction),(.text,.wheelSurface),(.text,.wheelBase),
+            (.text,.settingsCard),(.secondaryText,.input),(.mutedText,.surface)]
         for (foreground, background) in readable {
             let a = luminance(foreground), b = luminance(background)
             precondition((max(a,b)+0.05)/(min(a,b)+0.05) >= 4.5, "Insufficient Dark text contrast")
         }
         precondition(FCAColors.value(.calendarSelection, dark: false) == .systemBlue)
         precondition(FCAColors.value(.error, dark: false) == .systemRed)
-        precondition(FCAColors.value(.background, dark: true) == .rgb(0x121A22))
-        precondition(FCAColors.value(.surface, dark: true) == .rgb(0x1D2833))
-        precondition(FCAColors.value(.text, dark: true) == .rgb(0xEDF2F7))
-        precondition(FCAColors.value(.primaryAction, dark: true) == .rgb(0xA9CDF8))
-        precondition(FCAColors.value(.outgoingBubble, dark: true) == .rgb(0x244663))
+        precondition(FCAColors.value(.background, dark: true) == .rgb(0x102D62))
+        precondition(FCAColors.value(.surface, dark: true) == .rgb(0x173B78))
+        precondition(FCAColors.value(.text, dark: true) == .rgb(0xFFFFFF))
+        precondition(FCAColors.value(.primaryAction, dark: true) == .rgb(0x2859AB))
+        precondition(FCAColors.value(.outgoingBubble, dark: true) == .rgb(0x24549A))
         let pairs: [(FCAColors.Role, FCAColors.Role)] = [(.onPrimaryAction, .primaryAction),
                 (.incomingText,.incomingBubble),(.outgoingText,.outgoingBubble),(.onSelection,.selection),
                 (.onCalendarSelection,.calendarSelection)]
