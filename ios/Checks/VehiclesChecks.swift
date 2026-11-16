@@ -107,6 +107,7 @@ protocol ObservableObject: AnyObject {}
         model.chooseManufacturer(VehicleManufacturer(id: 99, name_he: "fake"))
         check(model.draft.manufacturer == nil, "foreign manufacturer blocked")
         model.chooseManufacturer(api.catalog[0]); check(model.draft.valid, "catalog choice")
+        check(model.draft.manufacturer == api.catalog[0] && model.draft.manufacturerQuery == api.catalog[0].name_he, "one selection sets ID and display query; nil-only suggestions close")
         check(model.fieldErrors.isEmpty, "choice clears validation immediately")
         model.queryManufacturer(api.catalog[0].name_he)
         check(model.fieldErrors[.manufacturer] != nil, "even identical typed query invalidates explicit selection")

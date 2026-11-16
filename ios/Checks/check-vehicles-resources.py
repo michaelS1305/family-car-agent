@@ -88,3 +88,21 @@ for asset in ("phone_icon.png", "single_car_icon.png", "bluetooth_icon.png"):
     assert (source / "Resources/AppAssets/icons/archive" / asset).is_file()
 assert "action: model.confirmDelete" in details and "if model.canManage" in details
 print("PASS: fourteen original Vehicles assets and static Details/list wiring (not a device rendering test)")
+
+# Selection is one button action; full-row hit testing and focus, not a tap gesture
+# that could compete with the nested scroll view. Physical keyboard testing required.
+add = (source / "Vehicles/AddVehicleScreen.swift").read_text(encoding="utf-8")
+for text, loop, action, permission in [
+    (add, 'ForEach(model.matchingManufacturers)', 'model.chooseManufacturer(manufacturer); focused = .model', '!model.editable'),
+    (details, 'ForEach(model.matches)', 'model.choose(maker); focused = .model', '!model.canWrite')]:
+    row = text.split(loop, 1)[1].split('}.frame(height: min(144', 1)[0]
+    assert action in row
+    assert '.contentShape(Rectangle())' in row
+    assert '.buttonStyle(.plain).disabled(' + permission + ')' in row
+    assert 'minHeight: 44' in row
+    assert 'ScrollView {' in text and 'LazyVStack {' in text
+    assert 'model.draft.manufacturer == nil' in text
+    assert '.scrollDismissesKeyboard(.interactively)' in text
+assert '.focused($focused, equals: focus)' in details
+assert 'field("דגם", value: binding(\\.model), focus: .model)' in details
+print('PASS: manufacturer full-row selection, dismissal predicate, model focus and bounded scrolling (static only)')

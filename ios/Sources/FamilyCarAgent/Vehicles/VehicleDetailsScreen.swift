@@ -157,6 +157,7 @@ private struct VehicleDetailsEditor: View {
     @ObservedObject var model: VehicleDetailsModel
     let sheet: VehicleDetailsSheet
     @State private var showDelete = false
+    @FocusState private var focused: VehicleFormField?
     var body: some View {
         ScrollView {
             if model.current {
@@ -216,10 +217,11 @@ private struct VehicleDetailsEditor: View {
     private func binding(_ key: WritableKeyPath<VehicleDraft, String>) -> Binding<String> {
         Binding(get: { model.draft[keyPath: key] }, set: { value in var d = model.draft; d[keyPath: key] = value; model.edit(d) })
     }
-    private func field(_ label: String, value: Binding<String>) -> some View {
+    private func field(_ label: String, value: Binding<String>, focus: VehicleFormField = .name) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(label)
             TextField(label, text: value).multilineTextAlignment(.trailing).environment(\.layoutDirection, .leftToRight)
+                .focused($focused, equals: focus)
                 .accessibilityLabel(label).padding(12).frame(minHeight: 56)
                 .overlay(RoundedRectangle(cornerRadius: 20).stroke(ChatStyle.border)).disabled(!model.canWrite)
         }
@@ -239,19 +241,22 @@ private struct VehicleDetailsEditor: View {
                     }.disabled(!model.canWrite).accessibilityLabel(category.label).accessibilityAddTraits(model.draft.category == category ? .isSelected : [])
                 }
             }.environment(\.layoutDirection, .leftToRight)
-            field("יצרן", value: Binding(get: { model.draft.manufacturerQuery }, set: { value in model.query(value) }))
+            field("יצרן", value: Binding(get: { model.draft.manufacturerQuery }, set: { value in model.query(value) }), focus: .manufacturer)
             if model.catalogLoading { ProgressView("טוען יצרנים…") }
             if model.catalogError { Button("טעינת יצרנים מחדש", action: model.loadCatalog) }
             if model.catalogLoaded && !model.draft.manufacturerQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.draft.manufacturer == nil {
                 ScrollView {
                     LazyVStack {
                         ForEach(model.matches) { maker in
-                            Button { model.choose(maker) } label: { Text(maker.name_he).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading) }.disabled(!model.canWrite)
+                            Button { model.choose(maker); focused = .model } label: {
+                                Text(maker.name_he).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }.buttonStyle(.plain).disabled(!model.canWrite)
                         }
                     }
                 }.frame(height: min(144, CGFloat(model.matches.count) * 44))
             }
-            field("דגם", value: binding(\.model)); field("מספר רכב", value: binding(\.plate))
+            field("דגם", value: binding(\.model), focus: .model); field("מספר רכב", value: binding(\.plate), focus: .plate)
         }
     }
 }

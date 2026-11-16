@@ -35,7 +35,8 @@ struct AddVehicleScreen: View {
                                         ForEach(model.matchingManufacturers) { manufacturer in
                                             Button { model.chooseManufacturer(manufacturer); focused = .model } label: {
                                                 Text(manufacturer.name_he).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(.horizontal, 12)
-                                            }.disabled(!model.editable)
+                                                    .contentShape(Rectangle())
+                                            }.buttonStyle(.plain).disabled(!model.editable)
                                         }
                                     }
                                 }.frame(height: min(144, CGFloat(model.matchingManufacturers.count) * 48))
