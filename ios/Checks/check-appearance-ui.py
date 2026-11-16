@@ -5,7 +5,7 @@ import re
 root = Path(__file__).resolve().parents[1] / 'Sources/FamilyCarAgent'
 views = {str(p.relative_to(root)).replace('\\', '/'): p.read_text(encoding='utf-8')
          for p in root.rglob('*.swift') if re.search(r': (?:View|UIViewRepresentable|ViewModifier|ButtonStyle)\b', p.read_text(encoding='utf-8'))}
-assert len(views) == 19, 'Review newly added views for appearance coverage'
+assert len(views) == 20, 'Review newly added views for appearance coverage'
 for name, text in views.items():
     assert not re.search(r'Color\(\s*(?:red|white):', text), name
     assert not re.search(r'\.background\(\s*(?:Color\.)?white\b', text), name
@@ -69,7 +69,7 @@ assert '@StateObject private var model = EntryModel()' in views['ContentView.swi
 assert 'NavigationStack(path: $navigation.path)' in shell
 assert '.presentationDetents([peek, .large], selection: $detent)' in booking
 assert '.presentationDragIndicator(.visible)' in booking
-print('PASS: root-only appearance, shared preference and accessible selector; 19 adaptive view files, inherited sheets, unchanged navigation and branding')
+print('PASS: root-only appearance, shared preference and accessible selector; 20 adaptive view files, inherited sheets, unchanged navigation and branding')
 
 # Explicit monochrome control opt-in, never a global image recolor.
 assert 'var monochromeControl = false' in asset
@@ -81,3 +81,8 @@ for text in views.values():
 for file in ['Booking/BookingForms.swift', 'History/HistoryScreen.swift']:
     assert '.scrollContentBackground(colorScheme == .dark ? .hidden : .automatic)' in views[file]
     assert '.listRowBackground(colorScheme == .dark ? FCAColors.color(.surface) : nil)' in views[file]
+
+invitation = views["Dashboard/FirstVehicleSetupDialog.swift"]
+for role in ["dialog", "text", "selection", "border"]:
+    assert f"FCAColors.color(.{role})" in invitation
+assert "ErrorPrimaryButtonStyle()" in invitation

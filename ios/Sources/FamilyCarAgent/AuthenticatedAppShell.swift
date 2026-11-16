@@ -19,6 +19,7 @@ struct AuthenticatedAppShell: View {
     @StateObject private var errors = AppErrorPresentation()
     @State private var keyboardVisible = false
     @State private var navigation = DashboardNavigation()
+    @State private var firstVehicleSetup = FirstVehicleSetupState()
     init(entry: EntryModel) {
         self.entry = entry
         _chat = StateObject(wrappedValue: ChatModel(gateway: entry))
@@ -71,20 +72,34 @@ struct AuthenticatedAppShell: View {
         }
         .background(ChatStyle.background.ignoresSafeArea())
         .foregroundStyle(ChatStyle.ink)
-        .allowsHitTesting(!errors.isPresented)
-        .accessibilityHidden(errors.isPresented)
+        .allowsHitTesting(!errors.isPresented && !invitationVisible)
+        .accessibilityHidden(errors.isPresented || invitationVisible)
+        .overlay {
+            if invitationVisible {
+                FirstVehicleSetupDialog(dismiss: dismissInvitation, configure: configureFirstVehicle)
+            }
+        }
         .overlay { if errors.isPresented { AppErrorDialog(presentation: errors) } }
         .onChange(of: chat.historyError) { _, _ in presentHistoryError() }
         .onChange(of: chat.mode) { _, _ in errors.reset() }
-        .task { navigation.synchronize(entry.chatIdentity); chat.enter() }
+        .task {
+            navigation.synchronize(entry.chatIdentity); chat.enter()
+            firstVehicleSetup.activate(entry.chatIdentity)
+            if firstVehicleSetup.needsCheck(entry.chatIdentity) { vehicles.start() }
+        }
+        .onChange(of: invitationSnapshot) { _, value in firstVehicleSetup.observe(value) }
         .onChange(of: entry.chatIdentity) { _, identity in
             errors.reset()
             vehicles.stop(); navigation.synchronize(identity); chat.enter()
             bookings.synchronize()
+            firstVehicleSetup.activate(identity)
+            if firstVehicleSetup.needsCheck(identity) { vehicles.start() }
         }
-        .onChange(of: navigation.path) { _, path in
+        .onChange(of: navigation.path) { previous, path in
             errors.reset()
-            if !path.contains(.vehicles) { vehicles.stop(); navigation.vehicleHelpPresented = false }
+            if previous.contains(.vehicles) && !path.contains(.vehicles) { vehicles.stop() }
+            if !path.contains(.vehicles) { navigation.vehicleHelpPresented = false }
+            if navigation.isRoot && firstVehicleSetup.needsCheck(entry.chatIdentity) { vehicles.start() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
             guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
@@ -92,6 +107,23 @@ struct AuthenticatedAppShell: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardVisible = false }
         .onDisappear { errors.reset(); vehicles.stop(); chat.synchronize() }
+    }
+
+    private var invitationSnapshot: FirstVehicleSetupSnapshot {
+        FirstVehicleSetupSnapshot(identity: entry.chatIdentity, current: vehicles.current,
+            loaded: vehicles.loaded, loading: vehicles.loading, loadError: vehicles.loadError,
+            canCreate: vehicles.canCreate, vehicleCount: vehicles.rows.count,
+            atRoot: navigation.isRoot, hasVehicleDestination: vehicles.destination != nil,
+            blocked: entry.busy || entry.deletionBlocking || entry.deletionBusy ||
+                errors.isPresented || keyboardVisible || chat.sending || chat.historyError != nil)
+    }
+    private var invitationVisible: Bool { firstVehicleSetup.visible(invitationSnapshot) }
+    private func dismissInvitation() { firstVehicleSetup.handle(entry.chatIdentity) }
+    private func configureFirstVehicle() {
+        guard invitationVisible else { return }
+        firstVehicleSetup.handle(entry.chatIdentity)
+        chat.mode = .dashboard
+        navigation.open(.vehicles)
     }
 
     // Only a read-only history load is integrated. Writes and contextual failures

@@ -33,3 +33,35 @@ assert 'AppAssetImage(path: destination.asset, monochromeControl: true)' in scre
 assert '.contentShape(Rectangle())' in screen and r'.environment(\.layoutDirection, .leftToRight)' in screen
 assert 'glassEffect' not in screen and '.clipped()' not in screen
 print('PASS: seven Dashboard PNGs' + (' packaged byte-for-byte' if len(sys.argv) > 1 else ' present') + '; navigation/logout wiring (static, not device-tested)')
+
+# First-vehicle invitation: actual asset format and existing resource pipeline.
+import zlib
+image = assets / 'illustrations/first_vehicle_setup.png'
+data = image.read_bytes()
+assert struct.unpack('>II', data[16:24]) == (1672, 941)
+assert data[24:26] == bytes([8, 6]), '8-bit RGBA'
+pos, compressed = 8, b''
+while pos < len(data):
+    size = int.from_bytes(data[pos:pos+4], 'big')
+    if data[pos+4:pos+8] == b'IDAT':
+        compressed += data[pos+8:pos+8+size]
+    pos += size + 12
+scanlines = zlib.decompress(compressed)
+assert scanlines[4] == 0, 'First pixel alpha is transparent (all PNG row filters)'
+assert '.copy("Resources/AppAssets")' in (root / 'Package.swift').read_text()
+dialog = (root / 'Sources/FamilyCarAgent/Dashboard/FirstVehicleSetupDialog.swift').read_text(encoding='utf-8')
+for text in ['שנתחבר?', 'זה לוקח דקה והסוכן מחובר לרכב ומעדכן אוטומטית', 'להגדרה']:
+    assert text in dialog
+assert 'illustrations/first_vehicle_setup.png' in dialog
+assert 'wordmark' not in dialog and 'logo' not in dialog.lower()
+for token in ['ScrollView', 'isModal', 'accessibilityLabel', 'leftToRight', 'rightToLeft', 'ErrorPrimaryButtonStyle']:
+    assert token in dialog
+assert shell.count('VehiclesModel(gateway: entry)') == 1
+assert '.allowsHitTesting(!errors.isPresented && !invitationVisible)' in shell
+assert '.accessibilityHidden(errors.isPresented || invitationVisible)' in shell
+cta = shell.split('private func configureFirstVehicle()')[1].split('// Only')[0]
+assert 'guard invitationVisible' in cta and 'firstVehicleSetup.handle' in cta
+assert 'chat.mode = .dashboard' in cta and 'navigation.open(.vehicles)' in cta
+assert '.add' not in cta and 'AddVehicleScreen' not in cta
+assert 'previous.contains(.vehicles)' in shell
+print('PASS: invitation asset, safe shared-model wiring, existing Vehicles route, adaptive modal (static)')

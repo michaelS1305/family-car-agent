@@ -6,5 +6,5 @@ out=$(mktemp -d "${TMPDIR:-/tmp}/fca-dashboard-checks.XXXXXX")
 trap 'rm -rf "$out"' EXIT
 "$swift_bin" -swift-version 6 -warnings-as-errors \
   Sources/FamilyCarAgent/Chat/ChatCore.swift \
-  Sources/FamilyCarAgent/Dashboard/DashboardCore.swift Checks/DashboardChecks.swift -o "$out/dashboard-checks"
+  Sources/FamilyCarAgent/Dashboard/DashboardCore.swift Sources/FamilyCarAgent/Dashboard/FirstVehicleSetup.swift Checks/DashboardChecks.swift -o "$out/dashboard-checks"
 "$out/dashboard-checks"

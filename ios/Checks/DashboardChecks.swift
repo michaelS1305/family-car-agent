@@ -4,6 +4,53 @@ import Foundation
     static func main() {
         var count = 0
         func check(_ value: Bool, _ label: String) { precondition(value, label); count += 1 }
+        let who = ChatIdentity(owner: UUID(), user: 1, family: 10, generation: 1, version: 1)
+        var invitation = FirstVehicleSetupState()
+        invitation.activate(who)
+        let ready = FirstVehicleSetupSnapshot(identity: who, current: true, loaded: true,
+            loading: false, loadError: false, canCreate: true, vehicleCount: 0,
+            atRoot: true, hasVehicleDestination: false, blocked: false)
+        check(invitation.visible(ready), "authorized administrator / loaded empty family")
+        for mutation: (inout FirstVehicleSetupSnapshot) -> Void in [
+            { $0.identity = nil }, { $0.current = false }, { $0.loaded = false },
+            { $0.loading = true }, { $0.loadError = true }, { $0.canCreate = false },
+            { $0.vehicleCount = 1 }, { $0.atRoot = false },
+            { $0.hasVehicleDestination = true }, { $0.blocked = true }
+        ] {
+            var invalid = ready; mutation(&invalid)
+            check(!invitation.visible(invalid), "eligibility fails closed")
+        }
+        var noFamily = ready
+        noFamily.identity = ChatIdentity(owner: who.owner, user: 1, family: 0, generation: 1, version: 1)
+        check(!invitation.visible(noFamily), "invalid family unavailable")
+        var transient = ready; transient.loadError = true
+        invitation.observe(transient)
+        check(invitation.visible(ready), "failure does not permanently suppress successful reload")
+        invitation.handle(who)
+        invitation.activate(who); invitation.observe(ready)
+        check(!invitation.visible(ready), "dismiss / CTA survives refresh and view recomputation")
+        let refreshed = ChatIdentity(owner: who.owner, user: 1, family: 10, generation: 2, version: 2)
+        invitation.activate(refreshed)
+        check(!invitation.needsCheck(refreshed), "same owner/family refresh keeps acknowledgment")
+        let other = ChatIdentity(owner: who.owner, user: 1, family: 11, generation: 2, version: 1)
+        invitation.activate(other)
+        check(invitation.needsCheck(other) && !invitation.visible(ready), "family change isolates stale data")
+        invitation.handle(who)
+        check(invitation.needsCheck(other), "old context cannot dismiss new context")
+        invitation.activate(who)
+        var populated = ready; populated.vehicleCount = 2
+        invitation.observe(populated)
+        check(!invitation.visible(ready), "successful nonempty family handled even if later empty")
+        invitation.activate(nil); invitation.activate(who)
+        check(invitation.visible(ready), "new authenticated session re-evaluates")
+        let anotherUser = ChatIdentity(owner: UUID(), user: 2, family: 10, generation: 3, version: 1)
+        invitation.handle(who); invitation.activate(anotherUser)
+        check(invitation.needsCheck(anotherUser), "user change re-evaluates")
+        var route = DashboardNavigation(); route.synchronize(who)
+        invitation.activate(who); invitation.handle(who); route.open(.vehicles)
+        check(route.path == [.vehicles] && invitation.handled, "CTA handled and existing vehicles route")
+        route.back(); invitation.handle(who)
+        check(route.isRoot && !invitation.visible(ready), "dismiss does not navigate or reopen")
         let categories = DashboardDestination.allCases
         check(categories == [.family, .vehicles, .settings, .history, .bookingCenter], "category order")
         let anchors = [(0.50,0.20),(0.77,0.44),(0.67,0.73),(0.35,0.75),(0.19,0.39)]
