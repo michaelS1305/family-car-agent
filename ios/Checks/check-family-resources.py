@@ -34,3 +34,10 @@ for relative in assets:
         candidates = list(Path(sys.argv[1]).rglob(Path(relative).name))
         assert candidates and any(hashlib.sha256(p.read_bytes()).digest() == hashlib.sha256(original.read_bytes()).digest() for p in candidates)
 print("PASS: Family static UI wiring, original assets, shared map and privacy checks (no rendering claim)")
+
+family = screen
+assert 'Button("עריכה", action: model.editAddress)' not in family
+assert 'Button(action: model.editAddress)' in family
+assert 'Image(systemName: "pencil").font(.system(size: 25)).frame(width: 44, height: 44)' in family
+assert '.disabled(!model.canManage).accessibilityLabel("עריכת כתובת")' in family
+assert 'profile.can_edit_roles && model.stage == .view' in family

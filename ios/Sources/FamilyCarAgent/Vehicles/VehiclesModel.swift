@@ -103,6 +103,7 @@ import Combine
         draft = value; submitError = nil
     }
     func queryManufacturer(_ value: String) {
+        guard value != draft.manufacturerQuery else { return } // Ignore redundant TextField writes after selection.
         var valueDraft = draft; valueDraft.manufacturerQuery = value; valueDraft.manufacturer = nil; edit(valueDraft)
     }
     func chooseManufacturer(_ value: VehicleManufacturer) {

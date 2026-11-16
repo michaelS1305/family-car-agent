@@ -15,6 +15,7 @@ struct SettingsScreen: View {
     private var appearance: AppAppearance { AppAppearance(storedValue: appearancePreference) }
     @State private var notificationsEnabled = false
     @State private var settingsOpenFailed = false
+    @State private var showDeleteAccount = false
     @State private var email: String?
     @State private var emailIdentity: ChatIdentity?
 
@@ -102,8 +103,9 @@ struct SettingsScreen: View {
                     Button(action: logout) {
                         destructive("התנתקות", icon: "logout")
                     }.buttonStyle(.plain).disabled(entry.busy)
-                    destructive("מחיקת חשבון", icon: "delete_account")
-                        .accessibilityHint("לא זמין בתצוגה המקדימה")
+                    Button { showDeleteAccount = true } label: {
+                        destructive("מחיקת חשבון", icon: "delete_account")
+                    }.buttonStyle(.plain).disabled(entry.busy || entry.chatIdentity == nil)
                 }
                 .padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 24)
                 .frame(maxWidth: 620).frame(maxWidth: .infinity)
@@ -118,6 +120,15 @@ struct SettingsScreen: View {
         } message: {
             Text("אפשר לפתוח את הגדרות iOS ולבחור באפליקציית FCA.")
         }
+        .confirmationDialog("מחיקת חשבון", isPresented: $showDeleteAccount, titleVisibility: .visible) {
+            // No native account-deletion gateway is implemented. Never substitute logout
+            // or a vehicle deletion API for account deletion.
+            Button("מחיקת החשבון לצמיתות", role: .destructive) { }.disabled(true)
+            Button("ביטול", role: .cancel) { showDeleteAccount = false }
+        } message: {
+            Text("מחיקת החשבון היא פעולה קבועה שאינה ניתנת לביטול. מחיקת חשבון מתוך האפליקציה אינה זמינה כרגע; לא תבוצע מחיקה.")
+        }
+        .onChange(of: entry.chatIdentity) { _, _ in showDeleteAccount = false }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             let settings = await UNUserNotificationCenter.current().notificationSettings()

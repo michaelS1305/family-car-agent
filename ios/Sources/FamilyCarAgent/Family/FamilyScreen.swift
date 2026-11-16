@@ -104,7 +104,9 @@ struct FamilyScreen: View {
                 Text("כתובת").font(.system(size: 21, weight: .bold))
                 Spacer()
                 if profile.can_edit_roles && model.stage == .view {
-                    Button("עריכה", action: model.editAddress).disabled(!model.canManage)
+                    Button(action: model.editAddress) {
+                        Image(systemName: "pencil").font(.system(size: 25)).frame(width: 44, height: 44)
+                    }.disabled(!model.canManage).accessibilityLabel("עריכת כתובת")
                 }
             }
             if model.stage == .view {

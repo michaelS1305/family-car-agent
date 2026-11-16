@@ -105,7 +105,9 @@ enum VehicleDetailsSheet: String, Identifiable { case edit, maintenance, retire,
     }
     func close() { guard !busy else { return }; sheet = nil; deleteConfirmation = false }
     func edit(_ value: VehicleDraft) { guard canWrite, sheet == .edit else { return }; draft = value }
-    func query(_ value: String) { var d = draft; d.manufacturer = nil; d.manufacturerQuery = value; edit(d) }
+    func query(_ value: String) {
+        guard value != draft.manufacturerQuery else { return } // Preserve a committed selection on a binding echo.
+        var d = draft; d.manufacturer = nil; d.manufacturerQuery = value; edit(d) }
     func choose(_ value: VehicleManufacturer) {
         guard catalog.contains(value) else { return }
         var d = draft; d.manufacturer = value; d.manufacturerQuery = value.name_he; edit(d)
