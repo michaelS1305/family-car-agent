@@ -72,11 +72,27 @@ import UIKit
         }
         precondition(FCAColors.value(.calendarSelection, dark: false) == .systemBlue)
         precondition(FCAColors.value(.error, dark: false) == .systemRed)
-        precondition(FCAColors.value(.background, dark: true) == .rgb(0x102D62))
-        precondition(FCAColors.value(.surface, dark: true) == .rgb(0x173B78))
+        precondition(FCAColors.value(.background, dark: true) == .rgb(0x121A22))
+        precondition(FCAColors.value(.surface, dark: true) == .rgb(0x1D2833))
         precondition(FCAColors.value(.text, dark: true) == .rgb(0xFFFFFF))
-        precondition(FCAColors.value(.primaryAction, dark: true) == .rgb(0x2859AB))
-        precondition(FCAColors.value(.outgoingBubble, dark: true) == .rgb(0x24549A))
+        precondition(FCAColors.value(.primaryAction, dark: true) == .rgb(0x245B9B))
+        precondition(FCAColors.value(.outgoingBubble, dark: true) == .rgb(0x244663))
+        // Historical charcoal surfaces, with the white control/label improvements retained.
+        let charcoal: [(FCAColors.Role, UInt32)] = [(.entryBackground,0x121A22),
+            (.input,0x1D2833),(.systemSurface,0x1D2833),(.settingsCard,0x1D2833),
+            (.dialog,0x1D2833),(.mapFallback,0x1D2833),(.elevated,0x303D49),
+            (.selection,0x303D49),(.wheelSurface,0x303D49),(.wheelBase,0x2D3945),
+            (.wheelLine,0x596B7C),(.wheelHighlight,0x596B7C),(.border,0x596B7C),
+            (.divider,0x596B7C),(.sheet,0x2D3945),(.incomingBubble,0x2D3945),
+            (.familyControl,0x2D3945),(.shadow,0x000000),(.secondaryText,0xBAC8D5)]
+        for (role, hex) in charcoal { precondition(FCAColors.value(role, dark: true) == .rgb(hex)) }
+        for role: FCAColors.Role in [.text,.entryHeading,.incomingText,.outgoingText,.onSelection,.onPrimaryAction] {
+            precondition(FCAColors.value(role, dark: true) == .rgb(0xFFFFFF))
+        }
+        for role in FCAColors.Role.allCases {
+            precondition(FCAColors.value(role, dark: true) != .rgb(0x102D62))
+            precondition(FCAColors.value(role, dark: true) != .rgb(0x173B78))
+        }
         let pairs: [(FCAColors.Role, FCAColors.Role)] = [(.onPrimaryAction, .primaryAction),
                 (.incomingText,.incomingBubble),(.outgoingText,.outgoingBubble),(.onSelection,.selection),
                 (.onCalendarSelection,.calendarSelection)]
