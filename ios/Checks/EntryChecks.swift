@@ -12,6 +12,7 @@ actor TestBackend: BackendTransport {
     var replies: [String: [Result<Data, AuthFailure>]] = [:]
     var paths: [String] = []
     var bodies: [Data?] = []
+    var tokens: [String] = []
     var paused = false
     var continuation: CheckedContinuation<Void, Never>?
     func pause() { paused = true }
@@ -19,7 +20,7 @@ actor TestBackend: BackendTransport {
     func reply(_ path: String, _ json: String) { replies[path, default: []].append(.success(Data(json.utf8))) }
     func fail(_ path: String, _ error: AuthFailure) { replies[path, default: []].append(.failure(error)) }
     func backend<T: Decodable & Sendable>(_ type: T.Type, path: String, token: String, fields: [String: Field]?) async throws -> T {
-        paths.append(path)
+        paths.append(path); tokens.append(token)
         bodies.append(try fields.map { try JSONEncoder().encode($0) })
         guard var queue = replies[path], !queue.isEmpty else { throw AuthFailure.invalidResponse }
         let item = queue.removeFirst(); replies[path] = queue
@@ -39,6 +40,7 @@ actor TestBackend: BackendTransport {
 }
 
 @MainActor func runEntryChecks() async throws {
+    try await runDeletionChecks()
     try await runOnboardingChecks()
     let owner = UUID()
     let session = AuthSession(owner: owner, accessToken: "fake", refreshToken: "fake-refresh", expires: Date().addingTimeInterval(3600))
@@ -250,4 +252,102 @@ actor TestBackend: BackendTransport {
     AuthCheck.check(during == oldCount + 1, "no duplicate resolution during loading")
     model.logout(); await backend.release(); await pending.value
     AuthCheck.check(model.screen == .intro && model.addressLocation == nil && model.resolvedAddress.isEmpty, "late resolution cannot cross logout")
+}
+
+@MainActor func runDeletionChecks() async throws {
+    let owner = UUID()
+    let session = AuthSession(owner: owner, accessToken: "synthetic", refreshToken: "synthetic",
+                              expires: Date().addingTimeInterval(3600))
+    let vault = TestVault(), api = TestBackend()
+    let manager = SessionManager(vault: vault, transport: TestTransport(session))
+    let model = EntryModel(sessions: manager, api: api, providers: TestProvider())
+    await api.reply("/api/me", #"{"user_id":1,"family_id":2,"name":"Test"}"#)
+    await model.login(apple: false)
+    await model.submitDeletion()
+    var count = await api.paths.count
+    AuthCheck.check(count == 1, "no deletion without preview")
+    await api.fail("/api/account/deletion/preview", .network)
+    await model.loadDeletionPreview()
+    AuthCheck.check(model.deletionPreview == nil && model.deletionMessage != nil, "preview failure blocks confirmation")
+    await api.reply("/api/account/deletion/preview", #"{"consequence":"family_deleted"}"#)
+    await model.loadDeletionPreview()
+    AuthCheck.check(model.deletionPreview?.contains("המשפחה") == true, "family consequences shown")
+    vault.failWrite = true
+    await model.submitDeletion()
+    count = await api.paths.count
+    AuthCheck.check(count == 3 && !model.deletionBlocking, "persistence failure prevents POST")
+    vault.failWrite = false
+    await api.fail("/api/account/deletion", .network)
+    await model.submitDeletion()
+    AuthCheck.check(model.deletionBlocking && vault.value?.deletionPending == true && model.chatIdentity == nil,
+                    "uncertain outcome durably blocks normal UI")
+    await model.submitDeletion()
+    count = await api.paths.count
+    AuthCheck.check(count == 4, "uncertain write never automatically resubmitted")
+    let sentToken = await api.tokens.last
+    AuthCheck.check(sentToken == "synthetic", "deletion uses the current authenticated token")
+    let body = await api.bodies.last!
+    AuthCheck.check(String(data: body!, encoding: .utf8) == #"{"confirmation":"DELETE_MY_ACCOUNT"}"#, "exact deletion confirmation payload")
+    do { _ = try await manager.access(owner: owner); AuthCheck.check(false, "ordinary token access blocked") }
+    catch AuthFailure.stale { }
+    _ = try await manager.access(owner: owner, forDeletion: true)
+    let restored = SessionManager(vault: vault, transport: TestTransport(session))
+    let restart = EntryModel(sessions: restored, api: api, providers: TestProvider())
+    await restart.start()
+    AuthCheck.check(restart.deletionBlocking && restart.chatIdentity == nil, "restart restores deletion gate without normal bootstrap")
+    await api.reply("/api/account/deletion", #"{"status":"auth_pending","support_required":true}"#)
+    await model.checkDeletionStatus()
+    AuthCheck.check(model.deletionMessage?.contains("סיוע") == true && manager.session != nil, "pending support preserves status credentials")
+    await api.reply("/api/account/deletion", #"{"status":"auth_pending","manual_action_required":true}"#)
+    await model.checkDeletionStatus()
+    AuthCheck.check(model.deletionMessage?.contains("Apple") == true, "manual Apple instructions")
+    await api.reply("/api/account/deletion", #"{"status":"completed"}"#)
+    await model.checkDeletionStatus()
+    AuthCheck.check(manager.session == nil && vault.value == nil && model.deletionCanLeave,
+                    "confirmed completion clears credentials")
+    model.leaveDeletionResult()
+    AuthCheck.check(!model.deletionBlocking, "leave confirmed result")
+
+    // Explicit 202-style processing response is never completion; double taps are fenced.
+    await api.reply("/api/me", #"{"user_id":1,"family_id":2,"name":"Test"}"#)
+    await model.login(apple: false)
+    await api.reply("/api/account/deletion/preview", #"{"consequence":"personal"}"#)
+    await model.loadDeletionPreview()
+    await api.reply("/api/account/deletion", #"{"status":"draining"}"#)
+    await api.pause()
+    let before = await api.paths.count
+    let task = Task { await model.submitDeletion() }
+    while await api.paths.count == before { await Task.yield() }
+    await model.submitDeletion()
+    count = await api.paths.count
+    AuthCheck.check(count == before + 1, "one active destructive request")
+    await api.release(); await task.value
+    AuthCheck.check(model.deletionMessage?.contains("בטיפול") == true && manager.session != nil, "accepted is not completed")
+    await api.fail("/api/account/deletion", .rejected(401, ""))
+    await api.fail("/api/account/deletion", .rejected(401, ""))
+    await model.checkDeletionStatus()
+    AuthCheck.check(manager.session == nil && model.deletionMessage?.contains("לא ניתן לאמת") == true,
+                    "401 clears revoked credentials without claiming completion")
+    model.leaveDeletionResult()
+    // Crash after the local fence but before POST: status can safely release it.
+    var pending = session; pending.activated = true; pending.deletionPending = true
+    vault.value = pending
+    let recovery = SessionManager(vault: vault, transport: TestTransport(session))
+    let recovered = EntryModel(sessions: recovery, api: api, providers: TestProvider())
+    await recovered.start()
+    await api.reply("/api/account/deletion", #"{"status":"not_requested"}"#)
+    await api.reply("/api/me", #"{"user_id":1,"family_id":2,"name":"Test"}"#)
+    await recovered.checkDeletionStatus()
+    AuthCheck.check(recovered.deletionBlocking && recovered.deletionRetryAllowed && vault.value?.deletionPending == true,
+                    "not-requested cannot release fence while a delayed POST may commit")
+    await api.reply("/api/account/deletion/preview", #"{"consequence":"personal"}"#)
+    await recovered.loadDeletionPreview()
+    await api.reply("/api/account/deletion", #"{"status":"draining"}"#)
+    await recovered.submitDeletion()
+    AuthCheck.check(recovered.deletionBlocking && !recovered.deletionRetryAllowed,
+                    "explicit retry after fresh preview uses idempotent endpoint")
+    try recovery.markDeletionPending()
+    _ = try await recovery.access(owner: owner, force: true, forDeletion: true)
+    AuthCheck.check(vault.value?.deletionPending == true, "refresh preserves durable deletion fence")
+
 }

@@ -4,6 +4,124 @@ import Combine
 #endif
 
 @MainActor final class EntryModel: ObservableObject, ChatGateway, FamilyGateway, VehicleDetailsGateway, HistoryGateway {
+    struct DeletionReply: Decodable, Sendable {
+        let status: String
+        let manual_action_required: Bool?
+        let support_required: Bool?
+    }
+    struct DeletionPreview: Decodable, Sendable { let consequence: String }
+    @Published private(set) var deletionBlocking = false
+    @Published private(set) var deletionBusy = false
+    @Published private(set) var deletionRetryAllowed = false
+    private var deletionPreviewOwner: UUID?
+    private var deletionPreviewGeneration: Int?
+    @Published private(set) var deletionPreview: String?
+    @Published private(set) var deletionMessage: String?
+    var deletionCanLeave: Bool { !deletionBusy && sessions?.session == nil }
+
+    func loadDeletionPreview() async {
+        guard !deletionBusy, let owner = sessions?.session?.owner,
+              chatIdentity != nil || (deletionBlocking && deletionRetryAllowed) else { return }
+        deletionBusy = true; deletionPreview = nil; deletionMessage = nil
+        defer { deletionBusy = false }
+        do {
+            let value = try await request(DeletionPreview.self, "/api/account/deletion/preview")
+            switch value.consequence {
+            case "personal": deletionPreview = "הנתונים המשויכים לחשבון יימחקו בהתאם לתהליך המחיקה."
+            case "family_deleted": deletionPreview = "זהו החשבון האחרון במשפחה. המשפחה והנתונים המשותפים שלה יימחקו."
+            case "management_transferred": deletionPreview = "החשבון יימחק וניהול המשפחה יועבר לבן משפחה אחר."
+            default: throw AuthFailure.invalidResponse
+            }
+            deletionPreviewOwner = owner; deletionPreviewGeneration = sessions?.generation
+        } catch {
+            guard sessions?.session == nil || sessions?.session?.owner == owner else { return }
+            deletionMessage = "לא ניתן לטעון את השלכות המחיקה. נסו שוב לפני האישור."
+            // A rejected/expired session is never kept usable just to show a preview.
+            if case AuthFailure.rejected(401, _) = error { handleDeletionAuthentication(error) }
+        }
+    }
+    func submitDeletion() async {
+        guard !deletionBusy, (!deletionBlocking || deletionRetryAllowed), deletionPreview != nil,
+              let sessions, let owner = sessions.session?.owner,
+              deletionPreviewOwner == owner, deletionPreviewGeneration == sessions.generation else { return }
+        let generation = sessions.generation
+        deletionBusy = true
+        defer { deletionBusy = false }
+        do {
+            #if os(iOS)
+            try await NativePushService.shared.prepareLogout()
+            #endif
+            guard sessions.session?.owner == owner, sessions.generation == generation else { throw AuthFailure.stale }
+            try sessions.markDeletionPending()
+            deletionBlocking = true; deletionPreview = nil; deletionRetryAllowed = false
+            deletionMessage = "שולחים בקשת מחיקה…"
+            let value = try await request(DeletionReply.self, "/api/account/deletion",
+                                          ["confirmation": .text("DELETE_MY_ACCOUNT")])
+            try applyDeletion(value)
+        } catch {
+            guard sessions.session == nil || sessions.session?.owner == owner else { return }
+            deletionMessage = deletionBlocking
+                ? "לא ניתן לאמת אם הבקשה התקבלה. אין לשלוח שוב לפני בדיקת מצב המחיקה."
+                : "לא ניתן לשמור את מצב הבקשה בבטחה. לא נשלחה בקשת מחיקה."
+            if case AuthFailure.rejected(let status, _) = error, status != 401 {
+                deletionMessage = "השרת דחה את הבקשה. יש לבדוק את מצב המחיקה לפני ניסיון נוסף."
+            }
+            handleDeletionAuthentication(error)
+        }
+    }
+    func checkDeletionStatus() async {
+        guard deletionBlocking, !deletionBusy, let owner = sessions?.session?.owner else { return }
+        deletionBusy = true
+        defer { deletionBusy = false }
+        do {
+            try applyDeletion(try await request(DeletionReply.self, "/api/account/deletion"))
+        }
+        catch {
+            guard sessions?.session == nil || sessions?.session?.owner == owner else { return }
+            deletionMessage = "מצב המחיקה אינו ידוע כרגע. אפשר לבדוק שוב מאוחר יותר; אין בכך אישור שהמחיקה הושלמה."
+            handleDeletionAuthentication(error)
+        }
+    }
+    private func applyDeletion(_ value: DeletionReply) throws {
+        switch value.status {
+        case "completed":
+            finishLogout()
+            deletionMessage = "השרת אישר שמחיקת החשבון הושלמה."
+        case "not_requested":
+            // A delayed POST may still commit after this read. Never reopen normal account access.
+            deletionRetryAllowed = true
+            deletionMessage = "השרת עדיין לא מציג בקשת מחיקה. ניתן לבדוק שוב או לעיין בהשלכות ולאשר שליחה חוזרת."
+
+        case "draining", "auth_pending":
+            deletionRetryAllowed = false; deletionPreview = nil
+            deletionMessage = "בקשת מחיקת החשבון התקבלה והיא בטיפול."
+            if value.support_required == true {
+                deletionMessage = "בקשת המחיקה בטיפול אך נדרש סיוע מהתמיכה. המחיקה טרם אושרה כהושלמה."
+            }
+            if value.manual_action_required == true {
+                deletionMessage = "נדרש לבטל את הגישה של FCA דרך הגדרות חשבון Apple > התחברות באמצעות Apple. אין בכך אישור שהמחיקה הושלמה."
+            }
+        default: throw AuthFailure.invalidResponse
+        }
+    }
+    private func handleDeletionAuthentication(_ error: Error) {
+        if sessions?.session == nil {
+            deletionMessage = "לא ניתן עוד לאמת את מצב המחיקה באמצעות ההתחברות הקיימת. אין בכך אישור שהמחיקה הושלמה."
+            return
+        }
+        if let failure = error as? AuthFailure {
+            switch failure {
+            case .signedOut, .rejected(401, _):
+                finishLogout()
+                deletionMessage = "תוקף ההתחברות פג. לא ניתן לאמת את השלמת המחיקה."
+            default: break
+            }
+        }
+    }
+    func leaveDeletionResult() {
+        guard deletionCanLeave else { return }
+        deletionBlocking = false; deletionMessage = nil; deletionPreview = nil; deletionRetryAllowed = false
+    }
     enum Screen { case intro, login, bootstrap, onboarding, success, ready }
     @Published private(set) var screen = Screen.intro
     @Published private(set) var busy = false
@@ -36,7 +154,7 @@ import Combine
     private var pushLogoutInProgress = false
 
     var chatIdentity: ChatIdentity? {
-        guard screen == .ready, let sessions, let session = sessions.session, session.activated,
+        guard !deletionBlocking, screen == .ready, let sessions, let session = sessions.session, session.activated,
               let me, me.user_id > 0, me.family_id > 0 else { return nil }
         return ChatIdentity(owner: session.owner, user: me.user_id, family: me.family_id,
                             generation: sessions.generation, version: version)
@@ -256,13 +374,18 @@ import Combine
         await perform {
             try sessions?.restore()
             guard sessions?.session != nil else { return }
+            if sessions?.session?.deletionPending == true {
+                deletionBlocking = true
+                deletionMessage = "קיימת בקשת מחיקה שתוצאתה דורשת בדיקה."
+                return
+            }
             screen = .bootstrap
             try await bootstrap()
         }
     }
     func resume() async {
         // Ordinary foregrounding must not reset navigation or show global loading.
-        guard !busy, !checkingApple else { return }
+        guard !deletionBlocking, !busy, !checkingApple else { return }
         guard let user = sessions?.session?.appleUser else { refreshNativeDevice(); return }
         checkingApple = true; let current = version
         defer { checkingApple = false }
@@ -327,7 +450,7 @@ import Combine
             guard current == version, generation == sessions.generation, sessions.session?.owner == owner else { throw AuthFailure.stale }
         }
         func attempt(force: Bool) async throws -> T {
-            let token = try await sessions.access(owner: owner, force: force)
+            let token = try await sessions.access(owner: owner, force: force, forDeletion: path == "/api/account/deletion" || path == "/api/account/deletion/preview")
             try check()
             let result = try await api.backend(type, path: path, token: token, fields: fields)
             try check(); return result

@@ -124,7 +124,7 @@ struct SettingsScreen: View {
         .accessibilityHidden(showDeleteAccount)
         .overlay {
             if showDeleteAccount {
-                SettingsDeletionNotice { showDeleteAccount = false }
+                SettingsDeletionNotice(entry: entry) { showDeleteAccount = false }
             }
         }
         .onChange(of: entry.chatIdentity) { _, _ in showDeleteAccount = false }
@@ -257,8 +257,9 @@ private enum SettingsPalette {
     static let destructive = FCAColors.color(.error)
 }
 
-/// Presentation only: deliberately has no account, session or API dependency.
+/// Explicit confirmation uses the shared authenticated deletion lifecycle.
 private struct SettingsDeletionNotice: View {
+    @ObservedObject var entry: EntryModel
     let dismiss: () -> Void
     @AccessibilityFocusState private var focused: Bool
     var body: some View {
@@ -268,15 +269,21 @@ private struct SettingsDeletionNotice: View {
                 VStack(spacing: 16) {
                     Text("מחיקת חשבון").font(.title2.weight(.semibold))
                         .accessibilityAddTraits(.isHeader).accessibilityFocused($focused)
-                    Text("מחיקת חשבון היא פעולה קבועה שאינה ניתנת לביטול.")
-                    Text("מחיקת חשבון עדיין אינה זמינה בגרסת iOS זו.")
-                        .font(.subheadline).foregroundStyle(ChatStyle.secondary)
+                    Text("מחיקת החשבון היא פעולה קבועה שאינה ניתנת לביטול. כל הנתונים המשויכים לחשבון יימחקו בהתאם לתהליך המחיקה.")
+                    if let consequence = entry.deletionPreview { Text(consequence) }
+                    Text("אם נדרש ביטול ידני של Apple: הגדרות חשבון Apple > התחברות באמצעות Apple > FCA.")
+                        .font(.footnote).foregroundStyle(ChatStyle.secondary)
+                    if let message = entry.deletionMessage { Text(message).font(.subheadline) }
+                    if entry.deletionBusy { ProgressView("ממתינים…") }
                     Button("ביטול", action: dismiss)
-                        .buttonStyle(BookingCapsuleStyle(secondary: true))
-                    Button("מחיקת חשבון", role: .destructive, action: {})
+                        .buttonStyle(BookingCapsuleStyle(secondary: true)).disabled(entry.deletionBusy)
+                    if entry.deletionPreview == nil {
+                        Button("נסה שוב") { Task { await entry.loadDeletionPreview() } }
+                            .buttonStyle(BookingCapsuleStyle()).disabled(entry.deletionBusy)
+                    }
+                    Button("מחיקת חשבון", role: .destructive) { Task { await entry.submitDeletion() } }
                         .buttonStyle(BookingCapsuleStyle(destructive: true))
-                        .disabled(true)
-                        .accessibilityHint("לא זמין בגרסה זו")
+                        .disabled(entry.deletionBusy || entry.deletionPreview == nil)
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.center).padding(24)
@@ -289,7 +296,8 @@ private struct SettingsDeletionNotice: View {
         .foregroundStyle(ChatStyle.ink)
         .environment(\.layoutDirection, .rightToLeft)
         .accessibilityAddTraits(.isModal)
-        .accessibilityAction(.escape) { dismiss() }
+        .accessibilityAction(.escape) { if !entry.deletionBusy { dismiss() } }
         .onAppear { focused = true }
+        .task { await entry.loadDeletionPreview() }
     }
 }

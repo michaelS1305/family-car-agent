@@ -58,21 +58,27 @@ for name in names:
     assert (assets / f'{name}_icon.png').is_file(), name
 print('PASS: Settings assets/header, account/routes, system-only permission indicators and shared logout (static; device validation required)')
 
-# Presentation only until an authorized native deletion gateway exists.
-settings = screen
-assert 'Button { showDeleteAccount = true } label:' in settings
-assert 'SettingsDeletionNotice { showDeleteAccount = false }' in settings
-assert 'Button("ביטול", action: dismiss)' in settings
-assert 'Button("מחיקת חשבון", role: .destructive, action: {})' in settings
-assert '.buttonStyle(BookingCapsuleStyle(destructive: true))\n                        .disabled(true)' in settings
-assert 'מחיקת חשבון עדיין אינה זמינה בגרסת iOS זו.' in settings
-assert '.disabled(entry.busy || entry.chatIdentity == nil)' in settings
-assert '.onChange(of: entry.chatIdentity) { _, _ in showDeleteAccount = false }' in settings
-print('PASS: safe deletion prompt, cancel, identity dismissal and disabled execution; no native deletion flow yet')
-
-notice = settings.split('private struct SettingsDeletionNotice: View {', 1)[1]
-for forbidden in ('EntryModel', 'URLSession', 'logout', 'Task {', 'gateway', 'session'):
+# Confirmation delegates to the authenticated lifecycle, never directly to a provider.
+assert 'SettingsDeletionNotice(entry: entry) { showDeleteAccount = false }' in screen
+assert 'Button("ביטול", action: dismiss)' in screen
+assert 'await entry.loadDeletionPreview()' in screen
+assert 'await entry.submitDeletion()' in screen
+assert '.disabled(entry.deletionBusy || entry.deletionPreview == nil)' in screen
+assert 'מחיקת חשבון עדיין אינה זמינה' not in screen
+assert '.onChange(of: entry.chatIdentity) { _, _ in showDeleteAccount = false }' in screen
+notice = screen.split('private struct SettingsDeletionNotice: View {', 1)[1]
+for forbidden in ('URLSession', 'logout', 'gateway', 'session'):
     assert forbidden not in notice, forbidden
 for expected in ('FCAColors.color(.dialog)', '.rightToLeft', '.isModal', '.accessibilityFocused($focused)', '.allowsHitTesting(!showDeleteAccount)', '.accessibilityHidden(showDeleteAccount)'):
-    assert expected in settings, expected
-print('PASS: custom modal actions, disabled destructive execution, semantic surface and accessibility')
+    assert expected in screen, expected
+print('PASS: explicit deletion confirmation, preview gating, identity dismissal and semantic modal')
+
+entry = (root / 'Sources/FamilyCarAgent/Auth/EntryModel.swift').read_text(encoding='utf-8')
+submit = entry.split('func submitDeletion()', 1)[1].split('func checkDeletionStatus()', 1)[0]
+assert submit.index('prepareLogout()') < submit.index('markDeletionPending()') < submit.index('try await request(')
+assert 'sessions.session?.owner == owner, sessions.generation == generation' in submit
+api = (root / 'Sources/FamilyCarAgent/Auth/AuthAPI.swift').read_text(encoding='utf-8')
+assert '"/api/account/deletion", "/api/account/deletion/preview"' in api
+assert 'method: fields == nil ? "GET" : "POST"' in api
+assert 'forHTTPHeaderField: "Authorization"' in api
+print('PASS: existing Push preparation precedes durable fence and POST; existing authenticated transport reused')

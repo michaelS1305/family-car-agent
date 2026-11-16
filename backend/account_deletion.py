@@ -28,10 +28,15 @@ def _log(stage):
 
 def status(pool, auth_user_id):
     with pool.connection() as conn:
-        job = conn.execute('SELECT phase FROM account_deletion_jobs WHERE auth_user_id=%s',
+        job = conn.execute('SELECT phase,apple_state,operator_attention FROM account_deletion_jobs WHERE auth_user_id=%s',
                            (auth_user_id,)).fetchone()
         if job:
-            return {'status': job[0]}
+            result = {'status': job[0]}
+            if job[1] == 'manual_required':
+                result['manual_action_required'] = True
+            if job[2]:
+                result['support_required'] = True
+            return result
         exists = conn.execute('SELECT 1 FROM auth.users WHERE id=%s', (auth_user_id,)).fetchone()
         return {'status': 'not_requested' if exists else 'completed'}
 

@@ -6,7 +6,36 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var phase
     var body: some View {
         VStack(spacing: 0) {
-            if model.restoring || model.screen == .bootstrap {
+            if model.deletionBlocking {
+                ScrollView {
+                    VStack(spacing: 20) {
+                        Text("מחיקת חשבון").font(.title2.bold())
+                        Text(model.deletionMessage ?? "בודקים את מצב המחיקה…")
+                            .multilineTextAlignment(.center)
+                        Text("אם נדרש ביטול ידני של Apple: הגדרות חשבון Apple > התחברות באמצעות Apple > FCA.")
+                            .font(.footnote)
+                        if model.deletionBusy { ProgressView("ממתינים…") }
+                        if model.deletionCanLeave {
+                            Button("חזרה לכניסה", action: model.leaveDeletionResult)
+                                .buttonStyle(BookingCapsuleStyle())
+                        } else {
+                            if model.deletionRetryAllowed {
+                            if let consequence = model.deletionPreview {
+                                Text(consequence)
+                                Button("אישור ושליחה מחדש של בקשת המחיקה", role: .destructive) {
+                                    Task { await model.submitDeletion() }
+                                }.buttonStyle(BookingCapsuleStyle(destructive: true)).disabled(model.deletionBusy)
+                            } else {
+                                Button("עיון בהשלכות לפני ניסיון נוסף") { Task { await model.loadDeletionPreview() } }
+                                    .buttonStyle(BookingCapsuleStyle(secondary: true)).disabled(model.deletionBusy)
+                            }
+                        }
+                        Button("בדיקת מצב המחיקה") { Task { await model.checkDeletionStatus() } }
+                                .buttonStyle(BookingCapsuleStyle()).disabled(model.deletionBusy)
+                        }
+                    }.padding(24)
+                }
+            } else if model.restoring || model.screen == .bootstrap {
                 BootstrapLoadingView(busy: model.restoring || model.busy, error: model.error,
                                      retry: { await model.retry() })
             } else {

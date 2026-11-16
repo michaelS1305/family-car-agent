@@ -491,7 +491,7 @@ final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTrans
     }
     func backend<T: Decodable & Sendable>(_ type: T.Type, path: String, token: String,
                                           fields: [String: Field]? = nil) async throws -> T {
-        let paths: Set<String> = ["/api/me", "/api/family", "/api/onboarding/create-family/address", "/api/onboarding/create-family",
+        let paths: Set<String> = ["/api/account/deletion", "/api/account/deletion/preview", "/api/me", "/api/family", "/api/onboarding/create-family/address", "/api/onboarding/create-family",
             "/api/onboarding/join-family/start", "/api/onboarding/join-family/family-name", "/api/onboarding/join-family/address",
             "/api/onboarding/join-family/address-confirmation", "/api/onboarding/join-family/code", "/api/onboarding/join-family/complete"]
         guard paths.contains(path) else { throw AuthFailure.configuration }

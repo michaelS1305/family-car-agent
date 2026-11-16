@@ -207,6 +207,7 @@ struct AuthSession: Codable, Equatable, Sendable {
     var shortcutNamespace: UUID? = nil
     var boundVehicles: [UUID: String]? = nil
     var vehicleScope: VehicleSessionScope? = nil
+    var deletionPending: Bool? = nil // Optional for existing Keychain sessions.
     var activated = false
     var appleUser: String? = nil // credential-state lookup only; not an FCA account identifier
 }
@@ -297,6 +298,16 @@ extension AuthTransport {
         guard saved?.activated == true else { try vault.clear(); return }
         session = saved
     }
+    func markDeletionPending() throws {
+        guard var current = session else { throw AuthFailure.signedOut }
+        let previous = current
+        current.deletionPending = true
+        current.vehicleScope = nil; current.boundVehicles = nil
+        try vault.write(current) // Failure prevents submitting a destructive request.
+        generation += 1; refreshing?.cancel(); refreshing = nil
+        session = current
+        onInvalidation?(previous) // Reuse Push/vehicle revocation, retaining status credentials.
+    }
     func clear() throws {
         let previous = session
         appleCapture?.cancel(); appleCapture = nil
@@ -328,8 +339,9 @@ extension AuthTransport {
         value.activated = true
         try vault.write(value); session = value
     }
-    func access(owner: UUID, force: Bool = false, now: Date = Date()) async throws -> String {
+    func access(owner: UUID, force: Bool = false, now: Date = Date(), forDeletion: Bool = false) async throws -> String {
         guard let current = session, current.owner == owner else { throw AuthFailure.signedOut }
+        guard current.deletionPending != true || forDeletion else { throw AuthFailure.stale }
         if let refreshing {
             let version = generation
             let value = try await refreshing.value
@@ -344,6 +356,7 @@ extension AuthTransport {
                 var result = try await transport.exchange(grant: "refresh_token", fields: ["refresh_token": current.refreshToken])
                 guard generation == version, session?.owner == owner else { throw AuthFailure.stale }
                 guard result.owner == owner else { try clear(); throw AuthFailure.signedOut }
+                result.deletionPending = session?.deletionPending
                 result.shortcutNamespace = session?.shortcutNamespace
                 result.boundVehicles = session?.boundVehicles
                 result.vehicleScope = session?.vehicleScope

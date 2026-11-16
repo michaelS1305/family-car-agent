@@ -16,6 +16,20 @@ from tests.test_database_atomic_creation import load_database_module_without_rea
 
 
 class DeletionUnitTests(unittest.TestCase):
+    def test_safe_status_hints(self):
+        for row, expected in (
+            (('auth_pending', 'pending', False), {'status': 'auth_pending'}),
+            (('auth_pending', 'manual_required', False),
+             {'status': 'auth_pending', 'manual_action_required': True}),
+            (('draining', 'pending', True), {'status': 'draining', 'support_required': True}),
+        ):
+            conn = Mock()
+            conn.execute.return_value.fetchone.return_value = row
+            pool = Mock()
+            pool.connection.return_value.__enter__ = Mock(return_value=conn)
+            pool.connection.return_value.__exit__ = Mock(return_value=False)
+            self.assertEqual(deletion.status(pool, uuid4()), expected)
+
     def test_admin_hard_delete_no_redirect_no_proxy_no_secret_logging(self):
         session = Mock()
         session.delete.return_value.status_code = 200
