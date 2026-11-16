@@ -120,13 +120,12 @@ struct SettingsScreen: View {
         } message: {
             Text("אפשר לפתוח את הגדרות iOS ולבחור באפליקציית FCA.")
         }
-        .confirmationDialog("מחיקת חשבון", isPresented: $showDeleteAccount, titleVisibility: .visible) {
-            // No native account-deletion gateway is implemented. Never substitute logout
-            // or a vehicle deletion API for account deletion.
-            Button("מחיקת החשבון לצמיתות", role: .destructive) { }.disabled(true)
-            Button("ביטול", role: .cancel) { showDeleteAccount = false }
-        } message: {
-            Text("מחיקת החשבון היא פעולה קבועה שאינה ניתנת לביטול. מחיקת חשבון מתוך האפליקציה אינה זמינה כרגע; לא תבוצע מחיקה.")
+        .allowsHitTesting(!showDeleteAccount)
+        .accessibilityHidden(showDeleteAccount)
+        .overlay {
+            if showDeleteAccount {
+                SettingsDeletionNotice { showDeleteAccount = false }
+            }
         }
         .onChange(of: entry.chatIdentity) { _, _ in showDeleteAccount = false }
         .task(id: scenePhase) {
@@ -256,4 +255,41 @@ private enum SettingsPalette {
     static let border = ChatStyle.border
     static let selection = ChatStyle.selected
     static let destructive = FCAColors.color(.error)
+}
+
+/// Presentation only: deliberately has no account, session or API dependency.
+private struct SettingsDeletionNotice: View {
+    let dismiss: () -> Void
+    @AccessibilityFocusState private var focused: Bool
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.22).ignoresSafeArea()
+            ScrollView {
+                VStack(spacing: 16) {
+                    Text("מחיקת חשבון").font(.title2.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader).accessibilityFocused($focused)
+                    Text("מחיקת חשבון היא פעולה קבועה שאינה ניתנת לביטול.")
+                    Text("מחיקת חשבון עדיין אינה זמינה בגרסת iOS זו.")
+                        .font(.subheadline).foregroundStyle(ChatStyle.secondary)
+                    Button("ביטול", action: dismiss)
+                        .buttonStyle(BookingCapsuleStyle(secondary: true))
+                    Button("מחיקת חשבון", role: .destructive, action: {})
+                        .buttonStyle(BookingCapsuleStyle(destructive: true))
+                        .disabled(true)
+                        .accessibilityHint("לא זמין בגרסה זו")
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.center).padding(24)
+                .frame(maxWidth: 360)
+                .background(FCAColors.color(.dialog), in: RoundedRectangle(cornerRadius: 24))
+                .padding(24).frame(maxWidth: .infinity)
+            }
+            .scrollBounceBehavior(.basedOnSize).defaultScrollAnchor(.center)
+        }
+        .foregroundStyle(ChatStyle.ink)
+        .environment(\.layoutDirection, .rightToLeft)
+        .accessibilityAddTraits(.isModal)
+        .accessibilityAction(.escape) { dismiss() }
+        .onAppear { focused = true }
+    }
 }

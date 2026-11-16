@@ -41,3 +41,15 @@ assert 'Button(action: model.editAddress)' in family
 assert 'Image(systemName: "pencil").font(.system(size: 25)).frame(width: 44, height: 44)' in family
 assert '.disabled(!model.canManage).accessibilityLabel("עריכת כתובת")' in family
 assert 'profile.can_edit_roles && model.stage == .view' in family
+
+address = family.split('private func address(', 1)[1].split('private func code(', 1)[0]
+for action in ('verifyAddress', 'confirmAddress'):
+    assert f'Button(action: model.{action})' in address
+assert address.count('.buttonStyle(BookingCapsuleStyle())') == 2
+assert address.count('.buttonStyle(BookingCapsuleStyle(secondary: true))') == 3
+assert address.count('.frame(minHeight: 32)') == 2
+assert address.count('.disabled(model.addressBusy || !model.canManage)') == 2
+assert address.count('action: model.cancelAddress') == 2
+assert 'action: model.reviseAddress' in address
+assert 'VerifiedAddressPreview(location: model.candidate?.location)' in address
+print('PASS: address action styles, original handlers and busy/permission guards')

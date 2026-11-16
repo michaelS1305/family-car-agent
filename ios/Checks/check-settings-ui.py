@@ -61,10 +61,18 @@ print('PASS: Settings assets/header, account/routes, system-only permission indi
 # Presentation only until an authorized native deletion gateway exists.
 settings = screen
 assert 'Button { showDeleteAccount = true } label:' in settings
-assert '.confirmationDialog("מחיקת חשבון", isPresented: $showDeleteAccount' in settings
-assert 'Button("ביטול", role: .cancel) { showDeleteAccount = false }' in settings
-assert 'Button("מחיקת החשבון לצמיתות", role: .destructive) { }.disabled(true)' in settings
-assert 'לא תבוצע מחיקה' in settings
+assert 'SettingsDeletionNotice { showDeleteAccount = false }' in settings
+assert 'Button("ביטול", action: dismiss)' in settings
+assert 'Button("מחיקת חשבון", role: .destructive, action: {})' in settings
+assert '.buttonStyle(BookingCapsuleStyle(destructive: true))\n                        .disabled(true)' in settings
+assert 'מחיקת חשבון עדיין אינה זמינה בגרסת iOS זו.' in settings
 assert '.disabled(entry.busy || entry.chatIdentity == nil)' in settings
 assert '.onChange(of: entry.chatIdentity) { _, _ in showDeleteAccount = false }' in settings
 print('PASS: safe deletion prompt, cancel, identity dismissal and disabled execution; no native deletion flow yet')
+
+notice = settings.split('private struct SettingsDeletionNotice: View {', 1)[1]
+for forbidden in ('EntryModel', 'URLSession', 'logout', 'Task {', 'gateway', 'session'):
+    assert forbidden not in notice, forbidden
+for expected in ('FCAColors.color(.dialog)', '.rightToLeft', '.isModal', '.accessibilityFocused($focused)', '.allowsHitTesting(!showDeleteAccount)', '.accessibilityHidden(showDeleteAccount)'):
+    assert expected in settings, expected
+print('PASS: custom modal actions, disabled destructive execution, semantic surface and accessibility')

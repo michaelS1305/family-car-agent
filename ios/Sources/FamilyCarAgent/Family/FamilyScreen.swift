@@ -119,8 +119,11 @@ struct FamilyScreen: View {
                     .overlay(RoundedRectangle(cornerRadius: 16).stroke(ChatStyle.border))
                     .disabled(model.addressBusy).accessibilityLabel("כתובת הבית")
                 HStack {
-                    Button(model.addressBusy ? "בודק…" : "אשר", action: model.verifyAddress)
+                    Button(action: model.verifyAddress) {
+                        Text(model.addressBusy ? "בודק…" : "אשר").frame(minHeight: 32)
+                    }.buttonStyle(BookingCapsuleStyle())
                     Button("ביטול", action: model.cancelAddress)
+                        .buttonStyle(BookingCapsuleStyle(secondary: true))
                 }.disabled(model.addressBusy || !model.canManage)
             } else {
                 Text("זו הכתובת הנכונה?").fontWeight(.bold)
@@ -129,9 +132,13 @@ struct FamilyScreen: View {
                     .frame(height: 180).clipShape(RoundedRectangle(cornerRadius: 16))
                     .accessibilityLabel("מפת הכתובת המאומתת")
                 HStack {
-                    Button(model.addressBusy ? "ממתינים…" : "אשר", action: model.confirmAddress)
+                    Button(action: model.confirmAddress) {
+                        Text(model.addressBusy ? "ממתינים…" : "אשר").frame(minHeight: 32)
+                    }.buttonStyle(BookingCapsuleStyle())
                     Button("שנה כתובת", action: model.reviseAddress)
+                        .buttonStyle(BookingCapsuleStyle(secondary: true))
                     Button("ביטול", action: model.cancelAddress)
+                        .buttonStyle(BookingCapsuleStyle(secondary: true))
                 }.disabled(model.addressBusy || !model.canManage)
             }
             if let error = model.addressError { Text(error).font(.caption).foregroundStyle(FCAColors.color(.error)) }
