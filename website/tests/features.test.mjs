@@ -27,12 +27,12 @@ test('both routes reuse one header/footer and expose the correct active page',()
  assert.ok(page.includes('href="/contact"'))
  }
 })
-test('all image assets exist and store/legal links remain unavailable',()=>{
+test('all image assets exist; stores remain unavailable and legal links are active',()=>{
  for(const [,src] of html.matchAll(/(?:src|href)="(\/assets\/[^\"]+)"/g)) assert.ok(existsSync(`public${src}`),src)
  assert.ok(html.includes('/assets/family-road.webp'))
  assert.ok(html.includes('/assets/fca-road-logo.webp'))
  assert.ok(html.includes('/assets/fca-road-logo-white.svg'))
- assert.equal((html.match(/disabled=""/g)||[]).length,4)
+ assert.equal((html.match(/disabled=""/g)||[]).length,2)
  assert.doesNotMatch(html,/href="https?:/)
  assert.ok(html.includes('aria-hidden="true"'))
 })

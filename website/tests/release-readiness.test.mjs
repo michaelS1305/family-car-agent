@@ -5,8 +5,8 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import App, { pages, pageMetadata, applyPageMetadata } from '../node_modules/.cache/website-tests/App.js'
 const render = pathname => renderToStaticMarkup(React.createElement(App,{pathname}))
-test('all 21 valid routes render and unknown routes show accessible 404 navigation',()=>{
- assert.equal(Object.keys(pages).length,21)
+test('all 23 valid routes render and unknown routes show accessible 404 navigation',()=>{
+ assert.equal(Object.keys(pages).length,23)
  for(const path of Object.keys(pages)) {
   assert.doesNotMatch(render(path),/id="not-found-title"/)
   assert.doesNotMatch(render(path==='/'?path:path+'/'),/id="not-found-title"/)

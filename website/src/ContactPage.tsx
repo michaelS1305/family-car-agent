@@ -65,6 +65,7 @@ export default function ContactPage() {
     </fieldset>
     {configured?<ContactTurnstile sitekey={sitekey} onToken={setToken} resetVersion={resetVersion}/>:<p className="contact-prototype">{submissionUnavailable}</p>}
     {retryUntil>now && <p className="contact-notice">ניתן לנסות שוב בעוד {Math.ceil((retryUntil-now)/1000)} שניות.</p>}
+    <p className="contact-privacy">הפרטים והקבצים המצורפים שתשלחו יעובדו לצורך טיפול בפנייתכם, כמפורט ב<a href="/privacy">מדיניות הפרטיות</a>.</p>
     <button className="button button-primary contact-submit" type="submit" disabled={busy || !configured || !token || retryUntil>now}><SupportIcon kind="send"/>{busy?'שולחים…':'שליחת פנייה'}</button>
     <p className="contact-notice" role="status" aria-live="polite">{notice}</p>
    </form>

@@ -2,6 +2,8 @@ export const canonicalOrigin = 'https://familycaragent.com'
 const brand = 'Family Car Agent'
 export const pages: Record<string, { title: string; description: string; index?: boolean }> = {
  '/': {title: 'הדרך החכמה למשפחה', description: 'ניהול רכבים, הזמנות ותיאום בין בני המשפחה — במקום אחד.'},
+ '/terms': {title: 'תנאי שימוש', description: 'תנאי השימוש של Family Car Agent, גרסה 1.2: חשבון, ניהול משפחה ורכבים, מחיקה וזכויות המשתמש.'},
+ '/privacy': {title: 'מדיניות פרטיות', description: 'מדיניות הפרטיות של Family Car Agent, גרסה 1.2: איסוף מידע, עיבוד, שיתוף, שמירה ומחיקה.'},
  '/features': {title: 'יכולות האפליקציה', description: 'ניהול משפחתי משותף, עדכונים בזמן אמת וטיפולים ותחזוקה לרכבי המשפחה.'},
  '/support': {title: 'מרכז התמיכה', description: 'מדריכים ושאלות נפוצות על משפחה, רכבים, הזמנות והגדרות האפליקציה.'},
  '/contact': {title: 'יצירת קשר', description: 'פנייה לצוות התמיכה עם שאלה, תקלה, הצעה או חוות דעת.'},

@@ -29,7 +29,7 @@ test('FAQ uses accessible native disclosure with approved answers', () => {
   assert.ok(html.includes('כל הקודם להזמין — זוכה ברכב!'))
 })
 test('unavailable services remain disabled; no invented external destinations', () => {
-  assert.equal((html.match(/disabled=""/g) || []).length, 4)
+  assert.equal((html.match(/disabled=""/g) || []).length, 2)
   assert.doesNotMatch(html, /href="https?:/)
   assert.ok(html.includes('קישורי ההורדה יתווספו בהמשך'))
   assert.doesNotMatch(readFileSync('src/App.tsx','utf8'), /fetch\(|supabase|serviceWorker|localStorage/)

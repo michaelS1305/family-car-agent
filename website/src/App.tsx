@@ -1,3 +1,4 @@
+import { LegalPage } from './LegalPage'
 import NotFoundPage from './NotFoundPage'
 import { applyPageMetadata } from './pageMetadata'
 export { pages, pageMetadata, metadataEntries, applyPageMetadata } from './pageMetadata'
@@ -149,7 +150,7 @@ function FAQ() {
 }
 function Footer() {
   return <footer className="site-footer"><Wave position="top" variant="rolling" /><div className="footer-inner section-inner">
-    <p dir="ltr">© 2026 Family Car Agent</p><nav aria-label="קישורים בתחתית האתר"><button disabled title="המסמך טרם פורסם">תנאי שימוש</button><span aria-hidden="true">|</span><button disabled title="המסמך טרם פורסם">מדיניות פרטיות</button><span aria-hidden="true">|</span><a href="/contact">יצירת קשר</a></nav>
+    <p dir="ltr">© 2026 Family Car Agent</p><nav aria-label="קישורים בתחתית האתר"><a href="/terms">תנאי שימוש</a><span aria-hidden="true">|</span><a href="/privacy">מדיניות פרטיות</a><span aria-hidden="true">|</span><a href="/contact">יצירת קשר</a></nav>
     <img src="/assets/fca-road-logo-white.svg" alt="Family Car Agent" width="2170" height="725" />
   </div></footer>
 }
@@ -175,6 +176,7 @@ export default function App({ pathname }: { pathname?: string } = {}) {
   const vehicleGuide = vehicleGuides.find(g => g.path === route)
   const support = route === '/support' || familyGuides || createGuide || joinGuide || manageGuide || settingsListing || !!settingsGuide || bookingListing || !!bookingGuide || vehicleListing || !!vehicleGuide
   const contact = route === '/contact'
-  const missing = route !== '' && !features && !support && !contact
-  return <><a className="skip-link" href="#main">דילוג לתוכן</a><Header activeIndex={missing ? -1 : contact ? 3 : support ? 2 : features ? 1 : 0} /><main id="main">{missing ? <NotFoundPage /> : vehicleGuide ? <VehicleGuidePage guide={vehicleGuide} /> : vehicleListing ? <VehicleGuidesPage /> : bookingGuide ? <GuidePage {...bookingGuide} /> : bookingListing ? <BookingGuidesPage /> : settingsGuide ? <GuidePage {...settingsGuide} /> : settingsListing ? <SettingsGuidesPage /> : manageGuide ? <GuidePage {...manageFamilyGuide} /> : joinGuide ? <GuidePage {...joinFamilyGuide} /> : createGuide ? <GuidePage {...createFamilyGuide} /> : familyGuides ? <FamilyGuidesPage /> : contact ? <ContactPage /> : support ? <SupportPage /> : features ? <FeaturesPage badges={<><StoreBadge store="apple" /><StoreBadge store="google" /></>} /> : <><Hero /><Capabilities /><Downloads /><Support /><FAQ /></>}</main><Footer /></>
+  const legal = route === '/terms' || route === '/privacy'
+  const missing = route !== '' && !features && !support && !contact && !legal
+  return <><a className="skip-link" href="#main">דילוג לתוכן</a><Header activeIndex={missing || legal ? -1 : contact ? 3 : support ? 2 : features ? 1 : 0} /><main id="main">{legal ? <LegalPage document={route === '/terms' ? 'terms' : 'privacy'} /> : missing ? <NotFoundPage /> : vehicleGuide ? <VehicleGuidePage guide={vehicleGuide} /> : vehicleListing ? <VehicleGuidesPage /> : bookingGuide ? <GuidePage {...bookingGuide} /> : bookingListing ? <BookingGuidesPage /> : settingsGuide ? <GuidePage {...settingsGuide} /> : settingsListing ? <SettingsGuidesPage /> : manageGuide ? <GuidePage {...manageFamilyGuide} /> : joinGuide ? <GuidePage {...joinFamilyGuide} /> : createGuide ? <GuidePage {...createFamilyGuide} /> : familyGuides ? <FamilyGuidesPage /> : contact ? <ContactPage /> : support ? <SupportPage /> : features ? <FeaturesPage badges={<><StoreBadge store="apple" /><StoreBadge store="google" /></>} /> : <><Hero /><Capabilities /><Downloads /><Support /><FAQ /></>}</main><Footer /></>
 }

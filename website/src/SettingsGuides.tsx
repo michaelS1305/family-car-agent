@@ -3,7 +3,7 @@ import type { GuideStep } from './guideData'
 
 const category = 'הגדרות והתראות'
 const categoryPath = '/support/settings'
-type SettingsGuide = { path: string; title: string; label: string; introduction: string; category: string; categoryPath: string; steps: GuideStep[]; screenshot: NonNullable<GuideStep['screenshot']>; notes?: string[] }
+type SettingsGuide = { path: string; title: string; label: string; introduction: string; category: string; categoryPath: string; steps: GuideStep[]; screenshot: NonNullable<GuideStep['screenshot']>; notes?: string[]; media?: React.ReactNode }
 export const settingsGuides: SettingsGuide[] = [
   {
     path: `${categoryPath}/iphone`, title: 'הגדרות, התראות ומצב תצוגה — iPhone', label: 'הגדרות iPhone', category, categoryPath,
@@ -29,6 +29,7 @@ export const settingsGuides: SettingsGuide[] = [
   },
   {
     path: `${categoryPath}/delete-account`, title: 'מחיקת חשבון ועזיבת משפחה', label: 'מחיקת חשבון ועזיבת משפחה', category, categoryPath,
+    media: <p>מידע נוסף מופיע ב<a href="/terms">תנאי השימוש</a> וב<a href="/privacy">מדיניות הפרטיות</a>. ניתן להגיש בקשת מחיקה גם דרך <a href="/contact">יצירת קשר</a>, בכפוף לאימות זהות מתאים. הגשת בקשה אינה אישור להשלמת המחיקה.</p>,
     introduction: 'מדריך משותף ל־iPhone ול־Android. צילום המסך מתוך iPhone.',
     screenshot: { src: '/assets/guides/settings/delete-account.jpg', alt: 'אפשרות מחיקת חשבון בתחתית מסך הגדרות ב־iPhone', width: 591, height: 1280 },
     steps: [
@@ -36,7 +37,7 @@ export const settingsGuides: SettingsGuide[] = [
       { title: 'קריאת פרטי המחיקה ואישור', paragraphs: ['תיפתח חלונית אישור המציגה מידע על מחיקת החשבון והשלכותיה.', 'קראו את הפרטים בעיון.', 'אם החלטתם להמשיך, אשרו את בקשת המחיקה.'] },
       { title: 'בדיקת השלמת המחיקה', paragraphs: ['Android:', 'לאחר האישור תוצג חלונית שבה ניתן לבדוק את מצב מחיקת החשבון.', 'iPhone:', 'לאחר האישור ייפתח מסך ייעודי לבדיקת מצב המחיקה.', 'המתינו מספר שניות, לחצו על כפתור בדיקת המצב וודאו שהמחיקה אושרה והושלמה.'] },
     ],
-    notes: ['מחיקת החשבון היא גם הדרך לעזוב את המשפחה. הפעולה מוחקת את החשבון עצמו, ולא רק את השיוך המשפחתי.', 'אם מנהל המשפחה מוחק את חשבונו, האחריות לניהול עוברת לבן משפחה אחר.'],
+    notes: ['מחיקת החשבון היא גם הדרך לעזוב את המשפחה. הפעולה מוחקת את החשבון עצמו, ולא רק את השיוך המשפחתי.', 'אם מנהל המשפחה מוחק את חשבונו ויש בני משפחה נוספים, הניהול עשוי לעבור לחבר אחר. מחיקת החבר האחרון עשויה להביא למחיקת המשפחה ונתוניה.'],
   },
 ]
 

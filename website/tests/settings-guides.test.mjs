@@ -24,5 +24,5 @@ test('platform instructions preserve the approved distinctions',()=>{
  assert.ok(android.steps[3].paragraphs.includes('במסך ההגדרות של Android, לחצו על ״Android Companion״.'))
  assert.doesNotMatch(JSON.stringify(android),/Shortcuts|קיצורים|iPhone|אייפון/)
  assert.deepEqual(deletion.steps[2].paragraphs,['Android:','לאחר האישור תוצג חלונית שבה ניתן לבדוק את מצב מחיקת החשבון.','iPhone:','לאחר האישור ייפתח מסך ייעודי לבדיקת מצב המחיקה.','המתינו מספר שניות, לחצו על כפתור בדיקת המצב וודאו שהמחיקה אושרה והושלמה.'])
- assert.deepEqual(deletion.notes,['מחיקת החשבון היא גם הדרך לעזוב את המשפחה. הפעולה מוחקת את החשבון עצמו, ולא רק את השיוך המשפחתי.','אם מנהל המשפחה מוחק את חשבונו, האחריות לניהול עוברת לבן משפחה אחר.'])
+ assert.deepEqual(deletion.notes,['מחיקת החשבון היא גם הדרך לעזוב את המשפחה. הפעולה מוחקת את החשבון עצמו, ולא רק את השיוך המשפחתי.','אם מנהל המשפחה מוחק את חשבונו ויש בני משפחה נוספים, הניהול עשוי לעבור לחבר אחר. מחיקת החבר האחרון עשויה להביא למחיקת המשפחה ונתוניה.'])
 })
