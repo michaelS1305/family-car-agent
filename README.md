@@ -106,12 +106,12 @@ uvicorn main:app --reload
 Install and run the frontend from the repository root:
 
 ```bash
-cd web
-npm install
-npm run dev
+cd website
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-The frontend environment is documented in `web/.env.example`.
+The frontend environment is documented in `website/CONTACT.md`.
 
 ## Production configuration
 
@@ -155,10 +155,10 @@ python -m unittest discover -s tests -v
 Frontend verification, starting from the repository root:
 
 ```bash
-cd web
-npm run test:frontend
-npm run lint
-npm run build
+cd website
+pnpm test
+pnpm typecheck
+pnpm build
 ```
 
 ## Current limitations

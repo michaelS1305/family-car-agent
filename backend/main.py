@@ -14,6 +14,7 @@ from vehicle_api import router as vehicle_router
 from vehicle_reference_api import router as vehicle_reference_router
 from device_api import router as device_router
 from native_push_api import router as native_push_router
+from contact_api import router as contact_router
 from native_push_worker import native_lifespan
 from deletion_gate import IdentityUnavailable
 
@@ -137,6 +138,7 @@ app.include_router(vehicle_router)
 app.include_router(vehicle_reference_router)
 app.include_router(device_router)
 app.include_router(native_push_router)
+app.include_router(contact_router)
 
 
 @app.exception_handler(IdentityUnavailable)
@@ -164,6 +166,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["Authorization", "Content-Type"],
+    expose_headers=["Retry-After"],
 )
 
 if _environment_flag_is_true("RUN_DB_INIT"):

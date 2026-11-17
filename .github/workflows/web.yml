@@ -5,12 +5,12 @@ on:
     branches: [develop, main]
     paths:
       - .github/workflows/web.yml
-      - web/**
+      - website/**
   pull_request:
     branches: [develop, main]
     paths:
       - .github/workflows/web.yml
-      - web/**
+      - website/**
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: web
+        working-directory: website
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,14 +37,14 @@ jobs:
           package-manager-cache: false
       - uses: pnpm/action-setup@v4
         with:
-          # Compatible with the existing v9 lockfile; no package.json change.
+          # Matches website/package.json and its v9 lockfile.
           version: '11.24.0'
           run_install: false
-      - name: Install frozen Web dependencies
+      - name: Install frozen website dependencies
         run: pnpm install --frozen-lockfile
-      - name: Web tests
-        run: pnpm run test:frontend
-      - name: Web lint
-        run: pnpm run lint
-      - name: Web production build (includes TypeScript and PWA)
+      - name: Website tests
+        run: pnpm test
+      - name: Website TypeScript validation
+        run: pnpm typecheck
+      - name: Website production build
         run: pnpm run build
