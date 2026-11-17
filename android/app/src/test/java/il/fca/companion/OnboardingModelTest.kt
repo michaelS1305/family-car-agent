@@ -18,6 +18,18 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], application = Application::class)
 class OnboardingModelTest {
+    @Test fun legalAcceptanceStartsUncheckedAndDoesNotCarryBetweenRegistrationFlows() {
+        val model = OnboardingModel(Gateway())
+        assertFalse(model.consent)
+        for (route in listOf(LoginRoute.CREATE_FAMILY, LoginRoute.JOIN_FAMILY)) {
+            model.consent = true
+            model.select(route)
+            assertFalse(model.consent)
+            model.consent = true
+            model.back()
+            assertFalse(model.consent)
+        }
+    }
     @Test fun joinConfirmationWithoutUsableCoordinatesStillRequiresExplicitConfirmation() = runBlocking {
         for (coordinates in listOf("{}", "{\"latitude\":null,\"longitude\":null}",
             "{\"latitude\":\"invalid\",\"longitude\":35}")) {
@@ -231,7 +243,8 @@ class OnboardingModelTest {
         model.back(); assertEquals(2, model.step); assertEquals("כתובת לבדיקה", model.address)
         model.next(); model.next(); assertEquals(4, model.step)
         model.userName = "שם"
-        model.next(); assertNotNull(model.error)
+        assertFalse(model.consent)
+        model.next(); assertEquals(LEGAL_CONSENT_REQUIRED, model.error)
         assertFalse(gateway.calls.any { it.first == "/api/onboarding/create-family" })
         model.consent = true; model.next()
         val payload = gateway.calls.single { it.first == "/api/onboarding/create-family" }.third!!
@@ -259,7 +272,13 @@ class OnboardingModelTest {
         model.address = "בית"; model.next(); assertEquals(3, model.step)
         model.next(); assertEquals(4, model.step)
         model.joinCode = "ab12cd"; model.next(); assertEquals(5, model.step)
-        model.userName = "שם"; model.consent = true; model.next()
+        model.userName = "שם"
+        assertFalse(model.consent)
+        val beforeConsent = gateway.calls.size
+        model.next()
+        assertEquals(LEGAL_CONSENT_REQUIRED, model.error)
+        assertEquals(beforeConsent, gateway.calls.size)
+        model.consent = true; model.next()
         assertEquals(EntryScreen.SUCCESS, model.screen)
         assertEquals(listOf("start", "family-name", "address", "address-confirmation", "code", "complete", "me"),
             gateway.calls.map { it.first.substringAfterLast('/') })

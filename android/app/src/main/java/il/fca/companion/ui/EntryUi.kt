@@ -35,7 +35,6 @@ private val Outline: Color
     @Composable get() = fcaColor(Color(0xFFD7D9DC), FcaColorRole.BORDER)
 private val Shape = RoundedCornerShape(16.dp)
 private const val ADDRESS_HELP = "אפשר להזין עיר, רחוב ומספר בית גם ללא פסיקים.\nבשלב הבא יש לבדוק ולאשר את הכתובת שנמצאה."
-internal const val DRIVING_CONSENT = "אני עומד/ת בדרישות החוק החלות על נהג פעיל ברכב זה. בישראל, ההנחה למוצר היא גיל מינימלי של 16 שנים ו־9 חודשים לרישיון B. אם אני קטין/ה, השימוש הוא באחריות ובאישור הורה או אפוטרופוס. ידוע לי שהאפליקציה אינה בודקת תוקף רישיון או כשירות חוקית לנהיגה."
 
 @Composable
 internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: HistoryViewModel, vehicles: VehiclesViewModel, family: FamilyViewModel,
@@ -50,7 +49,7 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
         vehicles.reconcileIdentity()
         family.reconcileIdentity()
     }
-    var legal by remember { mutableStateOf<LegalCopy?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(chat.ownerGeneration, model.authenticatedFamilyId, model.screen) {
         booking.activate(chat.ownerGeneration, model.authenticatedFamilyId)
     }
@@ -79,7 +78,7 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                     }
                 } else if (model.screen == EntryScreen.LOGIN) {
                     Column(Modifier.fillMaxSize().safeDrawingPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
-                        GoogleLoginScreen(Modifier.weight(1f), !model.busy, login, back) { legal = it }
+                        GoogleLoginScreen(Modifier.weight(1f), !model.busy, login, back) { openPublicLink(context, it.url) }
                         Column(Modifier.widthIn(max = 440.dp).fillMaxWidth().padding(horizontal = 16.dp)) { Feedback(model) }
                     }
                 } else {
@@ -133,8 +132,8 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                                             colors = CardDefaults.outlinedCardColors(containerColor = fcaColor(Color.White, FcaColorRole.SURFACE))) {
                                             Row(Modifier.padding(4.dp), verticalAlignment = Alignment.Top) {
                                                 Checkbox(model.consent, { model.consent = it }, enabled = !model.busy,
-                                                    modifier = Modifier.semantics { contentDescription = DRIVING_CONSENT })
-                                                Text(DRIVING_CONSENT, Modifier.weight(1f).padding(top = 4.dp, bottom = 4.dp, end = 4.dp),
+                                                    modifier = Modifier.semantics { contentDescription = LEGAL_CONSENT })
+                                                Text(onboardingLegalText(Secondary) { openPublicLink(context, it.url) }, Modifier.weight(1f).padding(top = 4.dp, bottom = 4.dp, end = 4.dp),
                                                     fontSize = 11.sp, lineHeight = 15.sp, color = Secondary)
                                             }
                                         }
@@ -174,11 +173,7 @@ internal fun EntryUi(model: OnboardingModel, chat: ChatViewModel, history: Histo
                     FcaLoadingOverlay(bootstrapLoading(model.screen, model.busy))
                 }
             }
-            legal?.let { document ->
-                AlertDialog(onDismissRequest = { legal = null }, title = { Text(document.title) },
-                    text = { Text(document.body, Modifier.verticalScroll(rememberScrollState())) },
-                    confirmButton = { TextButton(onClick = { legal = null }) { Text("סגירה") } })
-            }
+
         }
     }
 }

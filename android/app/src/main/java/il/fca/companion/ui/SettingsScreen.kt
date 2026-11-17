@@ -183,7 +183,7 @@ internal fun SettingsScreen(
                         label = "תנאי שימוש",
                         icon = R.drawable.about_icon,
                         chevron = true,
-                        unavailable = true
+                        onClick = { openPublicLink(context, TERMS.url) }
                     )
 
                     SettingsDivider()
@@ -192,7 +192,7 @@ internal fun SettingsScreen(
                         label = "מדיניות פרטיות",
                         icon = R.drawable.privacy_icon,
                         chevron = true,
-                        unavailable = true
+                        onClick = { openPublicLink(context, PRIVACY.url) }
                     )
                 }
 
@@ -270,7 +270,7 @@ private fun SettingsHeader(back: () -> Unit) {
         ) {
             IconButton(
                 back,
-                Modifier.align(AbsoluteAlignment.CenterLeft)
+                Modifier.align(AbsoluteAlignment.CenterRight)
                     .size(48.dp)
                     .background(
                         fcaColor(Color.White, FcaColorRole.SURFACE).copy(alpha = .85f),
@@ -628,6 +628,7 @@ internal fun SettingsSheetContent(
     sheet: SettingsSheet,
     dismiss: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     Column(
         Modifier.fillMaxWidth()
             .verticalScroll(rememberScrollState())
@@ -676,21 +677,21 @@ internal fun SettingsSheetContent(
 
                 SheetOptions {
                     SettingsRow(
-                        label = "שליחת מייל",
-                        icon = R.drawable.envelope_icon,
-                        subtitle = NotConfigured,
+                        label = "מרכז התמיכה",
+                        icon = R.drawable.support_icon,
+
                         chevron = true,
-                        unavailable = true
+                        onClick = { openPublicLink(context, SUPPORT_URL) }
                     )
 
                     SettingsDivider()
 
                     SettingsRow(
-                        label = "פתיחת צ׳אט",
-                        icon = R.drawable.chat_suppory_icon,
-                        subtitle = Unavailable,
+                        label = "יצירת קשר",
+                        icon = R.drawable.envelope_icon,
+
                         chevron = true,
-                        unavailable = true
+                        onClick = { openPublicLink(context, CONTACT_URL) }
                     )
                 }
 

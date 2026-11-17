@@ -62,6 +62,22 @@ class SettingsScreenTest {
             }
         }
     }
+    @Test fun supportSheetSeparatesSupportCenterAndContact() {
+        render({ SettingsPresentationSheet(SettingsSheet.SUPPORT) {} }) {
+            val nodes = mutableListOf<SemanticsNode>()
+            fun collect(view: View) {
+                if (view is ViewRootForTest) nodes += view.semanticsOwner.getAllSemanticsNodes(false)
+                if (view is ViewGroup) repeat(view.childCount) { collect(view.getChildAt(it)) }
+            }
+            android.view.inspector.WindowInspector.getGlobalWindowViews().filter { it.isShown }.forEach(::collect)
+            for ((label, url) in listOf("מרכז התמיכה" to SUPPORT_URL, "יצירת קשר" to CONTACT_URL)) {
+                val row = generateSequence(nodes.withText(label)) { it.parent }.first { it.config.contains(SemanticsActions.OnClick) }
+                assertFalse(row.isDisabled())
+                row.config[SemanticsActions.OnClick].action!!.invoke()
+                assertEquals(url, shadowOf(RuntimeEnvironment.getApplication()).nextStartedActivity.dataString)
+            }
+        }
+    }
     @Test fun actualAuthenticatedEmailAppearsAsAccountValue() = runBlocking {
         val model = AccountSettingsModel(object : AccountSettingsGateway {
             override suspend fun email(owner: String) = "actual@example.test"
@@ -261,7 +277,7 @@ class SettingsScreenTest {
     private fun SemanticsNode.isDisabled(): Boolean =
         config.contains(SemanticsProperties.Disabled) || parent?.isDisabled() == true
 
-    @Test fun onlyApprovedShortcutsBackAndTwoLocalSheetsAreInteractive() {
+    @Test fun approvedShortcutsLegalLinksAndBackRemainInteractive() {
         var backed = false
         val state = AppShellState().apply {
             select(AppMode.DASHBOARD)
@@ -279,7 +295,11 @@ class SettingsScreenTest {
             nodes.withText(BuildConfig.VERSION_NAME)
             assertTrue(nodes.any { it.config.contains(SemanticsActions.ScrollBy) })
             for (text in listOf("תנאי שימוש", "מדיניות פרטיות")) {
-                assertTrue(text, nodes.withText(text).isDisabled())
+                assertFalse(text, nodes.withText(text).isDisabled())
+                val row = generateSequence(nodes.withText(text)) { it.parent }.first { it.config.contains(SemanticsActions.OnClick) }
+                row.config[SemanticsActions.OnClick].action!!.invoke()
+                assertEquals(if (text == "תנאי שימוש") TERMS.url else PRIVACY.url,
+                    shadowOf(RuntimeEnvironment.getApplication()).nextStartedActivity.dataString)
             }
             val familyLabel = nodes.withText("המשפחה שלי")
             assertFalse(familyLabel.isDisabled())
@@ -301,7 +321,7 @@ class SettingsScreenTest {
                 it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("חזרה לדשבורד") == true
             }
             val back = generateSequence(backLabel) { it.parent }.first { it.config.contains(SemanticsActions.OnClick) }
-            assertTrue(back.boundsInRoot.left < 32f)
+            assertTrue(back.boundsInRoot.left > 280f)
             checkNotNull(back.config[SemanticsActions.OnClick].action).invoke()
             assertTrue(backed)
         }
@@ -317,16 +337,18 @@ class SettingsScreenTest {
         }
     }
 
-    @Test fun allSheetsOnlyExposeDismissAndDeletionIsDisabled() {
+    @Test fun sheetsExposeOnlyIntendedActionsAndDeletionRemainsDisabled() {
         for (sheet in SettingsSheet.entries) {
             var dismissed = false
             render({ SettingsSheetContent(sheet) { dismissed = true } }) { nodes ->
                 val clicks = nodes.activeClicks()
-                assertEquals(sheet.name, 1, clicks.size)
+                assertEquals(sheet.name, if (sheet == SettingsSheet.SUPPORT) 3 else 1, clicks.size)
                 if (sheet == SettingsSheet.DELETE_ACCOUNT) {
                     assertTrue(nodes.withText("המשך למחיקה").isDisabled())
                 }
-                checkNotNull(clicks.single().config[SemanticsActions.OnClick].action).invoke()
+                val close = generateSequence(nodes.withText(if (sheet == SettingsSheet.DELETE_ACCOUNT) "ביטול" else "סגור")) { it.parent }
+                    .first { it.config.contains(SemanticsActions.OnClick) }
+                checkNotNull(close.config[SemanticsActions.OnClick].action).invoke()
                 assertTrue(dismissed)
             }
         }

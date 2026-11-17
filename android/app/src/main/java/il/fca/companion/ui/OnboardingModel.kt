@@ -151,7 +151,7 @@ class OnboardingModel(private val gateway: OnboardingGateway, private val curren
                 else "הכתובת ארוכה מדי. ניתן להזין עד 200 תווים."; return@perform
         }
         if (step == totalSteps && (!validName(userName) || !consent)) {
-            error = if (!consent) "כדי להשלים את ההרשמה, יש לאשר את הצהרת הכשירות לשימוש ברכב."
+            error = if (!consent) LEGAL_CONSENT_REQUIRED
                 else "השם הפרטי יכול להכיל אותיות, רווחים, מקף או גרש, ללא ספרות."
             return@perform
         }

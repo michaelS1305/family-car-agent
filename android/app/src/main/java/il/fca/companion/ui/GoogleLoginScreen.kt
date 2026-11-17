@@ -134,3 +134,14 @@ internal fun loginLayout(measurer: TextMeasurer, density: Density, innerWidth: F
 }
 
 @Composable private fun LoginGap(height: Float) { Spacer(Modifier.height(height.dp)) }
+
+internal fun onboardingLegalText(ink: Color = Color(0xFF112642), open: (LegalCopy) -> Unit): AnnotatedString {
+    val styles = TextLinkStyles(SpanStyle(color = ink, textDecoration = TextDecoration.Underline, fontWeight = FontWeight.SemiBold))
+    return buildAnnotatedString {
+        append("קראתי ואני מסכים/ה ל")
+        withLink(LinkAnnotation.Clickable("terms", styles) { open(TERMS) }) { append("תנאי השימוש") }
+        append(", ואני מאשר/ת שקראתי את ")
+        withLink(LinkAnnotation.Clickable("privacy", styles) { open(PRIVACY) }) { append("מדיניות הפרטיות") }
+        append(" של Family Car Agent.")
+    }
+}

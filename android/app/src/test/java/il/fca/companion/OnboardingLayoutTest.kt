@@ -9,7 +9,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.sp
-import il.fca.companion.ui.DRIVING_CONSENT
+import il.fca.companion.ui.LEGAL_CONSENT
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,7 +46,7 @@ class OnboardingLayoutTest {
             base + title("קוד המשפחה") + (if (compact) 24 else 46) + field + 12 +
                 text("שימו לב, יש מספר ניסיונות מוגבל", 13, 19),
             base + title("איך קוראים לך?") + (if (compact) 16 else 24) + field + 10 +
-                maxOf(48, text(DRIVING_CONSENT, 11, 15, content - 8 - 48 - 4) + 8) + 8
+                maxOf(48, text(LEGAL_CONSENT, 11, 15, content - 8 - 48 - 4) + 8) + 8
         )
     }
 
