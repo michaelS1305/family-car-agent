@@ -91,10 +91,12 @@ actor TestBackend: BackendTransport {
     await model.next()
     AuthCheck.check(model.step == 3 && model.resolvedAddress == "address", "current address contract without fabricated coordinates")
     await model.next(); model.userName = "מיכאל"
+    AuthCheck.check(!model.consent, "legal acceptance starts unchecked")
     let beforeConsent = await backend.paths.count
     await model.next()
     let afterConsent = await backend.paths.count
     AuthCheck.check(beforeConsent == afterConsent && model.screen == .onboarding, "explicit consent required")
+    AuthCheck.check(model.error == OnboardingValidation.legalAcceptanceRequired, "legal acceptance error")
     model.consent = true
     await backend.reply("/api/onboarding/create-family", #"{"created":true}"#)
     await backend.fail("/api/me", .network)
@@ -221,7 +223,11 @@ actor TestBackend: BackendTransport {
     await model.backOnboarding(); await model.changeAddress()
     let afterLocked = await backend.paths.count
     AuthCheck.check(!model.canGoBack && model.step == 5 && lockedCount == afterLocked, "verified join cannot edit family or address")
+    AuthCheck.check(!model.consent, "join legal acceptance starts unchecked")
+    let beforeJoinConsent = await backend.paths.count
     model.userName = "דנה"; await model.next()
+    let afterJoinConsent = await backend.paths.count
+    AuthCheck.check(beforeJoinConsent == afterJoinConsent && model.error == OnboardingValidation.legalAcceptanceRequired, "join blocks submission before acceptance")
     AuthCheck.check(model.step == 5 && vault.value?.activated == false, "join cannot complete without consent")
     model.consent = true
     await backend.reply("/api/onboarding/join-family/complete", #"{"created":true}"#)

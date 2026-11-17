@@ -538,7 +538,7 @@ import Combine
             }
             if step == last {
                 guard OnboardingValidation.validName(userName) else { throw AuthFailure.rejected(400, "INVALID_USER_NAME") }
-                guard consent else { error = "כדי להשלים את ההרשמה, יש לאשר את הצהרת הכשירות לשימוש ברכב."; return }
+                guard consent else { error = OnboardingValidation.legalAcceptanceRequired; return }
             }
             if route == .create {
                 switch step {

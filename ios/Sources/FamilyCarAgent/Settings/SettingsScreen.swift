@@ -1,7 +1,7 @@
 import SwiftUI
 import UserNotifications
 
-/// Account, system permission indicators and shared logout; remaining actions stay unavailable.
+/// Account, system permission indicators and shared logout; public legal and support destinations.
 struct SettingsScreen: View {
     @ObservedObject var entry: EntryModel
     let back: () -> Void
@@ -14,6 +14,8 @@ struct SettingsScreen: View {
     @AppStorage(AppAppearance.storageKey) private var appearancePreference = AppAppearance.system.rawValue
     private var appearance: AppAppearance { AppAppearance(storedValue: appearancePreference) }
     @State private var notificationsEnabled = false
+    @State private var showSupport = false
+    @State private var publicLinkFailed = false
     @State private var settingsOpenFailed = false
     @State private var showDeleteAccount = false
     @State private var email: String?
@@ -90,15 +92,21 @@ struct SettingsScreen: View {
                         }.buttonStyle(.plain)
                     }
                     SettingsCard(title: "תנאי שימוש ופרטיות") {
-                        row("תנאי שימוש", icon: "about", chevron: true)
+                        Button { openPublic(.terms) } label: {
+                            row("תנאי שימוש", icon: "about", chevron: true).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
                         Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
-                        row("מדיניות פרטיות", icon: "privacy", chevron: true)
+                        Button { openPublic(.privacy) } label: {
+                            row("מדיניות פרטיות", icon: "privacy", chevron: true).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
                     }
                     SettingsCard(title: "אודות") {
                         row("גרסת האפליקציה", icon: "info",
                             value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
                         Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
-                        row("צור קשר לתמיכה", icon: "support", chevron: true)
+                        Button { showSupport = true } label: {
+                            row("צור קשר לתמיכה", icon: "support", chevron: true).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
                     }
                     Button(action: logout) {
                         destructive("התנתקות", icon: "logout")
@@ -120,6 +128,14 @@ struct SettingsScreen: View {
         } message: {
             Text("אפשר לפתוח את הגדרות iOS ולבחור באפליקציית FCA.")
         }
+        .confirmationDialog("תמיכה", isPresented: $showSupport, titleVisibility: .visible) {
+            Button("מרכז התמיכה") { openPublic(.support) }
+            Button("יצירת קשר") { openPublic(.contact) }
+            Button("ביטול", role: .cancel) { }
+        }
+        .alert("לא ניתן לפתוח את הקישור", isPresented: $publicLinkFailed) {
+            Button("הבנתי", role: .cancel) { }
+        } message: { Text("נסו שוב או פתחו את האתר בדפדפן.") }
         .allowsHitTesting(!showDeleteAccount)
         .accessibilityHidden(showDeleteAccount)
         .overlay {
@@ -141,6 +157,10 @@ struct SettingsScreen: View {
             guard !Task.isCancelled, entry.chatIdentity == identity else { return }
             email = value; emailIdentity = identity
         }
+    }
+
+    private func openPublic(_ destination: PublicWebsiteDestination) {
+        openURL(destination.url) { accepted in publicLinkFailed = !accepted }
     }
 
     private func icon(_ name: String) -> some View {

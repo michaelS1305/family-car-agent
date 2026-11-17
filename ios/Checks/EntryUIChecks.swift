@@ -31,7 +31,9 @@ import Foundation
             AuthCheck.check(model.screen == .intro && model.route == route, "login back returns to intro")
             model.selectRoute(route)
             if route == .existing { await backend.reply("/api/me", #"{"user_id":1,"family_id":2,"name":"Mock"}"#) }
+            model.consent = true
             await model.login(apple: apple, previewOnboarding: true)
+            AuthCheck.check(!model.consent, "new authenticated onboarding resets legal acceptance")
             let paths = await backend.paths
             if route == .existing {
                 AuthCheck.check(model.screen == .ready && paths == ["/api/me"] && vault.value?.activated == true,

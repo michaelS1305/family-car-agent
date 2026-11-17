@@ -5,7 +5,10 @@ import re
 root = Path(__file__).resolve().parents[1] / 'Sources/FamilyCarAgent'
 views = {str(p.relative_to(root)).replace('\\', '/'): p.read_text(encoding='utf-8')
          for p in root.rglob('*.swift') if re.search(r': (?:View|UIViewRepresentable|ViewModifier|ButtonStyle)\b', p.read_text(encoding='utf-8'))}
-assert len(views) == 20, 'Review newly added views for appearance coverage'
+assert len(views) == 21, 'Review newly added views for appearance coverage'
+# Public URL failures use a native alert, inheriting the root appearance.
+assert '.alert("לא ניתן לפתוח את הקישור"' in views['EntryLegalDocument.swift']
+assert '.preferredColorScheme' not in views['EntryLegalDocument.swift']
 for name, text in views.items():
     assert not re.search(r'Color\(\s*(?:red|white):', text), name
     assert not re.search(r'\.background\(\s*(?:Color\.)?white\b', text), name
@@ -69,7 +72,7 @@ assert '@StateObject private var model = EntryModel()' in views['ContentView.swi
 assert 'NavigationStack(path: $navigation.path)' in shell
 assert '.presentationDetents([peek, .large], selection: $detent)' in booking
 assert '.presentationDragIndicator(.visible)' in booking
-print('PASS: root-only appearance, shared preference and accessible selector; 20 adaptive view files, inherited sheets, unchanged navigation and branding')
+print('PASS: root-only appearance, shared preference and accessible selector; 21 adaptive view files, inherited sheets, unchanged navigation and branding')
 
 # Explicit monochrome control opt-in, never a global image recolor.
 assert 'var monochromeControl = false' in asset

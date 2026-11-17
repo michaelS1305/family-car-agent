@@ -14,15 +14,13 @@ for name, size in expected.items():
     actual = struct.unpack('>II', data[16:24])
     assert actual == size, (name, actual)
 
-# The local link targets are in-app document identifiers, not invented policy URLs.
+# Canonical pages replace obsolete bundled drafts; artwork checks remain unchanged.
 legal = (root / 'Sources/FamilyCarAgent/EntryLegalDocument.swift').read_text(encoding='utf-8')
-assert 'fca-entry-legal://privacy' in legal and 'fca-entry-legal://terms' in legal
+assert 'https://familycaragent.com/' in legal
+assert 'case terms, privacy, support, contact' in legal
+assert 'fca-entry-legal://' not in legal and 'var body: String' not in legal
 android = root.parent / 'android/app/src/main/java/il/fca/companion/ui/LegalCopy.kt'
 if android.exists():
-    source = android.read_text(encoding='utf-8')
-    copies = re.findall(r'LegalCopy\("[^"]+", """\n(.*?)\n"""', source, re.S)
-    swift = re.findall(r'return """\n(.*?)\n            """', legal, re.S)
-    assert copies == ['\n'.join(line[12:] for line in body.splitlines()) for body in swift]
     for name, original in [('login_logo.png', 'fca_logo.png'), ('google_sign_in.png', 'google_sign_in.png')]:
         assert (assets / name).read_bytes() == (root.parent / 'android/app/src/main/res/drawable-nodpi' / original).read_bytes()
 
@@ -41,4 +39,4 @@ if len(sys.argv) == 2:
         assert hashlib.sha256(matches[0].read_bytes()).digest() == hashlib.sha256((assets / name).read_bytes()).digest()
     assert not list(app.rglob('Assets.xcassets'))
     print('PASS: all three raw image resources packaged byte-for-byte; no xcassets catalog')
-print('PASS: entry image dimensions, resource declaration, local legal links and available source-copy checks')
+print('PASS: entry image dimensions, resource declaration, canonical legal links and unchanged image checks')

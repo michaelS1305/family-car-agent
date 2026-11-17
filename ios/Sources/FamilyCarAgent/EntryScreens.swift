@@ -144,7 +144,6 @@ struct LoginScreen: View {
     let enabled: Bool
     let back: () -> Void
     let login: (Bool) -> Void
-    @State private var legal: EntryLegalDocument?
     @Environment(\.dynamicTypeSize) private var dynamicType
     @Environment(\.colorScheme) private var colorScheme
     var body: some View {
@@ -179,10 +178,6 @@ struct LoginScreen: View {
                                 Text("פרטי ההתחברות נשמרים ומנוהלים על ידי Supabase Auth.")
                                 Text(EntryLegalDocument.linkedNotice)
                                     .tint(FCAColors.color(.entryHeading))
-                                    .environment(\.openURL, OpenURLAction { url in
-                                        guard let document = EntryLegalDocument(link: url) else { return .discarded }
-                                        legal = document; return .handled
-                                    })
                             }
                             .font(dynamicType.isAccessibilitySize ? .footnote : .system(size: 11.5))
                             .foregroundStyle(FCAColors.color(.entryFootnote))
@@ -197,15 +192,7 @@ struct LoginScreen: View {
             }.padding(.top, 8).frame(width: width).frame(maxWidth: .infinity)
         }
         .multilineTextAlignment(.center)
-        .sheet(item: $legal) { document in
-            NavigationStack {
-                ScrollView { Text(document.body).frame(maxWidth: .infinity, alignment: .leading).padding(20) }
-                    .background(colorScheme == .dark ? FCAColors.color(.background) : nil)
-                    .foregroundStyle(colorScheme == .dark ? FCAColors.color(.text) : .primary)
-                    .navigationTitle(document.title).navigationBarTitleDisplayMode(.inline)
-                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("סגור") { legal = nil } } }
-            }.environment(\.layoutDirection, .rightToLeft)
-        }
+        .publicWebsiteLinks()
     }
 }
 

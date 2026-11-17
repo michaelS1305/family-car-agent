@@ -1,6 +1,8 @@
 import Foundation
 
 enum OnboardingValidation {
+    static let legalAcceptance = "קראתי ואני מסכים/ה לתנאי השימוש, ואני מאשר/ת שקראתי את מדיניות הפרטיות של Family Car Agent."
+    static let legalAcceptanceRequired = "כדי להשלים את ההרשמה, יש להסכים לתנאי השימוש ולאשר שקראת את מדיניות הפרטיות."
     static func validName(_ value: String) -> Bool {
         guard value.unicodeScalars.count <= 100 else { return false }
         var normalized = value.precomposedStringWithCanonicalMapping.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")

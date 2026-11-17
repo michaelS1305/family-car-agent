@@ -41,7 +41,6 @@ private struct OnboardingAction: View {
 
 struct OnboardingStepsScreen: View {
     @ObservedObject var model: EntryModel
-    private let consentText = "אני עומד/ת בדרישות החוק החלות על נהג פעיל ברכב זה. בישראל, ההנחה למוצר היא גיל מינימלי של 16 שנים ו־9 חודשים לרישיון B. אם אני קטין/ה, השימוש הוא באחריות ובאישור הורה או אפוטרופוס. ידוע לי שהאפליקציה אינה בודקת תוקף רישיון או כשירות חוקית לנהיגה."
     private var title: String {
         switch model.displayStep {
         case 2: "מה כתובת הבית?"
@@ -91,6 +90,7 @@ struct OnboardingStepsScreen: View {
                 .frame(maxWidth: .infinity)
             }.scrollDismissesKeyboard(.interactively)
         }.foregroundStyle(onboardingInk).environment(\.layoutDirection, .rightToLeft)
+            .publicWebsiteLinks()
     }
     @ViewBuilder private func stepContent(compact: Bool) -> some View {
         switch model.displayStep {
@@ -118,15 +118,17 @@ struct OnboardingStepsScreen: View {
         default:
             VStack(spacing: 10) {
                 OnboardingField(title: "השם שלך", hint: "הקלד את שמך", text: $model.userName)
-                Button { model.consent.toggle() } label: {
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: model.consent ? "checkmark.square.fill" : "square").font(.system(size: 22))
-                        Text(consentText).font(.system(size: 11)).foregroundStyle(onboardingSecondary)
-                            .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(onboardingOutline))
-                }.buttonStyle(.plain).accessibilityLabel(consentText)
-                    .accessibilityValue(model.consent ? "מאושר" : "לא מאושר")
+                HStack(alignment: .top, spacing: 8) {
+                    Button { model.consent.toggle() } label: {
+                        Image(systemName: model.consent ? "checkmark.square.fill" : "square")
+                            .font(.system(size: 22)).frame(minWidth: 44, minHeight: 44)
+                    }.buttonStyle(.plain).accessibilityLabel(OnboardingValidation.legalAcceptance)
+                        .accessibilityValue(model.consent ? "מאושר" : "לא מאושר")
+                    Text(EntryLegalDocument.linkedAcceptance).font(.system(size: 11))
+                        .foregroundStyle(onboardingSecondary).tint(onboardingInk)
+                        .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(onboardingOutline))
             }
         }
     }
