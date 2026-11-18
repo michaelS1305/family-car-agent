@@ -4,6 +4,7 @@ All HTTP happens after the durable attempt transaction. Only fixed diagnostics
 and an unrelated random job reference leave this module via logging.
 """
 from contextlib import contextmanager
+import os
 from dataclasses import dataclass, field
 import logging
 import time
@@ -93,8 +94,18 @@ def _credential(conn, owner):
         WHERE c.auth_user_id=%s''', (owner,)).fetchone()
 
 
+def expected_identity():
+    # This check needs no private key so non-Apple deletion remains available.
+    return {
+        'https://jouhqvbxhsvkluwkqmdg.supabase.co': ('dev', 'com.familycaragent.app.dev'),
+        'https://xrgijytfigcuxmdktvmd.supabase.co': ('prod', 'com.familycaragent.app'),
+    }.get(os.environ.get('SUPABASE_URL', '').rstrip('/'))
+
+
 def _valid_credential(row, owner):
-    return bool(row and row[0] == 'dev' and row[1] == 'com.familycaragent.app.dev'
+    return bool(row and (row[0], row[1]) in {('dev', 'com.familycaragent.app.dev'),
+                                                ('prod', 'com.familycaragent.app')}
+                and row[:2] == expected_identity()
                 and isinstance(row[2], str) and row[2] and row[3] > 0
                 and str(row[6]) == str(owner) and row[7] == 'stored')
 

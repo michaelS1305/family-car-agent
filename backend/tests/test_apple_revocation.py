@@ -3,6 +3,7 @@
 No migration is executed and no real Apple or Supabase request is made.
 """
 from contextlib import contextmanager
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -79,6 +80,7 @@ class ProviderTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get('GEMINI_TEST_DATABASE_URL'), 'Local PostgreSQL not configured')
 class WorkflowTests(unittest.TestCase):
+    production = False
     def setUp(self):
         self.fixture = AccountDeletionPostgresTests(methodName='runTest')
         self.addCleanup(self.fixture.doCleanups)
@@ -96,6 +98,11 @@ class WorkflowTests(unittest.TestCase):
         self.query(function)
         self.owner = self.fixture.creator[0]
         self.config = configuration()
+        if self.production:
+            self.config = replace(self.config, environment='prod', client='com.familycaragent.app', team='GT43M39TLK')
+        environment_patch = patch.dict(os.environ, {'SUPABASE_URL':'https://xrgijytfigcuxmdktvmd.supabase.co' if self.production else 'https://jouhqvbxhsvkluwkqmdg.supabase.co'})
+        environment_patch.start()
+        self.addCleanup(environment_patch.stop)
         self.subject = 'synthetic-apple-sub'
         self.query("INSERT INTO auth_identities VALUES(%s,'apple',%s,%s)",
                    (self.owner, self.subject, json.dumps({'sub': self.subject})))
@@ -512,3 +519,7 @@ class WorkflowTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ProductionWorkflowTests(WorkflowTests):
+    production = True

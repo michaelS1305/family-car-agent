@@ -146,7 +146,7 @@ class CaptureTests(unittest.TestCase):
                                         (self.store.value,self.owner,self.store.subject,2)):
             with self.assertRaises(CaptureUnavailable):
                 self.config.open(data,'v1',owner,sub,version)
-        rotated = Config(self.config.team,self.config.kid,self.config.client,'dev',self.config.private_key,
+        rotated = Config(self.config.team,self.config.kid,self.config.client,self.config.environment,self.config.private_key,
                          'v2',dict(self.config.keys,v2=os.urandom(32)))
         self.assertEqual(rotated.open(self.store.value,'v1',self.owner,self.store.subject,1),'synthetic-refresh')
 

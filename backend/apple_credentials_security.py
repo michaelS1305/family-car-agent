@@ -31,12 +31,14 @@ class Config:
         try:
             env = os.environ['APPLE_CREDENTIAL_ENVIRONMENT']
             client = os.environ['APPLE_NATIVE_CLIENT_ID']
-            # Stage 1 is explicitly Development-only. No implicit production fallback.
-            if (env != 'dev' or client != 'com.familycaragent.app.dev'
-                    or os.environ.get('SUPABASE_URL', '').rstrip('/') !=
-                    'https://jouhqvbxhsvkluwkqmdg.supabase.co'):
+            expected = {'dev': ('com.familycaragent.app.dev', 'https://jouhqvbxhsvkluwkqmdg.supabase.co'),
+                        'prod': ('com.familycaragent.app', 'https://xrgijytfigcuxmdktvmd.supabase.co')}.get(env)
+            if (expected is None or client != expected[0]
+                    or os.environ.get('SUPABASE_URL', '').rstrip('/') != expected[1]):
                 raise ValueError()
             team, kid = os.environ['APPLE_TEAM_ID'], os.environ['APPLE_KEY_ID']
+            if env == 'prod' and team != 'GT43M39TLK':
+                raise ValueError()
             if not all(re.fullmatch(r'[A-Z0-9]{10}', v) for v in (team, kid)):
                 raise ValueError()
             private = serialization.load_pem_private_key(base64.b64decode(
@@ -52,7 +54,8 @@ class Config:
             active = os.environ['APPLE_CREDENTIAL_ACTIVE_KEY_ID']
             if active not in keys or len(set(keys.values())) != len(keys):
                 raise ValueError()
-            for name in ('NATIVE_PUSH_ENCRYPTION_KEY', 'NATIVE_PUSH_FINGERPRINT_KEY'):
+            for name in ('NATIVE_PUSH_ENCRYPTION_KEY', 'NATIVE_PUSH_FINGERPRINT_KEY',
+                         'NATIVE_PUSH_IOS_PROD_ENCRYPTION_KEY', 'NATIVE_PUSH_IOS_PROD_FINGERPRINT_KEY'):
                 if os.environ.get(name) and base64.b64decode(os.environ[name], validate=True) in keys.values():
                     raise ValueError()
             return cls(team, kid, client, env, private, active, keys)
