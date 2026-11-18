@@ -57,7 +57,7 @@ class MetadataPoCTests(unittest.TestCase):
             self.assertTrue(any(o.get("productName") == "FirebaseMessaging" for o in objects))
             self.assertTrue(any(o.get("requirement", {}).get("version") == "12.19.3" for o in objects))
             paths = [o.get("path", "") for o in objects]
-            self.assertIn(str(Path(temp) / "GoogleService-Info.plist"), paths)
+            self.assertIn(str((Path(temp) / "GoogleService-Info.plist").resolve()), paths)
             self.assertTrue(
                 {str(p) for p in (ios / "Sources/FamilyCarAgent").rglob("*.swift")}
                 .issubset(set(paths))
