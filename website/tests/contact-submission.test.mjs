@@ -34,7 +34,10 @@ test('multipart exact fields, original attachment, no cookies or manual boundary
   assert.equal(await options.body.get('attachments').text(),'synthetic')
   return response(200,'accepted')
  })
- assert.equal(calls,1);assert.equal(result.kind,'accepted');assert.match(result.message,/אין בכך אישור/)
+ assert.equal(calls,1);assert.equal(result.kind,'accepted')
+ assert.equal(result.title,'הפנייה נשלחה בהצלחה!')
+ assert.equal(result.message,'תודה שפנית אלינו. קיבלנו את פנייתך ונחזור אליך בהקדם האפשרי לכתובת הדוא״ל שציינת.')
+ assert.doesNotMatch(result.message,/מספר פנייה|אין בכך אישור/)
 })
 test('status mapping never treats a generic 200 or lost response as acceptance',async()=>{
  for(const [status,code,kind] of [[200,'accepted','accepted'],[200,'other','uncertain'],[422,'invalid_fields','invalid'],[413,'attachment_too_large','invalid'],[415,'unsupported_attachment','invalid'],[422,'verification_failed','verification'],[503,'verification_unavailable','unavailable'],[503,'smtp_unavailable','unavailable'],[503,'service_unavailable','unavailable'],[503,'delivery_uncertain','uncertain'],[502,'unknown','uncertain']]) {
@@ -107,4 +110,5 @@ test('contact retains responsive RTL/accessibility and only confirmed acceptance
  assert.match(source,/disabled=\{busy \|\| !configured \|\| !token \|\| retryUntil>now\}/)
  assert.match(css,/@media\(max-width:680px\)/);assert.match(css,/min-width:0/)
  assert.doesNotMatch(source,/CONTACT_SMTP|TURNSTILE_SECRET/)
+ assert.match(source,/result\.kind==='accepted'\s*\? <><strong>\{result\.title\}<\/strong><br\/>\{result\.message\}<\/>\s*:/)
 })
