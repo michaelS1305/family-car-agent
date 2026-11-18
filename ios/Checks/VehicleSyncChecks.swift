@@ -225,13 +225,16 @@ private actor SyncSessionExchange: AuthTransport {
         await actual.wake()
         precondition(sharedFixture.transport.created.count == 1) // Durable revocation also blocks the older live SessionManager.
         print("PASS: confirmed binding removal cancels scheduling without sequence loss; reauthorization and offline picker restoration")
-        let paths = FileManager.default.enumerator(at: sharedFixture.root, includingPropertiesForKeys: [.isRegularFileKey])!
-        for case let file as URL in paths where try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
-            let bytes = try Data(contentsOf: file)
-            for marker in ["second-sentinel", "secret-sentinel", "Bearer new"] {
-                precondition(bytes.range(of: Data(marker.utf8)) == nil)
+        func checkStoredFiles(at root: URL) throws {
+            let paths = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])!
+            for case let file as URL in paths where try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
+                let bytes = try Data(contentsOf: file)
+                for marker in ["second-sentinel", "secret-sentinel", "Bearer new"] {
+                    precondition(bytes.range(of: Data(marker.utf8)) == nil)
+                }
             }
         }
+        try checkStoredFiles(at: sharedFixture.root)
         try sessions.clear()
         precondition(!provider.isCurrent(grant) && provider.shortcutVehicles(ctx).isEmpty)
         vault.saved = AuthSession(owner: UUID(), accessToken: "another", refreshToken: "third-sentinel", expires: .distantFuture, activated: true)
