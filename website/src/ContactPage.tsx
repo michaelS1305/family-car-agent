@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { FormEvent, ReactNode } from 'react'
 import { Envelope, SupportIcon } from './SupportPage'
 import { addAttachments, attachmentAccept, contactSubjects, removeAttachment, submissionUnavailable, validateContact } from './contactForm'
 import type { ContactDraft, ContactErrors } from './contactForm'
@@ -12,7 +12,7 @@ export default function ContactPage() {
  const [files,setFiles]=useState<File[]>([])
  const [errors,setErrors]=useState<ContactErrors>({})
  const [fileError,setFileError]=useState('')
- const [notice,setNotice]=useState('')
+ const [notice,setNotice]=useState<ReactNode>('')
  const [token,setToken]=useState('')
  const [busy,setBusy]=useState(false)
  const [resetVersion,setResetVersion]=useState(0)
@@ -45,7 +45,9 @@ export default function ContactPage() {
     ()=>{setToken('');setResetVersion(value=>value+1)},
     ()=>{setDraft({name:'',email:'',subject:'',description:''});setFiles([]);setFileError('')})
    if(result) {
-    setNotice(result.message+(result.requestId?` מספר פנייה לבדיקה: ${result.requestId}`:''))
+    setNotice(result.kind==='accepted'
+     ? <><strong>{result.title}</strong><br/>{result.message}</>
+     : result.message+(result.requestId?` מספר פנייה לבדיקה: ${result.requestId}`:''))
     setRetryUntil(result.retryUntil??0);setNow(Date.now())
    }
   } finally {setBusy(false)}

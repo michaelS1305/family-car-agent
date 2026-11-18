@@ -1,7 +1,7 @@
 import { addAttachments, validateContact } from './contactForm'
 import type { ContactDraft } from './contactForm'
 
-export type ContactResult = { kind: 'accepted'|'invalid'|'limited'|'unavailable'|'uncertain'|'verification'; message: string; retryUntil?: number; requestId?: string }
+export type ContactResult = { kind: 'accepted'|'invalid'|'limited'|'unavailable'|'uncertain'|'verification'; message: string; title?: string; retryUntil?: number; requestId?: string }
 const uncertain: ContactResult = {kind:'uncertain',message:'לא ניתן לאשר את מצב השליחה. ייתכן שהפנייה נשלחה. הפרטים נשמרו; אין צורך לשלוח שוב אוטומטית. ניתן לברר בדוא״ל התמיכה.'}
 export function contactEndpoint(base: string): string | null {
  try {
@@ -30,7 +30,7 @@ export async function sendContact(endpoint: string, draft: ContactDraft, files: 
   const data=payload && typeof payload==='object'?payload as Record<string,unknown>:{}
   const requestId=typeof data.request_id==='string' && /^[a-f0-9]{32}$/.test(data.request_id)?data.request_id:undefined
   let result: ContactResult
-  if(response.status===200 && data.code==='accepted') result={kind:'accepted',message:'הפנייה התקבלה לשליחה בדוא״ל. אין בכך אישור שהגיעה לתיבת התמיכה.'}
+  if(response.status===200 && data.code==='accepted') result={kind:'accepted',title:'הפנייה נשלחה בהצלחה!',message:'תודה שפנית אלינו. קיבלנו את פנייתך ונחזור אליך בהקדם האפשרי לכתובת הדוא״ל שציינת.'}
   else if(data.code==='delivery_uncertain') result=uncertain
   else if(response.status===429) result={kind:'limited',message:'בוצעו יותר מדי ניסיונות. יש להמתין לפני ניסיון נוסף.',retryUntil:retryDeadline(response.headers.get('Retry-After'))}
   else if(data.code==='verification_failed') result={kind:'verification',message:'האימות לא הושלם. יש לבצע אימות חדש לפני השליחה.'}
