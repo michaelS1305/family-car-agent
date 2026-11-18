@@ -58,6 +58,10 @@ class Connection:
             return Cursor((42,))
         if 'FROM families' in sql:
             return Cursor((42,))
+        if 'SELECT u.member_public_id, v.category' in sql:
+            if params[1:] != (7, 42):
+                raise AssertionError('Unexpected response owner/family')
+            return Cursor((REF, None))
         if 'FROM vehicles' in sql:
             return Cursor()
         if 'SELECT r.id FROM reservations r' in sql:

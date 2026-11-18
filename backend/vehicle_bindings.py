@@ -10,16 +10,16 @@ def unavailable():
     raise VehicleIdentityError('DEVICE_OR_VEHICLE_UNAVAILABLE', 'Device or vehicle unavailable')
 
 
-def _android(conn, user, ref):
+def _native(conn, user, ref):
     device = lifecycle._device(conn, user, ref)
-    if device[2] != 'android':
+    if device[2] not in ('android', 'ios'):
         unavailable()
     return device
 
 
 def bindings(conn, user, device_ref, vehicle_ref=None, *, remove=False):
     with _bounded_connection(conn) as conn, lifecycle._scope(conn, user):
-        device = _android(conn, user, device_ref)
+        device = _native(conn, user, device_ref)
         if vehicle_ref is None:
             rows = conn.execute(
                 'SELECT v.vehicle_ref,v.display_name,v.retired_at FROM registered_device_vehicle_bindings b '
@@ -42,7 +42,7 @@ def admit_take(conn, user, event):
     if event.event_type != 'take':
         unavailable()
     with _bounded_connection(conn) as conn, lifecycle._scope(conn, user):
-        device = _android(conn, user, event.device_ref)
+        device = _native(conn, user, event.device_ref)
         vehicle = lifecycle._vehicle(conn, user, event.vehicle_ref)
         if device[3] is not None:
             unavailable()
@@ -69,7 +69,7 @@ def _home(conn, user):
 def return_home(conn, user, device_ref):
     # Necessary for offline prequalification, never a server authorization token.
     with _bounded_connection(conn) as conn, lifecycle._scope(conn, user):
-        if _android(conn, user, device_ref)[3] is not None:
+        if _native(conn, user, device_ref)[3] is not None:
             unavailable()
         latitude, longitude = _home(conn, user)
         return {'latitude': latitude, 'longitude': longitude}
@@ -79,7 +79,7 @@ def admit_return(conn, user, event, evidence):
     if event.event_type != 'return':
         unavailable()
     with _bounded_connection(conn) as conn, lifecycle._scope(conn, user):
-        device = _android(conn, user, event.device_ref)
+        device = _native(conn, user, event.device_ref)
         vehicle = lifecycle._vehicle(conn, user, event.vehicle_ref)
         if device[3] is not None:
             unavailable()

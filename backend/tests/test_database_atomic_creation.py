@@ -532,6 +532,25 @@ class AtomicPwaJoinTests(unittest.TestCase):
         cursor.fetchone.return_value = row
         return cursor
 
+    def test_join_cannot_complete_before_family_code_verified(self):
+        for step in ("address_confirmed", "family_code"):
+            with self.subTest(step=step), patch.object(database, "_lock_pwa_join_session", return_value={"step": step, "family_id": 7}):
+                self.connection.execute.return_value = self.cursor(None)
+                with self.assertRaises(database.InvalidJoinStepError):
+                    database.complete_pwa_join("synthetic-user", "name")
+                self.assertFalse(any("INSERT INTO users" in call.args[0] for call in self.connection.execute.call_args_list))
+
+    def test_join_wrong_code_does_not_advance(self):
+        active = {"step": "family_code", "family_id": 7}
+        with patch.object(database, "_lock_pwa_join_session", return_value=active), patch.object(database, "_increment_join_failure_locked", return_value={"success": False}) as failure:
+            self.connection.execute.return_value = self.cursor(None)
+            result = database.verify_pwa_join_family_code("synthetic-user", "wrong1")
+            self.assertFalse(result["success"])
+            failure.assert_called_once_with(self.connection, active, "family_code")
+            sql, params = self.connection.execute.call_args.args
+            self.assertIn("family_code = %s", sql)
+            self.assertEqual(params, (7, "wrong1"))
+
     def test_complete_join_inserts_user_and_deletes_session_in_one_transaction(self):
         self.connection.execute.side_effect = [
             self.cursor(),

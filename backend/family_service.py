@@ -16,7 +16,7 @@ from database import (
 from geocoding_service import geocode_address
 from geocoding_capacity import GeocodingAdmissionError, geocode_with_capacity
 from identity import CurrentUser
-from onboarding_rules import parse_home_address
+from onboarding_rules import prepare_address_proposal
 
 
 class FamilyProfileError(Exception):
@@ -151,21 +151,20 @@ def resolve_family_address_for_current_user(current_user: CurrentUser, home_addr
         raise FamilyProfileError(
             "ADDRESS_TOO_LONG", "הכתובת ארוכה מדי. ניתן להזין עד 200 תווים.", 400
         )
-    parsed = parse_home_address(home_address)
+    parsed = prepare_address_proposal(home_address)
     if not parsed:
         raise FamilyProfileError(
             "INVALID_ADDRESS_FORMAT",
-            "יש לכתוב כתובת בפורמט: עיר, רחוב, מספר בית.",
+            "יש להזין עיר, רחוב ומספר בית ברור. אם יש כמה מספרים, יש להבהיר את הכתובת.",
             400,
         )
 
-    city, street, house_number = parsed
-    normalized_address = f"{city}, {street}, {house_number}"
+    normalized_address, house_number = parsed
     try:
         location = geocode_with_capacity(
             current_user.auth_user_id,
             geocode_address,
-            city=city, street=street, house_number=house_number,
+            house_number=house_number, address_query=normalized_address,
         )
     except GeocodingAdmissionError as exc:
         messages = {
@@ -217,6 +216,8 @@ def resolve_family_address_for_current_user(current_user: CurrentUser, home_addr
         "normalized_address": normalized_address,
         "display_address": location["address"],
         "resolution_token": token,
+        "latitude": location["latitude"],
+        "longitude": location["longitude"],
     }
 
 

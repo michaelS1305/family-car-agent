@@ -44,6 +44,7 @@ class ReservationCenterDatabaseTests(unittest.TestCase):
         self.assertNotIn("r.id,", sql)
         self.assertNotIn("r.user_id,", sql)
         self.assertEqual(parameters, (17, 42, "2026-09-06T12:00:00"))
+        self.assertEqual(sql.split('ORDER BY', 1)[1].strip(), 'r.start_time::timestamp ASC')
 
     def test_mine_filter_adds_caller_owner_scope(self):
         self.connection.execute.return_value = self.cursor()
@@ -98,6 +99,7 @@ class ReservationCenterDatabaseTests(unittest.TestCase):
             self.cursor(rows=[]),
             self.cursor(None),
             self.cursor((501,)),
+            self.cursor(('00000000-0000-0000-0000-000000000003', None)),
         ]
         result = database.create_current_user_reservation(
             17, 42, "2026-09-08T10:00:00", "2026-09-08T11:00:00"
@@ -108,6 +110,64 @@ class ReservationCenterDatabaseTests(unittest.TestCase):
         self.assertIn("SELECT family_id", self.connection.execute.call_args_list[3].args[0])
         self.assertIn("FROM reservations r", self.connection.execute.call_args_list[8].args[0])
         self.assertIn("INSERT INTO reservations", self.connection.execute.call_args_list[9].args[0])
+
+    def test_bounded_query_uses_half_open_timestamps_and_deterministic_order(self):
+        self.connection.execute.side_effect = [self.cursor((8,)), self.cursor((17,)), self.cursor()]
+        database.list_family_reservations(42, 17, 'future', 'all', 'unused',
+            range_start='2026-09-01T00:00:00', range_end='2026-09-02T00:00:00',
+            vehicle_ref='vehicle', member_ref='member')
+        vehicle_sql, vehicle_args = self.connection.execute.call_args_list[0].args
+        member_sql, member_args = self.connection.execute.call_args_list[1].args
+        sql, args = self.connection.execute.call_args.args
+        self.assertIn('family_id=%s AND vehicle_ref=%s', vehicle_sql)
+        self.assertNotIn('retired_at', vehicle_sql)
+        self.assertEqual(vehicle_args, (42, 'vehicle'))
+        self.assertIn('family_id=%s AND member_public_id=%s', member_sql)
+        self.assertEqual(member_args, (42, 'member'))
+        self.assertIn('r.start_time::timestamp < %s::timestamp AND r.end_time::timestamp > %s::timestamp', sql)
+        self.assertIn('WHERE u.family_id = %s', sql)
+        self.assertIn('AND r.vehicle_id=%s AND v.family_id=%s AND r.user_id=%s', sql)
+        self.assertIn('ORDER BY r.start_time::timestamp ASC, r.reservation_ref ASC', sql)
+        self.assertNotIn('LIMIT', sql)
+        self.assertNotIn('timestamptz', sql)
+        self.assertEqual(args, (17, 42, '2026-09-02T00:00:00', '2026-09-01T00:00:00', 8, 42, 17))
+
+    def test_unavailable_filters_stop_before_data_query(self):
+        for field in ('vehicle_ref', 'member_ref'):
+            self.connection.execute.reset_mock()
+            self.connection.execute.return_value = self.cursor()
+            result = database.list_family_reservations(42, 17, 'future', 'all', 'unused',
+                range_start='2026-09-01', range_end='2026-09-02', **{field: 'unavailable'})
+            self.assertIsNone(result)
+            self.assertEqual(self.connection.execute.call_count, 1)
+
+    def test_cast_failure_propagates_not_empty_success(self):
+        self.connection.execute.side_effect = ValueError('simulated invalid legacy timestamp')
+        with self.assertRaises(ValueError):
+            database.list_family_reservations(42, 17, 'future', 'all', '',
+                range_start='2026-09-01', range_end='2026-09-02')
+
+    def test_bounded_mine_retains_owner_and_family_predicates(self):
+        self.connection.execute.return_value = self.cursor()
+        database.list_family_reservations(42, 17, 'future', 'mine', 'unused',
+            range_start='2026-09-01', range_end='2026-09-02')
+        sql, args = self.connection.execute.call_args.args
+        self.assertIn('WHERE u.family_id = %s', sql)
+        self.assertIn('AND r.user_id = %s', sql)
+        self.assertEqual(args, (17, 42, '2026-09-02', '2026-09-01', 17))
+
+    def test_enrichment_is_scoped_and_nullable(self):
+        for category in (None, 'sedan'):
+            self.connection.execute.return_value = self.cursor(('public-member', category))
+            result = database._enrich_reservation_response(self.connection,
+                {'success': True, 'reservation_ref': 'public-reservation'}, 17, 42)
+            self.assertEqual(result['member_ref'], 'public-member')
+            self.assertEqual(result['vehicle_category'], category)
+            sql, args = self.connection.execute.call_args.args
+            self.assertIn('LEFT JOIN vehicles', sql)
+            self.assertNotIn('retired_at', sql)
+            self.assertIn('r.user_id=%s AND u.family_id=%s', sql)
+            self.assertEqual(args, ('public-reservation', 17, 42))
 
 
 if __name__ == "__main__":

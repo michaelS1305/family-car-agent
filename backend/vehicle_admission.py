@@ -444,6 +444,8 @@ def _admit(conn, current_user, event, *, shortcut=False):
                                      (event.device_sequence, device_id))
                     transition = next((effect.outcome for effect in projection.effects
                                        if effect.event_id == event.event_id), None) if projection else None
+                    from native_push_outbox import produce
+                    produce(conn, event.event_id, fast=fast, transition=transition)
                     return AdmissionResult('accepted', 'accepted', transition)
             except PolicyExceeded:
                 outcome = 'reconciliation_policy_exceeded'

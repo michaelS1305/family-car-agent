@@ -98,6 +98,8 @@ class PushSubscriptionRemoveRequest(BaseModel):
 
 
 class ActiveCarUsageResponse(BaseModel):
+    session_ref: UUID
+    member_ref: UUID
     name: str
     started_at: str
     vehicle_name: str
@@ -111,6 +113,8 @@ class CompletedCarUsageResponse(ActiveCarUsageResponse):
 
 
 class CarHistoryResponse(BaseModel):
+    has_more: bool
+    next_cursor: UUID | None
     active_usage: ActiveCarUsageResponse | None
     active_usages: list[ActiveCarUsageResponse]
     recent_usage: list[CompletedCarUsageResponse]
@@ -152,6 +156,8 @@ class FamilyAddressResolveRequest(BaseModel):
 
 
 class FamilyAddressResolveResponse(BaseModel):
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
     normalized_address: str
     display_address: str
     resolution_token: str
@@ -175,6 +181,8 @@ class ReservationResponse(BaseModel):
     reservation_ref: UUID | None = None
     vehicle_ref: UUID | None = None
     vehicle_display_name: str | None = None
+    member_ref: UUID
+    vehicle_category: Literal['hatchback', 'sedan', 'crossover', 'minivan', 'suv'] | None = None
 
 
 class ReservationIntervalRequest(BaseModel):

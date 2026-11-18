@@ -25,6 +25,31 @@ def parse_home_address(text):
     return city, street, house_number
 
 
+def prepare_address_proposal(text):
+    """Preserve free text; never guess boundaries of multiword city/street names.
+
+    Multiple numeric groups need clarification (e.g. numeric street names).
+    The provider must return this exact house-number token in a complete result.
+    """
+    if not isinstance(text, str) or not text.strip() or len(text) > 200:
+        return None
+    normalized = " ".join(text.strip().split())
+    number_pattern = r"[0-9]+(?:[א-תA-Za-z]|[/\-][0-9]+)?"
+    legacy = parse_home_address(normalized)
+    if legacy and re.fullmatch(number_pattern, legacy[2]):
+        if all(any(c.isalpha() for c in part) for part in legacy[:2]):
+            return ", ".join(legacy), legacy[2]
+    matches = list(re.finditer(r"(?<!\w)" + number_pattern + r"(?!\w)", normalized))
+    if len(matches) != 1 or not any(c.isalpha() for c in normalized):
+        return None
+    match = matches[0]
+    # Reject other digits even if attached to words; never silently ignore them.
+    if any(c.isdigit() for c in normalized[:match.start()] + normalized[match.end():]):
+        return None
+    return normalized, match.group()
+
+
+
 def is_valid_family_code(family_code):
     return (
         isinstance(family_code, str)

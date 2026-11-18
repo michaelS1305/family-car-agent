@@ -16,13 +16,13 @@ from geocoding_capacity import GeocodingAdmissionError, geocode_with_capacity
 from onboarding_rules import (
     HUMAN_NAME_MAX_LENGTH,
     normalize_human_name,
-    parse_home_address,
+    prepare_address_proposal,
 )
 
 
 ERROR_MESSAGES = {
     "INVALID_FAMILY_NAME": "שם המשפחה יכול להכיל אותיות, רווחים, מקף או גרש, ללא ספרות.",
-    "INVALID_ADDRESS_FORMAT": "יש לכתוב כתובת בפורמט: עיר, רחוב, מספר בית.",
+    "INVALID_ADDRESS_FORMAT": "יש להזין עיר, רחוב ומספר בית ברור. אם יש כמה מספרים, יש להבהיר את הכתובת.",
     "ADDRESS_TOO_LONG": "הכתובת ארוכה מדי. ניתן להזין עד 200 תווים.",
     "ADDRESS_NOT_FOUND": "לא הצלחנו למצוא את הכתובת. בדקו את הפרטים ונסו שוב.",
     "ADDRESS_RESOLUTION_EXPIRED": "תוקף אימות הכתובת פג. יש לבדוק ולאשר אותה מחדש.",
@@ -75,18 +75,17 @@ def _ensure_auth_user_is_unmapped(auth_user_id):
 def _resolve_address(auth_user_id, home_address):
     if len(home_address) > 200:
         raise FamilyCreationError("ADDRESS_TOO_LONG", 400)
-    parsed_address = parse_home_address(home_address)
+    parsed_address = prepare_address_proposal(home_address)
     if not parsed_address:
         raise FamilyCreationError("INVALID_ADDRESS_FORMAT", 400)
 
-    city, street, house_number = parsed_address
-    normalized_address = f"{city}, {street}, {house_number}"
+    normalized_address, house_number = parsed_address
 
     try:
         location = geocode_with_capacity(
             auth_user_id,
             geocode_address,
-            city=city, street=street, house_number=house_number,
+            house_number=house_number, address_query=normalized_address,
         )
     except GeocodingAdmissionError as exc:
         raise FamilyCreationError(

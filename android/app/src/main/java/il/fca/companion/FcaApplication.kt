@@ -8,6 +8,7 @@ import il.fca.companion.net.FcaApi
 import java.util.concurrent.Executors
 
 class FcaApplication : Application() {
+    val push by lazy { il.fca.companion.push.NativePush(this) }
     val store by lazy { LocalStore(this) }
     val auth by lazy { SessionStore(this) }
     val api by lazy { FcaApi(auth) }

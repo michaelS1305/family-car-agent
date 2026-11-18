@@ -1,0 +1,58 @@
+.contact-page { overflow:hidden; }
+.contact-hero { position:relative; min-height:285px; display:flex; align-items:center; justify-content:space-between; background:linear-gradient(110deg,#fffdf9,#edf8ff); overflow:hidden; }
+.contact-hero-copy { width:52%; text-align:center; align-self:flex-start; padding:38px 28px 55px; z-index:2; }
+.contact-title-row { display:flex; align-items:center; justify-content:center; gap:24px; }
+.contact-title-row h1 { font-size:58px; }
+.contact-title-row>span { display:flex; padding:22px; border-radius:45%; background:#d2edff; }
+.contact-title-row svg { width:48px; height:48px; }
+.contact-hero-copy p { font-size:25px; margin-top:14px; }
+.contact-hero .support-envelope { width:36%; max-width:430px; margin:25px 45px 0 0; z-index:1; }
+.contact-hero-road { position:absolute; z-index:1; width:330px; left:37%; bottom:-58px; }
+.contact-hero::after { content:''; position:absolute; bottom:-65px; width:115%; height:110px; background:#e0f2ff; border-radius:50%; transform:rotate(-2deg); }
+.contact-cloud { position:absolute; left:8%; top:46px; width:82px; height:28px; background:#bee6ff; border-radius:30px; }
+.contact-cloud::before { content:''; position:absolute; width:46px; height:46px; bottom:0; left:18px; border-radius:50%; background:inherit; }
+.cloud-two { left:40%; top:22px; transform:scale(.8); }
+.contact-columns { display:grid; grid-template-columns:minmax(0,1.8fr) minmax(0,1fr); gap:24px; padding-block:58px 74px; }
+.contact-form { padding:28px 34px 20px; border:1px solid #c9dce9; border-radius:28px; background:linear-gradient(140deg,#fff,#ffffff80); min-width:0; }
+.contact-form h2 { display:flex; align-items:center; gap:16px; font-size:30px; margin-bottom:28px; }
+.contact-form h2 svg { width:48px; height:48px; flex-shrink:0; }
+.contact-field { margin-bottom:24px; }
+.contact-field label { display:block; font-size:20px; font-weight:700; margin-bottom:9px; }
+.contact-field label span { color:#c02e39; }
+.contact-field input,.contact-field select,.contact-field textarea { width:100%; min-height:48px; border:1px solid #a6bfd6; border-radius:13px; background:#fff; color:var(--ink); font:inherit; font-size:19px; padding:12px 16px; }
+.contact-field textarea { resize:vertical; line-height:1.5; }
+.contact-field [aria-invalid=true] { border-color:#b82c38; }
+.contact-field input::placeholder,.contact-field textarea::placeholder { color:#727983; opacity:1; }
+.description-count { display:block; text-align:left; color:#667681; font-size:14px; margin-top:5px; }
+.contact-error { color:#a52432; font-size:16px; margin-top:7px; }
+.attachment-zone { border:1.5px dashed #9cb8d0; border-radius:16px; padding:18px; }
+.attachment-zone label { display:flex; align-items:center; gap:14px; font-size:19px; cursor:pointer; }
+.attachment-zone label svg { width:44px; height:44px; flex-shrink:0; }
+.attachment-zone>p { margin-top:6px; color:#667681; font-size:15px; }
+.attachment-zone input { display:block; width:100%; min-width:0; margin-top:14px; font:inherit; font-size:14px; }
+.attachment-zone input::file-selector-button { border:1px solid #a6bfd6; border-radius:20px; padding:10px 16px; background:#edf7ff; color:var(--ink); cursor:pointer; }
+.attachment-list { padding:0; list-style:none; }
+.attachment-list li { display:flex; gap:12px; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid #dde8ef; }
+.attachment-list li>span { min-width:0; overflow-wrap:anywhere; }
+.attachment-list small { display:block; color:#667681; }
+.attachment-list button { min-height:44px; border:1px solid #cadce8; border-radius:20px; background:#fff; padding:8px 14px; cursor:pointer; }
+.contact-prototype { font-size:14px; color:#597084; margin:20px 0 14px; }
+.contact-submit { min-width:240px; cursor:pointer; }
+.contact-submit svg { width:24px; height:24px; }
+.contact-fields { border:0; padding:0; margin:0; min-width:0; }
+.contact-submit:disabled { opacity:.6; cursor:not-allowed; }
+.contact-verification { margin-block:20px; min-width:0; max-width:100%; }
+.contact-verification>div { max-width:100%; }
+.contact-verification button { min-height:44px; padding:8px 16px; border:1px solid #a6bfd6; border-radius:20px; background:#edf7ff; color:var(--ink); cursor:pointer; }
+.contact-verification p { margin-block:8px; color:#a52432; }
+.contact-notice { overflow-wrap:anywhere; }
+.contact-notice { margin-top:14px; font-size:16px; }
+.contact-notice:empty { margin:0; }
+.contact-information { border-radius:30px; background:linear-gradient(115deg,#edf8ff,#e3f2ff); padding:42px 26px 0; display:flex; flex-direction:column; overflow:hidden; min-width:0; text-align:center; }
+.contact-information h2 { font-size:30px; margin-bottom:34px; }
+.contact-information h3 { font-size:23px; margin-bottom:14px; }
+.contact-email-block a { display:inline-block; font-size:18px; overflow-wrap:anywhere; max-width:100%; text-decoration:underline; text-underline-offset:4px; }
+.contact-info-note { border-top:1px solid #b2cbdc; margin-top:38px; padding-top:30px; font-size:20px; }
+.contact-information>img { width:140%; max-width:none; margin:auto -20% -25px; padding-top:55px; }
+@media(max-width:900px) { .contact-title-row h1 { font-size:44px; } .contact-hero-copy p { font-size:21px; } .contact-title-row>span { padding:15px; } .contact-columns { grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); gap:18px; } .contact-form { padding:24px; } .contact-form h2 { font-size:26px; } .contact-information { padding-inline:18px; } .contact-information h2 { font-size:25px; } }
+@media(max-width:680px) { .contact-hero { flex-direction:column; min-height:0; } .contact-hero-copy { width:100%; padding:28px 18px 10px; } .contact-title-row h1 { font-size:38px; } .contact-title-row svg { width:35px; height:35px; } .contact-hero .support-envelope { width:63%; margin:0 28% 0 0; } .contact-hero-road { width:180px; left:48%; bottom:-25px; } .contact-cloud { display:none; } .contact-columns { grid-template-columns:minmax(0,1fr); padding-block:30px 45px; } .contact-form { padding:24px 18px; } .contact-form h2 { font-size:25px; gap:10px; } .contact-form h2 svg { width:36px; } .contact-submit { width:100%; min-width:0; } .contact-information { padding-top:28px; } .contact-information>img { width:100%; margin:10px 0 -30px; padding:0; } }

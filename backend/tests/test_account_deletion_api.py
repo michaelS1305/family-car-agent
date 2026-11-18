@@ -43,6 +43,7 @@ class DeletionApiTests(unittest.TestCase):
             response = self.client.post('/api/account/deletion', json={'confirmation':'DELETE_MY_ACCOUNT'})
             self.assertEqual(response.status_code, 202)
             self.assertEqual(response.json(), {'status':'draining'})
+            self.assertEqual(response.headers['Link'], self.api.APPLE_HELP_LINK)
             confirm.assert_called_once_with(self.api.pool, self.subject)
 
     def test_status_and_preview_only_use_verified_identity(self):
@@ -51,6 +52,7 @@ class DeletionApiTests(unittest.TestCase):
             with patch.object(self.api.deletion, service, return_value=result) as call:
                 response = self.client.get('/api/account/deletion'+endpoint, params={'user_id':'other'})
                 self.assertEqual(response.json(),result)
+                self.assertEqual(response.headers['Link'], self.api.APPLE_HELP_LINK)
                 call.assert_called_once_with(self.api.pool,self.subject)
 
     def test_missing_bearer_cannot_confirm(self):
@@ -58,6 +60,31 @@ class DeletionApiTests(unittest.TestCase):
         with patch.object(self.api.deletion,'confirm') as confirm:
             self.assertEqual(self.client.post('/api/account/deletion',json={'confirmation':'DELETE_MY_ACCOUNT'}).status_code,401)
             confirm.assert_not_called()
+
+    def test_apple_help_is_generic_and_available_without_session(self):
+        self.app.dependency_overrides.clear()
+        with patch.object(self.api.deletion, 'status') as status, patch.object(self.api.pool, 'connection') as db:
+            response = self.client.get('/api/account/deletion/apple-instructions')
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(set(response.json()), {'instructions', 'url'})
+            self.assertTrue(response.json()['url'].startswith('https://support.apple.com/'))
+            self.assertNotIn(self.subject, response.text)
+            status.assert_not_called()
+            db.assert_not_called()
+
+    def test_help_discoverable_before_confirmation_and_without_auth_afterwards(self):
+        with patch.object(self.api.deletion, 'preview', return_value={'consequence': 'personal'}), \
+             patch.object(self.api.deletion, 'confirm') as confirm:
+            preview = self.client.get('/api/account/deletion/preview')
+            self.assertEqual(preview.status_code, 200)
+            self.assertEqual(preview.json(), {'consequence': 'personal'})
+            help_path = preview.headers['Link'].split('>')[0][1:]
+            confirm.assert_not_called()
+        self.app.dependency_overrides.clear()
+        response = self.client.get(help_path)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('support.apple.com', response.json()['url'])
+        self.assertNotIn('delivered', response.json())
 
     def test_live_gate_applies_to_both_normal_auth_dependencies(self):
         credentials = types.SimpleNamespace(scheme='bearer',credentials='signed-token')

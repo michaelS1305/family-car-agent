@@ -1,0 +1,27 @@
+.DS_Store
+/.build
+/Packages
+xcuserdata/
+DerivedData/
+.swiftpm/configuration/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.netrc
+
+/xtool
+/.bsp/
+
+# Local Apple signing material and distribution artifacts (never client config)
+*.p8
+*.p12
+*.pfx
+*.key
+*.pem
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.keychain
+*.keychain-db
+*.ipa
+*.app/
+*.dSYM/
+*.xcarchive/

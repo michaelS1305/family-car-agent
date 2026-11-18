@@ -562,10 +562,11 @@ def get_user_by_token(shortcut_token):
 
 
 def apply_carplay_transition(shortcut_token, acquisition_id, *, disconnect=False):
+    from native_push_outbox import commit_boundary
     from carplay_adapter import transition
     from identity import CurrentUser
     from vehicle_identity import VehicleIdentityError
-    with pool.connection() as conn:
+    with commit_boundary(), pool.connection() as conn:
         row = conn.execute('SELECT id,name,family_id,auth_user_id FROM users WHERE shortcut_token=%s',
                            (shortcut_token,)).fetchone()
         if not row or row[3] is None:
@@ -859,10 +860,20 @@ def get_user_reservations(user_id, family_id):
         return cursor.fetchall()
 
 
-def get_car_usage_history(family_id, completed_limit=50):
+def get_car_usage_history(family_id, completed_limit=50, *, cursor=None,
+                          vehicle_ref=None, member_ref=None, from_datetime=None, to_datetime=None):
     with pool.connection() as conn:
+        boundary = None
+        if cursor is not None:
+            boundary = conn.execute(
+                'SELECT started_at,id FROM vehicle_driver_sessions '
+                'WHERE family_id=%s AND session_ref=%s AND ended_at IS NOT NULL',
+                (family_id, cursor)).fetchone()
+            if boundary is None:
+                return None  # Identical outcome for missing, active and foreign-family cursors.
         query = (
-            'SELECT u.name,s.started_at,s.ended_at,s.ended_at IS NULL,s.id,v.display_name,v.vehicle_ref '
+            'SELECT u.name,s.started_at,s.ended_at,s.ended_at IS NULL,s.id,v.display_name,v.vehicle_ref,'
+            's.session_ref,u.member_public_id '
             'FROM vehicle_driver_sessions s JOIN users u ON u.id=s.user_id JOIN vehicles v ON v.id=s.vehicle_id '
             'WHERE s.family_id=%s ')
         # Active sessions must not disappear behind a busy completed-history page.
@@ -870,10 +881,27 @@ def get_car_usage_history(family_id, completed_limit=50):
                               (family_id,)).fetchall()
         if len(active) > 100:
             raise ValueError('Vehicle history capacity exceeded')
-        rows = active + conn.execute(query + 'AND s.ended_at IS NOT NULL ORDER BY s.started_at DESC,s.id DESC LIMIT %s',
-            (family_id, min(max(int(completed_limit),1),50))).fetchall()
-        return [(name, start.isoformat(), end.isoformat() if end else None, active, sid, vehicle, str(ref))
-                for name,start,end,active,sid,vehicle,ref in rows]
+        filters = 'AND s.ended_at IS NOT NULL '
+        params = [family_id]
+        for value, clause in (
+            (vehicle_ref, 'v.vehicle_ref=%s AND v.family_id=s.family_id'),
+            (member_ref, 'u.member_public_id=%s AND u.family_id=s.family_id'),
+            (from_datetime, 's.started_at >= %s'),
+            (to_datetime, 's.started_at <= %s'),
+        ):
+            if value is not None:
+                filters += 'AND ' + clause + ' '
+                params.append(value)
+        if boundary is not None:
+            filters += 'AND (s.started_at,s.id) < (%s,%s) '
+            params.extend(boundary)
+        # One lookahead row determines has_more without a count/all-history read.
+        params.append(min(max(int(completed_limit), 1), 50) + 1)
+        rows = active + conn.execute(query + filters + 'ORDER BY s.started_at DESC,s.id DESC LIMIT %s',
+                                     tuple(params)).fetchall()
+        return [(name, start.isoformat(), end.isoformat() if end else None, active, sid, vehicle,
+                 str(ref), str(session_ref), str(member_ref))
+                for name,start,end,active,sid,vehicle,ref,session_ref,member_ref in rows]
 
 
 def get_vehicle_statuses(family_id):
@@ -895,14 +923,38 @@ def list_family_reservations(
     time_filter,
     scope,
     boundary_time,
+    *, range_start=None, range_end=None, vehicle_ref=None, member_ref=None,
 ):
     time_operator = ">" if time_filter == "future" else "<="
     scope_sql = "AND r.user_id = %s" if scope == "mine" else ""
-    parameters = [current_user_id, family_id, boundary_time]
+    bounded = range_start is not None and range_end is not None
+    time_sql = ("r.start_time::timestamp < %s::timestamp AND r.end_time::timestamp > %s::timestamp"
+                if bounded else f"r.end_time::timestamp {time_operator} %s::timestamp")
+    parameters = [current_user_id, family_id]
+    parameters.extend([range_end, range_start] if bounded else [boundary_time])
     if scope == "mine":
         parameters.append(current_user_id)
 
     with pool.connection() as conn:
+        filter_sql = []
+        if vehicle_ref is not None:
+            vehicle = conn.execute(
+                'SELECT id FROM vehicles WHERE family_id=%s AND vehicle_ref=%s',
+                (family_id, vehicle_ref),
+            ).fetchone()
+            if vehicle is None:
+                return None
+            filter_sql.append('AND r.vehicle_id=%s AND v.family_id=%s')
+            parameters.extend([vehicle[0], family_id])
+        if member_ref is not None:
+            member = conn.execute(
+                'SELECT id FROM users WHERE family_id=%s AND member_public_id=%s',
+                (family_id, member_ref),
+            ).fetchone()
+            if member is None:
+                return None
+            filter_sql.append('AND r.user_id=%s')
+            parameters.append(member[0])
         return conn.execute(
             f"""
             SELECT
@@ -910,18 +962,36 @@ def list_family_reservations(
                 r.start_time,
                 r.end_time,
                 r.user_id = %s AS is_mine,
-                r.reservation_ref, v.vehicle_ref, v.display_name
+                r.reservation_ref, v.vehicle_ref, v.display_name,
+                u.member_public_id, v.category
             FROM reservations AS r
             JOIN users AS u ON u.id = r.user_id
             LEFT JOIN vehicles v ON v.id=r.vehicle_id
             WHERE u.family_id = %s
               AND r.status = 'active'
-              AND r.end_time::timestamp {time_operator} %s::timestamp
+              AND {time_sql}
               {scope_sql}
-            ORDER BY r.start_time::timestamp ASC
+              {' '.join(filter_sql)}
+            ORDER BY r.start_time::timestamp ASC{', r.reservation_ref ASC' if bounded else ''}
             """,
             tuple(parameters),
         ).fetchall()
+
+
+def _enrich_reservation_response(conn, result, user_id, family_id):
+    """Read public response metadata in the same transaction as the mutation."""
+    if result.get('success'):
+        row = conn.execute(
+            '''SELECT u.member_public_id, v.category
+               FROM reservations r JOIN users u ON u.id=r.user_id
+               LEFT JOIN vehicles v ON v.id=r.vehicle_id
+               WHERE r.reservation_ref=%s AND r.user_id=%s AND u.family_id=%s''',
+            (result['reservation_ref'], user_id, family_id),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError('Reservation response identity unavailable')
+        result = {**result, 'member_ref': str(row[0]), 'vehicle_category': row[1]}
+    return result
 
 
 def create_current_user_reservation(user_id, family_id, start_time, end_time, *, vehicle_ref=VEHICLE_UNSET):
@@ -929,7 +999,7 @@ def create_current_user_reservation(user_id, family_id, start_time, end_time, *,
         require_user(conn, user_id)
         with conn.transaction():
             _lock_reservation_family(conn, family_id)
-            return _create_reservation_on_connection(
+            result = _create_reservation_on_connection(
                 conn,
                 user_id,
                 start_time,
@@ -937,6 +1007,7 @@ def create_current_user_reservation(user_id, family_id, start_time, end_time, *,
                 expected_family_id=family_id,
                 vehicle_ref=vehicle_ref,
             )
+            return _enrich_reservation_response(conn, result, user_id, family_id)
 
 
 def update_current_user_reservation(
@@ -957,7 +1028,7 @@ def update_current_user_reservation(
                                                        original_start_time, original_end_time)
             if error:
                 return error
-            return _update_reservation_on_connection(
+            result = _update_reservation_on_connection(
                 conn,
                 reservation_id,
                 user_id,
@@ -966,6 +1037,7 @@ def update_current_user_reservation(
                 end_time,
                 vehicle_ref=vehicle_ref,
             )
+            return _enrich_reservation_response(conn, result, user_id, family_id)
 
 
 def cancel_current_user_reservation(

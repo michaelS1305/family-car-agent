@@ -15,5 +15,11 @@ venv/
 !.env.example
 !web/.env.example
 
+# Native Push: server credentials and local per-flavor Firebase configuration
+**/*service-account*.json
+**/*service_account*.json
+**/*firebase-adminsdk*.json
+android/app/src/*/google-services.json
+
 # OS / editor noise
 .DS_Store

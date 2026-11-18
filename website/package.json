@@ -1,0 +1,19 @@
+{
+  "name": "fca-public-website",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.24.0",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "pnpm build && vite build --ssr src/App.tsx --outDir node_modules/.cache/website-tests && node --test tests/*.test.mjs"
+  },
+  "dependencies": { "react": "19.2.8", "react-dom": "19.2.8" },
+  "devDependencies": {
+    "@types/node": "24.13.3", "@types/react": "19.2.18", "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "6.1.0", "typescript": "6.0.2", "vite": "8.2.2"
+  }
+}

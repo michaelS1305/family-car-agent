@@ -16,6 +16,20 @@ from tests.test_database_atomic_creation import load_database_module_without_rea
 
 
 class DeletionUnitTests(unittest.TestCase):
+    def test_safe_status_hints(self):
+        for row, expected in (
+            (('auth_pending', 'pending', False), {'status': 'auth_pending'}),
+            (('auth_pending', 'manual_required', False),
+             {'status': 'auth_pending', 'manual_action_required': True}),
+            (('draining', 'pending', True), {'status': 'draining', 'support_required': True}),
+        ):
+            conn = Mock()
+            conn.execute.return_value.fetchone.return_value = row
+            pool = Mock()
+            pool.connection.return_value.__enter__ = Mock(return_value=conn)
+            pool.connection.return_value.__exit__ = Mock(return_value=False)
+            self.assertEqual(deletion.status(pool, uuid4()), expected)
+
     def test_admin_hard_delete_no_redirect_no_proxy_no_secret_logging(self):
         session = Mock()
         session.delete.return_value.status_code = 200
@@ -82,6 +96,26 @@ class AccountDeletionPostgresTests(unittest.TestCase):
             created_at timestamptz NOT NULL DEFAULT clock_timestamp() CHECK(isfinite(created_at)),
             next_attempt_at timestamptz NOT NULL DEFAULT clock_timestamp() CHECK(isfinite(next_attempt_at)),
             CHECK(next_attempt_at>=created_at));
+          ALTER TABLE account_deletion_jobs
+            ADD COLUMN job_ref uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+            ADD COLUMN apple_state text NOT NULL DEFAULT 'unclassified',
+            ADD COLUMN apple_generation bigint,
+            ADD COLUMN apple_capture_uncertain boolean NOT NULL DEFAULT false,
+            ADD COLUMN apple_confirmed_at timestamptz,
+            ADD COLUMN apple_resolution_reason text,
+            ADD COLUMN attempt_count bigint NOT NULL DEFAULT 0,
+            ADD COLUMN last_operation text NOT NULL DEFAULT 'queued',
+            ADD COLUMN last_attempt_at timestamptz,
+            ADD COLUMN failure_category text,
+            ADD COLUMN operator_attention boolean NOT NULL DEFAULT false;
+          CREATE TABLE auth_identities(user_id uuid REFERENCES auth_users ON DELETE CASCADE,
+            provider text,provider_id text,identity_data jsonb);
+          CREATE TABLE apple_credential_attempts(generation bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            auth_user_id uuid NOT NULL,code_digest bytea NOT NULL,status text NOT NULL DEFAULT 'pending',
+            created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(auth_user_id,code_digest));
+          CREATE TABLE apple_credentials(auth_user_id uuid PRIMARY KEY,environment text,client_id text,
+            apple_subject text,generation bigint REFERENCES apple_credential_attempts(generation),
+            key_id text,refresh_ciphertext bytea,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now());
           CREATE TABLE family_code_history(code text PRIMARY KEY);
           CREATE TABLE gemini_capacity_policies(capacity_pool text PRIMARY KEY,max_concurrency int);
           CREATE TABLE geocoding_capacity_policies(capacity_pool text PRIMARY KEY,max_concurrency int);
@@ -134,7 +168,7 @@ class AccountDeletionPostgresTests(unittest.TestCase):
             conn.commit()
             class Isolated:
                 def execute(self, query, params=None):
-                    return conn.execute(query.replace('auth.users', 'auth_users'), params)
+                    return conn.execute(query.replace('auth.users', 'auth_users').replace('auth.identities', 'auth_identities'), params)
                 def transaction(self):
                     return conn.transaction()
             yield Isolated()

@@ -1,0 +1,363 @@
+import Foundation
+
+@MainActor final class TestVault: SessionVault {
+    var value: AuthSession?
+    var failWrite = false
+    var failClear = false
+    var writes = 0
+    func read() throws -> AuthSession? { value }
+    func write(_ value: AuthSession) throws {
+        if failWrite { throw AuthFailure.storage }; self.value = value; writes += 1
+    }
+    func clear() throws { if failClear { throw AuthFailure.storage }; value = nil }
+}
+
+actor TestTransport: AuthTransport {
+    var result: AuthSession
+    var failure: AuthFailure?
+    var calls = 0
+    var lastFields: [String: String] = [:]
+    var paused = false
+    var continuation: CheckedContinuation<Void, Never>?
+    var captureCalls = 0
+    var capturesFinished = 0
+    var capturedToken: String?
+    var captureFailure = false
+    var capturePaused = false
+    var captureContinuation: CheckedContinuation<Void, Never>?
+    func configureCapture(fail: Bool = false, pause: Bool = false) { captureFailure = fail; capturePaused = pause }
+    func setResult(_ value: AuthSession) { result = value }
+    func releaseCapture() { capturePaused = false; captureContinuation?.resume(); captureContinuation = nil }
+    func captureApple(_ credential: AppleCredentialCapture, token: String) async throws {
+        defer { capturesFinished += 1 }
+        captureCalls += 1; capturedToken = token
+        if capturePaused { await withCheckedContinuation { captureContinuation = $0 } }
+        if captureFailure { throw AuthFailure.network }
+    }
+    init(_ result: AuthSession) { self.result = result }
+    func pause() { paused = true }
+    func fail(_ value: AuthFailure) { failure = value }
+    func release() { paused = false; continuation?.resume(); continuation = nil }
+    func exchange(grant: String, fields: [String: String]) async throws -> AuthSession {
+        lastFields = fields
+        calls += 1
+        if paused { await withCheckedContinuation { continuation = $0 } }
+        if let failure { throw failure }
+        return result
+    }
+}
+
+@main struct AuthCheck {
+    @MainActor static var checks = 0
+    @MainActor static func check(_ value: Bool, _ name: String) {
+        precondition(value, "FAIL: " + name); checks += 1
+    }
+    @MainActor static func rejects(_ name: String, _ expected: AuthFailure, _ action: () async throws -> Void) async {
+        do { try await action(); preconditionFailure("Expected rejection: " + name) }
+        catch { check(error as? AuthFailure == expected, name) }
+    }
+    @MainActor static func main() async throws {
+        try await runAppleCaptureChecks()
+        let env = AppEnvironment.development
+        let now = Date(timeIntervalSince1970: 1000)
+        let pending = PendingAuthorization(verifier: "test-verifier", nonce: "test-nonce", started: now, callbackURL: env.proposedOAuthCallbackURL)
+        let valid = URL(string: env.proposedOAuthCallbackURL.absoluteString + "?nonce=test-nonce&code=code")!
+        check(try pending.code(from: valid, now: now) == "code", "callback accepted")
+        for url in ["other://auth/callback?nonce=test-nonce&code=code",
+                    "com.familycaragent.app.dev://other/callback?nonce=test-nonce&code=code",
+                    "com.familycaragent.app.dev://auth/wrong?nonce=test-nonce&code=code",
+                    valid.absoluteString + "&nonce=test-nonce", valid.absoluteString + "&code=second",
+                    valid.absoluteString + "#token=bad",
+                    "com.familycaragent.app.dev://auth:443/callback?nonce=test-nonce&code=code",
+                    "com.familycaragent.app.dev://user@auth/callback?nonce=test-nonce&code=code",
+                    "com.familycaragent.app.dev://auth/callback?nonce=wrong&code=code"] {
+            await rejects("strict callback", .callback) { _ = try pending.code(from: URL(string: url)!, now: now) }
+        }
+        await rejects("expired", .expired) { _ = try pending.code(from: valid, now: now.addingTimeInterval(600)) }
+        await rejects("clock backwards", .expired) { _ = try pending.code(from: valid, now: now.addingTimeInterval(-1)) }
+        let attempts = AuthorizationAttempt(); attempts.begin(pending)
+        _ = try attempts.consume(valid, now: now)
+        await rejects("single use", .expired) { _ = try attempts.consume(valid, now: now) }
+        attempts.begin(pending); attempts.cancel()
+        await rejects("cancelled attempt", .expired) { _ = try attempts.consume(valid, now: now) }
+        let authorization = try pending.authorizeURL(base: env.supabaseURL, challenge: "test-challenge")
+        let query = URLComponents(url: authorization, resolvingAgainstBaseURL: false)!.queryItems!
+        check(query.first(where: { $0.name == "code_challenge_method" })?.value == "s256", "PKCE method")
+        check(query.first(where: { $0.name == "code_challenge" })?.value == "test-challenge", "PKCE challenge forwarded")
+        check(!authorization.absoluteString.contains("test-verifier"), "verifier never in authorize URL")
+        let redirect = query.filter { $0.name == "redirect_to" }
+        check(redirect.count == 1, "one explicit native redirect")
+        let native = URLComponents(string: redirect[0].value!)!
+        check(native.scheme == env.proposedOAuthCallbackURL.scheme && native.host == "auth" && native.path == "/callback",
+              "Google redirects to native Dev, never Web/PWA")
+        check(native.queryItems == [URLQueryItem(name: "nonce", value: pending.nonce)], "per-attempt callback binding retained")
+        check(query.first(where: { $0.name == "provider" })?.value == "google", "Google provider unchanged")
+        check(authorization.host == env.supabaseURL.host && authorization.path == "/auth/v1/authorize", "Dev Supabase authorization endpoint")
+
+        let owner = UUID(); let other = UUID()
+        let original = AuthSession(owner: owner, accessToken: "test-access", refreshToken: "test-refresh", expires: now, activated: true)
+        let refreshed = AuthSession(owner: owner, accessToken: "new-access", refreshToken: "new-refresh", expires: Date().addingTimeInterval(3600))
+        let stored = try JSONEncoder().encode(original)
+        var legacy = true, unlockedOnce = false, unlocked = false, clears = 0, upgrades = 0
+        func readSession(failUpgrade: Bool = false) throws -> AuthSession? {
+            try SessionVaultRead.restore(item: {
+                guard unlocked || (!legacy && unlockedOnce) else { throw AuthFailure.storage }
+                return (stored, legacy)
+            }, upgrade: {
+                upgrades += 1
+                if failUpgrade { throw AuthFailure.storage }
+                legacy = false
+            }, clearCorrupt: { clears += 1 })
+        }
+        await rejects("before first unlock", .storage) { _ = try readSession() }
+        unlocked = true; unlockedOnce = true
+        check(try readSession(failUpgrade: true) == original && legacy, "failed migration retains session")
+        check(try readSession() == original && !legacy, "unlocked migration")
+        unlocked = false
+        check(try readSession() == original && clears == 0 && upgrades == 2, "locked after first unlock, no repeated migration")
+        unlockedOnce = false
+        await rejects("reboot makes migrated item inaccessible until first unlock", .storage) { _ = try readSession() }
+        let vault = TestVault(); vault.value = original
+        let transport = TestTransport(refreshed)
+        let manager = SessionManager(vault: vault, transport: transport)
+        try manager.restore()
+        check(manager.session == original, "restoration")
+        await transport.pause()
+        let a = Task { try await manager.access(owner: owner) }
+        while await transport.calls == 0 { await Task.yield() }
+        let b = Task { try await manager.access(owner: owner) }
+        for _ in 0..<20 { await Task.yield() }
+        await transport.release()
+        check(try await a.value == "new-access", "refresh result")
+        check(try await b.value == "new-access", "coalesced result")
+        check(await transport.calls == 1 && vault.writes == 1, "one refresh/write")
+        check(vault.value?.activated == true, "activation retained")
+        _ = try await manager.access(owner: owner)
+        check(await transport.calls == 1, "valid token reused")
+        await rejects("wrong account access", .signedOut) { _ = try await manager.access(owner: other) }
+        try manager.clear()
+        check(manager.session == nil && vault.value == nil, "logout erases")
+        try await manager.login(grant: "id_token", fields: [:], appleUser: "apple-subject")
+        check(manager.session?.owner == owner, "same Supabase ID is same FCA account across providers")
+        check(manager.session?.activated == false, "provider success is not FCA activation")
+        try manager.activate(owner: owner)
+        check(vault.value?.activated == true, "explicit bootstrap activation")
+        try manager.clear()
+
+        let scopedVault = TestVault(); scopedVault.value = original
+        let scoped = SessionManager(vault: scopedVault, transport: TestTransport(refreshed))
+        try scoped.restore()
+        let scope = VehicleSessionScope(environment: "synthetic", user: 1, family: 2, device: UUID())
+        let bound = [UUID(): "synthetic vehicle"]
+        try scoped.authorizeVehicleScope(scope, owner: owner, generation: scoped.generation, bindings: bound)
+        _ = try await scoped.access(owner: owner, force: true)
+        let relaunched = SessionManager(vault: scopedVault, transport: TestTransport(refreshed))
+        try relaunched.restore()
+        check(relaunched.session?.vehicleScope == scope && relaunched.session?.boundVehicles == bound, "explicit scope survives refresh and relaunch")
+        var invalidated = false
+        relaunched.onInvalidation = { invalidated = $0?.vehicleScope == scope }
+        try relaunched.verifyVehicleScope(user: 1, family: 3)
+        check(invalidated && scopedVault.value?.vehicleScope == nil && scopedVault.value?.boundVehicles == nil, "family switch invalidates durable scheduling scope")
+        let relay = AuthSession(owner: other, accessToken: "relay-access", refreshToken: "relay-refresh", expires: Date().addingTimeInterval(3600))
+        let relayManager = SessionManager(vault: vault, transport: TestTransport(relay))
+        try await relayManager.login(grant: "id_token", fields: [:], appleUser: "relay-apple-subject")
+        check(relayManager.session?.owner == other, "different Apple/relay ID stays separate")
+        await rejects("old owner denied", .signedOut) { _ = try await relayManager.access(owner: owner) }
+        let restoredUnactivated = SessionManager(vault: vault, transport: transport)
+        try restoredUnactivated.restore()
+        check(restoredUnactivated.session == nil && vault.value == nil, "unfinished onboarding cannot activate on restart")
+
+        let staleVault = TestVault(); staleVault.value = original
+        let staleTransport = TestTransport(refreshed); await staleTransport.pause()
+        let stale = SessionManager(vault: staleVault, transport: staleTransport); try stale.restore()
+        let flight = Task { try await stale.access(owner: owner) }
+        while await staleTransport.calls == 0 { await Task.yield() }
+        try stale.clear(); await staleTransport.release()
+        await rejects("logout fences in-flight refresh", .stale) { _ = try await flight.value }
+        check(staleVault.value == nil && stale.session == nil, "late result cannot resurrect")
+
+        let wrongVault = TestVault(); wrongVault.value = original
+        let wrong = SessionManager(vault: wrongVault, transport: TestTransport(relay)); try wrong.restore()
+        await rejects("refresh owner mismatch", .signedOut) { _ = try await wrong.access(owner: owner) }
+        check(wrongVault.value == nil, "owner mismatch clears storage")
+        let deniedVault = TestVault(); deniedVault.failWrite = true
+        let denied = SessionManager(vault: deniedVault, transport: transport)
+        await rejects("Keychain write failure", .storage) { try await denied.login(grant: "pkce", fields: [:]) }
+        check(denied.session == nil, "no memory session after failed persistence")
+        let revokedVault = TestVault(); revokedVault.value = original
+        let revokedTransport = TestTransport(refreshed); await revokedTransport.fail(.rejected(400, "refresh_token_not_found"))
+        let revoked = SessionManager(vault: revokedVault, transport: revokedTransport); try revoked.restore()
+        await rejects("revoked refresh", .signedOut) { _ = try await revoked.access(owner: owner) }
+        check(revokedVault.value == nil, "revoked session cleared")
+
+        check(AuthAPI.validPublicKey("sb_publishable_test"), "public key accepted")
+        check(!AuthAPI.validPublicKey("sb_secret_test") && !AuthAPI.validPublicKey(""), "secret/missing key rejected")
+        let missing = Data(#"{"detail":"Authenticated user is not assigned to a family"}"#.utf8)
+        check(AuthAPI.failure(status: 403, data: missing, path: "/api/me") == .rejected(403, "MISSING_ACCOUNT"), "exact missing account")
+        check(AuthAPI.failure(status: 500, data: missing, path: "/api/me") == .rejected(500, ""), "not status-only classification")
+        check(AuthAPI.failure(status: 400, data: Data(#"{"message":"secret raw text"}"#.utf8), path: "/api/me").message.contains("secret") == false, "raw errors not exposed")
+        check(OnboardingValidation.validName("  משפחת כהן  ") && OnboardingValidation.validName("O’Neil"), "name normalization")
+        check(!OnboardingValidation.validName("משפחה1") && !OnboardingValidation.validName("-name"), "name validation")
+        let parsed = try JSONDecoder().decode(Me.self, from: Data(#"{"user_id":1,"family_id":2,"name":"Test","carplay_setup_status":"pending"}"#.utf8))
+        check(parsed.family_id == 2, "current backend me contract")
+        check((try? JSONDecoder().decode(Me.self, from: Data(#"{"user_id":1,"family_id":null,"name":"Test"}"#.utf8))) == nil, "null family not ready")
+        func response(_ id: UUID, _ email: String) throws -> AuthSession {
+            let json = "{\"access_token\":\"fake\",\"refresh_token\":\"fake\",\"expires_in\":3600,\"provider_token\":\"discard-me\",\"user\":{\"id\":\"\(id)\",\"email\":\"\(email)\"}}"
+            return try AuthAPI.session(from: JSONDecoder().decode(SupabaseTokenResponse.self, from: Data(json.utf8)), now: now)
+        }
+        let google = try response(owner, "same@example.invalid")
+        let appleSame = try response(owner, "same@example.invalid")
+        let appleRelay = try response(other, "private@privaterelay.appleid.com")
+        let sameEmailDifferentID = try response(other, "same@example.invalid")
+        check(google.owner == appleSame.owner, "parsed shared Supabase ID converges")
+        check(google.owner != appleRelay.owner, "parsed relay separate ID remains separate")
+        check(google.owner != sameEmailDifferentID.owner, "matching email cannot override Supabase ID")
+        let serialized = String(data: try JSONEncoder().encode(appleRelay), encoding: .utf8)!
+        check(!serialized.contains("provider_token") && !serialized.contains("privaterelay") && !serialized.contains("discard-me"), "only session credentials persisted")
+        let networkVault = TestVault(); networkVault.value = original
+        let networkTransport = TestTransport(refreshed); await networkTransport.fail(.network)
+        let network = SessionManager(vault: networkVault, transport: networkTransport); try network.restore()
+        await rejects("network failure is not revocation", .network) { _ = try await network.access(owner: owner) }
+        check(networkVault.value == original, "retryable refresh preserves credentials")
+        let loginVault = TestVault(); let loginTransport = TestTransport(refreshed); await loginTransport.pause()
+        let login = SessionManager(vault: loginVault, transport: loginTransport)
+        let signingIn = Task { try await login.login(grant: "pkce", fields: [:]) }
+        while await loginTransport.calls == 0 { await Task.yield() }
+        try login.clear(); await loginTransport.release()
+        await rejects("cancel fences in-flight login", .stale) { try await signingIn.value }
+        check(loginVault.value == nil, "late exchange cannot persist")
+        try await runEntryChecks()
+        try await runChatSessionChecks()
+        try await runFamilySessionChecks()
+        try await runVehiclesSessionChecks()
+        try await runHistorySessionChecks()
+        try await runBookingSessionChecks()
+        try await runSettingsSessionChecks()
+        try await runEntryUIChecks()
+        print("Auth checks passed: \(checks). Mock identities only; no provider/device claims.")
+    }
+}
+
+@MainActor func runAppleCaptureChecks() async throws {
+    let original = AuthSession(owner: UUID(), accessToken: "synthetic-original", refreshToken: "synthetic-refresh", expires: Date().addingTimeInterval(3600))
+    let credential = AppleCredentialCapture(code: "synthetic-code", nonce: "synthetic-nonce")
+    for fails in [false, true] {
+        let completedTransport = TestTransport(original)
+        await completedTransport.configureCapture(fail: fails)
+        let completed = SessionManager(vault: TestVault(), transport: completedTransport)
+        try await completed.login(grant: "id_token", fields: ["provider":"apple"], appleCredential: credential)
+        while await completedTransport.capturesFinished == 0 { await Task.yield() }
+        AuthCheck.check(completed.session?.owner == original.owner, "capture completion never breaks Apple login")
+        AuthCheck.check(await completedTransport.lastFields == ["provider":"apple"], "authorization code not forwarded through Supabase grant")
+        let transport = TestTransport(original), vault = TestVault()
+        await transport.configureCapture(fail: fails, pause: true)
+        let sessions = SessionManager(vault: vault, transport: transport)
+        try await sessions.login(grant: "id_token", fields: ["provider":"apple"], appleCredential: credential)
+        AuthCheck.check(sessions.session?.owner == original.owner, "Apple login does not wait for capture")
+        while await transport.captureContinuation == nil { await Task.yield() }
+        AuthCheck.check(await transport.captureCalls == 1, "one best-effort capture")
+        AuthCheck.check(await transport.capturedToken == original.accessToken, "capture pinned to authenticated owner")
+        let encoded = try JSONEncoder().encode(vault.value)
+        AuthCheck.check(!String(decoding: encoded, as: UTF8.self).contains("synthetic-code"), "code never persisted in vault")
+        try sessions.clear()
+        let other = AuthSession(owner: UUID(), accessToken: "synthetic-other", refreshToken: "synthetic-other-refresh", expires: original.expires)
+        await transport.setResult(other)
+        try await sessions.login(grant: "pkce", fields: ["code":"google-code"])
+        await transport.releaseCapture()
+        while await transport.capturesFinished == 0 { await Task.yield() }
+        AuthCheck.check(sessions.session?.owner == other.owner, "late capture failure/success cannot clear new account")
+        AuthCheck.check(await transport.captureCalls == 1, "Google does not capture Apple credentials")
+    }
+    let transport = TestTransport(original)
+    let sessions = SessionManager(vault: TestVault(), transport: transport)
+    try await sessions.login(grant: "id_token", fields: ["provider":"apple"], appleCredential: credential)
+    try sessions.clear() // MainActor has not yielded: scheduled capture must observe the fence.
+    for _ in 0..<10 { await Task.yield() }
+    AuthCheck.check(await transport.captureCalls == 0, "logout before submission prevents capture")
+}
+
+actor SettingsSessionBackend: BackendTransport, SettingsProfileTransport {
+    let owner: UUID
+    var calls = 0
+    var paused = false
+    var continuation: CheckedContinuation<Void, Never>?
+    init(owner: UUID) { self.owner = owner }
+    func pause() { paused = true }
+    func release() { continuation?.resume(); continuation = nil; paused = false }
+    func backend<T: Decodable & Sendable>(_ type: T.Type, path: String, token: String, fields: [String: Field]?) async throws -> T {
+        guard path == "/api/me" else { throw AuthFailure.invalidResponse }
+        return try JSONDecoder().decode(type, from: Data(#"{"user_id":1,"family_id":2,"name":"Synthetic Name"}"#.utf8))
+    }
+    func settingsProfile(token: String) async throws -> SettingsAuthProfile {
+        calls += 1
+        if calls == 1 { throw AuthFailure.rejected(401, "") }
+        if paused { await withCheckedContinuation { continuation = $0 } }
+        return SettingsAuthProfile(id: owner, email: " test@example.invalid ")
+    }
+}
+@MainActor func runSettingsSessionChecks() async throws {
+    let session = AuthSession(owner: UUID(), accessToken: "synthetic", refreshToken: "synthetic", expires: Date().addingTimeInterval(3600))
+    let auth = TestTransport(session), backend = SettingsSessionBackend(owner: session.owner)
+    let entry = EntryModel(sessions: SessionManager(vault: TestVault(), transport: auth), api: backend, providers: TestProvider())
+    await entry.login(apple: false)
+    let identity = entry.chatIdentity!
+    AuthCheck.check(try await entry.settingsEmail(identity: identity) == "test@example.invalid", "Settings authenticated email")
+    let profileCalls = await backend.calls, refreshCalls = await auth.calls
+    AuthCheck.check(profileCalls == 2 && refreshCalls == 2, "Settings uses shared refresh after 401")
+    AuthCheck.check(try SettingsAuthProfile(id: session.owner, email: nil).email(for: session.owner) == nil, "missing email safe")
+    AuthCheck.check(try SettingsAuthProfile(id: session.owner, email: " ").email(for: session.owner) == nil, "blank email safe")
+    await AuthCheck.rejects("foreign profile rejected", .invalidResponse) {
+        _ = try SettingsAuthProfile(id: UUID(), email: "other@example.invalid").email(for: session.owner)
+    }
+    await backend.pause()
+    let late = Task { try await entry.settingsEmail(identity: identity) }
+    while await backend.continuation == nil { await Task.yield() }
+    entry.logout(); await backend.release()
+    await AuthCheck.rejects("late Settings result fenced", .stale) { _ = try await late.value }
+    let before = await backend.calls
+    await AuthCheck.rejects("old Settings identity rejected", .stale) { _ = try await entry.settingsEmail(identity: identity) }
+    AuthCheck.check(await backend.calls == before, "no request for old identity")
+}
+
+
+actor BookingSessionBackend: BackendTransport, ReservationTransport {
+    var calls = 0
+    var failure: AuthFailure? = .rejected(401, "")
+    var paused = false
+    var continuation: CheckedContinuation<Void, Never>?
+    func fail(_ value: AuthFailure?) { failure = value }
+    func pause() { paused = true }
+    func release() { paused = false; continuation?.resume(); continuation = nil }
+    func backend<T: Decodable & Sendable>(_ type: T.Type, path: String, token: String, fields: [String: Field]?) async throws -> T {
+        guard path == "/api/me" else { throw AuthFailure.invalidResponse }
+        return try JSONDecoder().decode(type, from: Data(#"{"user_id":1,"family_id":2,"name":"Synthetic"}"#.utf8))
+    }
+    func reservationData(token: String, method: String, cancel: Bool, query: [URLQueryItem], body: Data?) async throws -> Data {
+        calls += 1
+        if let error = failure { failure = nil; throw error }
+        if paused { await withCheckedContinuation { continuation = $0 } }
+        return Data("[]".utf8)
+    }
+}
+@MainActor func runBookingSessionChecks() async throws {
+    let session = AuthSession(owner: UUID(), accessToken: "synthetic", refreshToken: "synthetic", expires: Date().addingTimeInterval(3600))
+    let auth = TestTransport(session), backend = BookingSessionBackend()
+    let entry = EntryModel(sessions: SessionManager(vault: TestVault(), transport: auth), api: backend, providers: TestProvider())
+    await entry.login(apple: false)
+    let who = entry.chatIdentity!
+    _ = try await entry.reservationData(identity: who, method: "POST", cancel: false, query: [], body: Data())
+    AuthCheck.check(await backend.calls == 2, "Booking explicit 401 refreshes once")
+    AuthCheck.check(await auth.calls == 2, "Booking reuses shared session refresh")
+    await backend.fail(.network)
+    do { _ = try await entry.reservationData(identity: who, method: "PATCH", cancel: false, query: [], body: Data()); preconditionFailure("network expected") } catch { }
+    AuthCheck.check(await backend.calls == 3, "Booking ambiguous write is not retried")
+    await backend.pause()
+    let late = Task { try await entry.reservationData(identity: who, method: "GET", cancel: false, query: [], body: nil) }
+    while await backend.continuation == nil { await Task.yield() }
+    entry.logout(); await backend.release()
+    do { _ = try await late.value; preconditionFailure("late booking accepted") }
+    catch { AuthCheck.check(error as? AuthFailure == .stale, "Booking late result fenced on logout") }
+    let before = await backend.calls
+    do { _ = try await entry.reservationData(identity: who, method: "POST", cancel: true, query: [], body: Data()); preconditionFailure("stale write") } catch { }
+    AuthCheck.check(await backend.calls == before, "Booking old identity cannot send writes")
+}

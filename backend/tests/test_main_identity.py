@@ -290,6 +290,13 @@ def load_main_module(environment=None):
             sys.modules,
             {
                 "account_deletion_api": stub_module("account_deletion_api", router=Mock(), deletion_lifespan=Mock()),
+                "apple_credentials_api": stub_module("apple_credentials_api", router=Mock()),
+                "contact_api": stub_module("contact_api", router=Mock()),
+                "vehicle_reference_api": stub_module("vehicle_reference_api", router=Mock()),
+                "vehicle_api": stub_module("vehicle_api", router=Mock()),
+                "device_api": stub_module("device_api", router=Mock()),
+                "native_push_api": stub_module("native_push_api", router=Mock()),
+                "native_push_worker": stub_module("native_push_worker", native_lifespan=Mock()),
                 "dotenv": dotenv_stub,
                 "fastapi": fastapi_stub,
                 "fastapi.middleware.cors": cors_stub,
@@ -568,8 +575,19 @@ class ReservationCenterRouteTests(unittest.TestCase):
         parameters = inspect.signature(main.get_reservations).parameters
 
         self.assertIs(parameters["current_user"].default.dependency, auth_stub.get_current_user)
-        reservation_stub.list_reservations.assert_called_once_with(current_user, "future", "all")
+        reservation_stub.list_reservations.assert_called_once_with(current_user, "future", "all",
+            range_start=None, range_end=None, vehicle_ref=None, member_ref=None)
         self.assertEqual(result, [])
+
+    def test_reservation_route_preserves_omitted_time_and_public_filters(self):
+        current_user = CurrentUser(user_id=17, name='User', family_id=42)
+        main.get_reservations(current_user=current_user)
+        self.assertIsNone(reservation_stub.list_reservations.call_args.args[1])
+        main.get_reservations(current_user=current_user, range_start='start', range_end='end',
+                              vehicle_ref='vehicle', member_ref='member')
+        self.assertEqual(reservation_stub.list_reservations.call_args.kwargs,
+                         dict(range_start='start', range_end='end', vehicle_ref='vehicle', member_ref='member'))
+        self.assertNotIn('family_id', inspect.signature(main.get_reservations).parameters)
 
     def test_create_cannot_receive_browser_identity(self):
         current_user = CurrentUser(user_id=17, name="מיכאל", family_id=42)
@@ -777,9 +795,11 @@ class CarHistoryRouteTests(unittest.TestCase):
         result = main.car_history(response, current_user)
         parameters = inspect.signature(main.car_history).parameters
 
-        self.assertEqual(tuple(parameters), ("response", "current_user"))
+        self.assertEqual(tuple(parameters), ("response", "current_user", "limit", "cursor",
+                                            "vehicle_ref", "member_ref", "from_datetime", "to_datetime"))
         self.assertIs(parameters["current_user"].default.dependency, auth_stub.get_current_user)
-        history_stub.get_car_history.assert_called_once_with(current_user)
+        history_stub.get_car_history.assert_called_once_with(current_user, limit=50, cursor=None,
+            vehicle_ref=None, member_ref=None, from_datetime=None, to_datetime=None)
         self.assertEqual(result, {"active_usage": None, "recent_usage": []})
         self.assertEqual(response.headers["Cache-Control"], "no-store")
 
@@ -849,11 +869,11 @@ class CreateFamilyRouteTests(unittest.TestCase):
             types.SimpleNamespace(
                 normalized_address="תל אביב, דיזנגוף, 120",
                 display_address="דיזנגוף 120, תל אביב, ישראל",
-                resolution_token="opaque-resolution-token",
+                resolution_token="opaque-resolution-token", latitude=32.0809, longitude=34.7806,
             )
         )
 
-    def test_address_resolution_returns_opaque_token_without_coordinates(self):
+    def test_address_resolution_returns_token_and_verified_coordinates(self):
         request = types.SimpleNamespace(home_address="תל אביב, דיזנגוף, 120")
 
         response = main.resolve_family_address(
@@ -865,9 +885,9 @@ class CreateFamilyRouteTests(unittest.TestCase):
             "normalized_address": "תל אביב, דיזנגוף, 120",
             "display_address": "דיזנגוף 120, תל אביב, ישראל",
             "resolution_token": "opaque-resolution-token",
+            "latitude": 32.0809, "longitude": 34.7806,
         })
-        self.assertNotIn("latitude", response)
-        self.assertNotIn("longitude", response)
+        self.assertEqual(response["latitude"], 32.0809)
 
     def test_address_resolution_keeps_existing_structured_503_response(self):
         family_creation_stub.resolve_create_family_address.side_effect = (

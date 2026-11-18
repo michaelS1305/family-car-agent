@@ -1,32 +1,12 @@
-# React + TypeScript + Vite
+# Legacy frontend retired (Phase 5C)
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The legacy application source, UI tests, package/build configuration and public
+assets have been removed. Do not build or deploy this directory.
 
-Currently, two official plugins are available:
+Retained: src/legal/legalDocuments.ts is the original legal-copy reference named
+by Android's LegalCopy.kt. It is not an executable frontend entry point.
+Local ignored node_modules and .env.local were preserved, without reading secrets.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The public website lives in ../website. Web CI still targets this retired directory;
+its migration is reserved for Phase 5D. Do not push this intermediate state as a
+release. Backend/native APIs and installed native integrations remain unchanged.

@@ -3,7 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, ConfigDict
 
 import account_deletion as deletion
@@ -13,6 +13,17 @@ from identity import AuthenticatedSupabaseUser
 
 
 router = APIRouter(prefix='/api/account/deletion')
+APPLE_HELP_LINK = '</api/account/deletion/apple-instructions>; rel="help"'
+
+
+@router.get('/apple-instructions')
+def apple_instructions():
+    # Generic public help only: no job lookup, account data or mutation. Remains
+    # available after Auth deletion without a JWT or a bearer receipt secret.
+    return {
+        'instructions': 'אם נדרש ביטול ידני, פתחו את הגדרות חשבון Apple, בחרו התחברות באמצעות Apple ובטלו את הגישה של FCA. הוראות אלו אינן אישור למצב המחיקה או לביטול ההרשאה.',
+        'url': 'https://support.apple.com/102571',
+    }
 
 
 class Confirmation(BaseModel):
@@ -21,17 +32,20 @@ class Confirmation(BaseModel):
 
 
 @router.get('/preview')
-def preview(identity: AuthenticatedSupabaseUser = Depends(get_deletion_identity)):
+def preview(response: Response, identity: AuthenticatedSupabaseUser = Depends(get_deletion_identity)):
+    response.headers['Link'] = APPLE_HELP_LINK
     return deletion.preview(pool, identity.auth_user_id)
 
 
 @router.get('')
-def status(identity: AuthenticatedSupabaseUser = Depends(get_deletion_identity)):
+def status(response: Response, identity: AuthenticatedSupabaseUser = Depends(get_deletion_identity)):
+    response.headers['Link'] = APPLE_HELP_LINK
     return deletion.status(pool, identity.auth_user_id)
 
 
 @router.post('', status_code=202)
-def confirm(body: Confirmation, identity: AuthenticatedSupabaseUser = Depends(get_deletion_identity)):
+def confirm(body: Confirmation, response: Response, identity: AuthenticatedSupabaseUser = Depends(get_deletion_identity)):
+    response.headers['Link'] = APPLE_HELP_LINK
     return deletion.confirm(pool, identity.auth_user_id)
 
 

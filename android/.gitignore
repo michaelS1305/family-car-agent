@@ -7,6 +7,9 @@ fca.dev.properties
 fca.prod.properties
 .idea/
 *.iml
+*.jks
+*.keystore
+*.p12
 
 
 # Local FCA diagnostics and device database exports

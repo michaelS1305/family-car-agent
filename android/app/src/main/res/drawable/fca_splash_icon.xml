@@ -1,0 +1,7 @@
+<!-- 46% square fits entirely inside the platform's two-thirds-diameter safe circle. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/fca_logo_intro"
+    android:insetLeft="27%"
+    android:insetTop="27%"
+    android:insetRight="27%"
+    android:insetBottom="27%" />

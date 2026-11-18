@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 from dotenv import load_dotenv
@@ -8,8 +9,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import JSONResponse
 from account_deletion_api import router as deletion_router, deletion_lifespan
+from apple_credentials_api import router as apple_credentials_router
 from vehicle_api import router as vehicle_router
+from vehicle_reference_api import router as vehicle_reference_router
 from device_api import router as device_router
+from native_push_api import router as native_push_router
+from contact_api import router as contact_router
+from native_push_worker import native_lifespan
 from deletion_gate import IdentityUnavailable
 
 load_dotenv()
@@ -119,10 +125,20 @@ def _cors_allowed_origins() -> list[str]:
     return origins
 
 
-app = FastAPI(lifespan=deletion_lifespan)
+@asynccontextmanager
+async def app_lifespan(app):
+    async with deletion_lifespan(app), native_lifespan(app):
+        yield
+
+
+app = FastAPI(lifespan=app_lifespan)
 app.include_router(deletion_router)
+app.include_router(apple_credentials_router)
 app.include_router(vehicle_router)
+app.include_router(vehicle_reference_router)
 app.include_router(device_router)
+app.include_router(native_push_router)
+app.include_router(contact_router)
 
 
 @app.exception_handler(IdentityUnavailable)
@@ -135,6 +151,8 @@ async def identity_unavailable(request, exc):
 
 @app.exception_handler(RequestValidationError)
 async def safe_disconnect_validation_error(request, exc):
+    if request.url.path.startswith('/api/native-push/'):
+        return JSONResponse(status_code=422, content={'detail': {'code': 'INVALID_NATIVE_PUSH_REQUEST'}})
     if request.url.path in ("/car/connect", "/car/disconnect"):
         # Never serialize non-finite inputs or echo the credential/body.
         return JSONResponse(status_code=422, content={
@@ -148,6 +166,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["Authorization", "Content-Type"],
+    expose_headers=["Retry-After"],
 )
 
 if _environment_flag_is_true("RUN_DB_INIT"):
@@ -302,12 +321,17 @@ def unregister_push(
 
 @app.get("/api/reservations", response_model=list[ReservationResponse], status_code=200)
 def get_reservations(
-    time: str = "future",
+    time: str | None = None,
     scope: str = "all",
     current_user: CurrentUser = Depends(get_current_user),
+    range_start: str | None = None,
+    range_end: str | None = None,
+    vehicle_ref: str | None = None,
+    member_ref: str | None = None,
 ):
     try:
-        return list_reservations(current_user, time, scope)
+        return list_reservations(current_user, time, scope, range_start=range_start,
+                                 range_end=range_end, vehicle_ref=vehicle_ref, member_ref=member_ref)
     except ReservationCenterError as error:
         _raise_reservation_center_error(error)
 
@@ -427,10 +451,17 @@ def bind_carplay_vehicle(request: CarPlayVehicleBindingRequest, current_user: Cu
 def car_history(
     response: Response,
     current_user: CurrentUser = Depends(get_current_user),
+    limit: int = 50,
+    cursor: UUID | None = None,
+    vehicle_ref: UUID | None = None,
+    member_ref: UUID | None = None,
+    from_datetime: str | None = None,
+    to_datetime: str | None = None,
 ):
     response.headers["Cache-Control"] = "no-store"
     try:
-        return get_car_history(current_user)
+        return get_car_history(current_user, limit=limit, cursor=cursor, vehicle_ref=vehicle_ref,
+                               member_ref=member_ref, from_datetime=from_datetime, to_datetime=to_datetime)
     except CarHistoryError as error:
         raise HTTPException(
             status_code=error.status_code,
@@ -543,6 +574,8 @@ def resolve_family_address(
         "normalized_address": resolved.normalized_address,
         "display_address": resolved.display_address,
         "resolution_token": resolved.resolution_token,
+        "latitude": resolved.latitude,
+        "longitude": resolved.longitude,
     }
 
 
