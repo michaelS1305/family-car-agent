@@ -16,15 +16,23 @@ from tests import test_native_push_api
 
 class IsolationTests(unittest.TestCase):
     def environment(self, name='dev'):
-        return dict(NATIVE_PUSH_PROJECT='family-car-agent-dev',
+        values = dict(NATIVE_PUSH_PROJECT='family-car-agent-dev',
             NATIVE_PUSH_CREDENTIALS_FILE=os.path.abspath('offline-unused.json'),
             NATIVE_PUSH_KEY_ID='fixture',
             NATIVE_PUSH_ENCRYPTION_KEY=base64.b64encode(b'e'*32).decode(),
             NATIVE_PUSH_FINGERPRINT_KEY=base64.b64encode(b'f'*32).decode(),
             NATIVE_PUSH_ENVIRONMENT=name,
-            NATIVE_PUSH_ANDROID_PACKAGE='il.fca.companion.dev' if name=='dev' else 'il.fca.companion',
+            NATIVE_PUSH_ANDROID_PACKAGE='il.fca.companion.dev' if name=='dev' else 'com.familycaragent.app',
             SUPABASE_URL='https://jouhqvbxhsvkluwkqmdg.supabase.co' if name=='dev'
                 else 'https://xrgijytfigcuxmdktvmd.supabase.co')
+        if name == 'prod':
+            for key in list(values):
+                if key in ('NATIVE_PUSH_PROJECT','NATIVE_PUSH_CREDENTIALS_FILE','NATIVE_PUSH_KEY_ID',
+                           'NATIVE_PUSH_ENCRYPTION_KEY','NATIVE_PUSH_FINGERPRINT_KEY'):
+                    values[key.replace('NATIVE_PUSH_', 'NATIVE_PUSH_IOS_PROD_')] = values.pop(key)
+            values['NATIVE_PUSH_IOS_PROD_PROJECT'] = 'family-car-agent'
+            values['NATIVE_PUSH_IOS_PROD_ENABLED'] = 'true'
+        return values
 
     def test_environment_matrix_and_missing_values(self):
         for name in ('dev','prod'):
@@ -41,14 +49,14 @@ class IsolationTests(unittest.TestCase):
             for field,value in [('NATIVE_PUSH_ENVIRONMENT','unknown'),
                 ('NATIVE_PUSH_ANDROID_PACKAGE',self.environment('prod' if name=='dev' else 'dev')['NATIVE_PUSH_ANDROID_PACKAGE']),
                 ('SUPABASE_URL',self.environment('prod' if name=='dev' else 'dev')['SUPABASE_URL']),
-                ('NATIVE_PUSH_PROJECT','another-project')]:
+                ('NATIVE_PUSH_PROJECT' if name == 'dev' else 'NATIVE_PUSH_IOS_PROD_PROJECT','another-project')]:
                 with self.subTest(name=name,field=field):
                     with patch.dict(os.environ,{**env,field:value},clear=True),self.assertRaises(ConfigurationError):
                         Config.load()
 
     def test_mock_provider_rejects_cross_package_for_challenge_refresh_and_retry(self):
         # This models Google's documented restriction, not a live FCM proof.
-        for package in ('il.fca.companion.dev','il.fca.companion'):
+        for package in ('il.fca.companion.dev','com.familycaragent.app'):
             transport=Mock()
             def send(url, **kwargs):
                 message=kwargs['json']['message']
@@ -57,7 +65,9 @@ class IsolationTests(unittest.TestCase):
                 return Mock(status_code=200 if message['token']==package else 400,
                             json=lambda:{},headers={})
             transport.post.side_effect=send
-            provider=Fcm(replace(CONFIG,android_package=package),transport=transport,clock=lambda:1000)
+            with patch.dict(os.environ,self.environment('dev' if package.endswith('.dev') else 'prod'),clear=True):
+                config=Config.load()
+            provider=Fcm(config,transport=transport,clock=lambda:1000)
             provider._token,provider._until='offline-access',2000
             for data in ({'kind':'registration_challenge'},{'kind':'refresh','version':'1'}):
                 for attempt in range(2):

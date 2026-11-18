@@ -9,8 +9,8 @@ import java.util.concurrent.TimeUnit
 internal object PushPlatform {
     const val enabled = true
     internal fun validIdentity(packageName: String, project: String?, sender: String?, app: String?): Boolean =
-        packageName == "il.fca.companion" && project == "family-car-agent-dev" &&
-            sender == "452367109329" && app == "1:452367109329:android:c5a668180a0a8b84bdc9f0"
+        packageName == "com.familycaragent.app" && project == "family-car-agent" &&
+            sender == "249909620080" && app == "1:249909620080:android:c0f07c3b74400bfaee33b5"
 
     internal fun configured(): Boolean = runCatching {
         val app = FirebaseApp.getInstance()

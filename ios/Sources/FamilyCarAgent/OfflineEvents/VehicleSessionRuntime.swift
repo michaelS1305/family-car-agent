@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import Foundation
 import UIKit
+import Network
 
 /// Process-wide composition root for the app target (including background relaunch).
 /// No registration, queue creation or scheduling occurs merely by opening FCA.
@@ -16,23 +17,45 @@ import UIKit
     private var identityEpoch = 0
     private(set) var authorizationStorageFailed = false
     private var recordingPermit = VehicleRecordingPermit()
+    private let connectivity = NWPathMonitor()
     private func invalidateRecording() {
         recordingPermit.invalidate()
         recordingPermit = VehicleRecordingPermit()
     }
 
     private init() throws {
-        environment = try AppEnvironment.current()
-        guard Bundle.main.object(forInfoDictionaryKey: "FCAEnvironment") as? String == "development",
-              let key = Bundle.main.object(forInfoDictionaryKey: "FCASupabasePublishableKey") as? String else { throw AuthFailure.configuration }
-        api = try AuthAPI(environment: environment, publicKey: key)
-        sessions = SessionManager(vault: KeychainVault(environment: environment), transport: api)
+        let composition = try SessionComposition(
+            bundleIdentifier: Bundle.main.bundleIdentifier,
+            configurationName: Bundle.main.object(forInfoDictionaryKey: "FCAEnvironment") as? String,
+            publicKey: Bundle.main.object(forInfoDictionaryKey: "FCASupabasePublishableKey") as? String,
+            vault: { KeychainVault(environment: $0) })
+        environment = composition.environment
+        api = composition.api
+        sessions = composition.sessions
         authentication = SessionVehicleAuthentication(environment: environment, sessions: sessions)
         sessions.onInvalidation = { [weak self] old in
             self?.invalidate(old)
             NativePushService.shared.invalidate()
         }
         sessions.onVehicleBindingsReduced = { [weak self] in self?.invalidateRecording() }
+        connectivity.pathUpdateHandler = { [weak self] path in
+            guard path.status == .satisfied else { return }
+            Task { @MainActor in await self?.recoverPending() }
+        }
+        connectivity.start(queue: DispatchQueue(label: "fca.vehicle.connectivity"))
+    }
+
+    /// Recover only a previously authorized installation. Never register or bind here.
+    func recoverPending() async {
+        guard let session = sessions.session, session.vehicleScope != nil else { return }
+        let epoch = identityEpoch
+        do {
+            try await validateInstallation(session)
+            guard epoch == identityEpoch, sessions.session?.owner == session.owner else { return }
+            let c = try context(session)
+            _ = try attach(c, queue: VehicleEventQueue(directory: VehicleEventQueue.applicationDirectory()))
+            await coordinator?.wake()
+        } catch { /* Keep durable work intact; explicit setup exposes recovery errors. */ }
     }
 
     private func deviceSetup() throws -> NativeDeviceSetup {

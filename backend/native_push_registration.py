@@ -46,7 +46,7 @@ def key_cohort(conn, config):
 
 
 def begin(conn, user, config, *, installation_ref, request_id, platform, token):
-    if platform not in ('android', 'ios') or (platform == 'ios' and config.environment != 'dev'):
+    if not config.supports(platform):
         return response('REGISTRATION_UNAVAILABLE')
     scope(conn, user)
     if platform == 'ios':
@@ -119,11 +119,11 @@ def confirm(conn, user, config, *, installation_ref, challenge_ref, nonce):
     installation = conn.execute('SELECT generation,status,platform FROM native_push_installations '
         "WHERE installation_ref=%s AND user_id=%s AND provider_project=%s AND platform IN ('android','ios') FOR UPDATE",
         (installation_ref,user.user_id,config.project)).fetchone()
-    if not installation:
+    if not installation or not config.supports(installation[2]):
         return response('REGISTRATION_UNAVAILABLE')
     if installation[2] == 'ios':
         from native_push_revocation import permitted
-        if config.environment != 'dev' or not permitted(conn,user.user_id,config.project,installation_ref):
+        if not config.supports('ios') or not permitted(conn,user.user_id,config.project,installation_ref):
             return response('REGISTRATION_UNAVAILABLE')
     challenge = conn.execute('SELECT status,expected_generation,expires_at,verify_attempts,nonce_hash,'
         'candidate_token_ciphertext,candidate_fingerprint,encryption_key_id,activated_generation '

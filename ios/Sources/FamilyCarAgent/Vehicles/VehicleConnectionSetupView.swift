@@ -15,7 +15,6 @@ struct VehicleConnectionSetupView: View {
     @State private var revision = 0
 
     var body: some View {
-        #if DEBUG
         VStack(spacing: 0) {
             header
             ScrollView {
@@ -38,12 +37,6 @@ struct VehicleConnectionSetupView: View {
             }
         }
         .onDisappear { revision += 1; operation?.cancel() }
-        #else
-        VStack {
-            Text("הגדרת קיצורי הרכב זמינה כעת בגרסת Dev DEBUG בלבד.")
-            Button("סגירה") { close() }
-        }.modifier(VehiclesAppearance())
-        #endif
     }
     private var header: some View {
         HStack(spacing: 6) {

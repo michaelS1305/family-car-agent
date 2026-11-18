@@ -12,7 +12,7 @@ data class FcaEnvironment(val id: String, val label: String, val backend: String
 val environments = mapOf(
     "dev" to FcaEnvironment("il.fca.companion.dev", "FCA Companion Dev",
         "https://family-car-agent-dev.onrender.com", "jouhqvbxhsvkluwkqmdg"),
-    "prod" to FcaEnvironment("il.fca.companion", "FCA Companion",
+    "prod" to FcaEnvironment("com.familycaragent.app", "Family Car Agent",
         "https://family-car-agent.onrender.com", "xrgijytfigcuxmdktvmd"),
 )
 fun validateConfiguration(env: FcaEnvironment, config: Properties) {
@@ -43,22 +43,36 @@ val configurations = environments.mapValues { (flavor, _) ->
 // Dev-only Maps credential. Never reuse the backend Geocoding credential.
 val devMapsKey = providers.environmentVariable("FCA_ANDROID_DEV_MAPS_API_KEY").orNull
     ?: configurations.getValue("dev").getProperty("MAPS_API_KEY", "")
+// Explicit opt-in; signing secrets are supplied only to the release build process.
+val productionRelease = providers.gradleProperty("fcaProductionRelease").orNull == "true"
+fun signingValue(name: String): String = providers.environmentVariable(name).orNull
+    ?.takeIf { it.isNotBlank() } ?: throw GradleException("Missing Production signing input: $name")
 android {
     namespace = "il.fca.companion"
     compileSdk = 36
     defaultConfig {
-        applicationId = "il.fca.companion"
+        applicationId = "com.familycaragent.app"
         minSdk = 34
         targetSdk = 36
         versionCode = 1
         versionName = "0.1"
     }
     flavorDimensions += "environment"
+    if (productionRelease) {
+        signingConfigs.create("productionUpload") {
+            storeFile = file(signingValue("FCA_ANDROID_KEYSTORE_FILE"))
+            require(storeFile!!.isFile) { "Production signing file unavailable" }
+            storePassword = signingValue("FCA_ANDROID_KEYSTORE_PASSWORD")
+            keyAlias = signingValue("FCA_ANDROID_KEY_ALIAS")
+            keyPassword = signingValue("FCA_ANDROID_KEY_PASSWORD")
+        }
+    }
     productFlavors {
         environments.forEach { (flavor, env) ->
             create(flavor) {
                 dimension = "environment"
                 applicationId = env.id
+                if (flavor == "prod" && productionRelease) signingConfig = signingConfigs.getByName("productionUpload")
                 resValue("string", "app_name", env.label)
                 manifestPlaceholders["oauthScheme"] = env.id
                 buildConfigField("boolean", "ADDRESS_MAPS_ENABLED", (flavor == "dev" && devMapsKey.isNotBlank()).toString())
@@ -83,6 +97,12 @@ androidComponents.onVariants { variant ->
     val suffix = variant.name.replaceFirstChar { it.uppercaseChar() }
     val validation = tasks.register("validate${suffix}Environment") {
         doLast {
+            if (variant.name == "prodRelease") {
+                require(productionRelease) { "Production Release requires explicit -PfcaProductionRelease=true and owner-provided signing inputs" }
+                require(!configurations.getValue("prod").getProperty("SUPABASE_PUBLISHABLE_KEY", "").contains("fixture")) {
+                    "Production Release cannot use a test configuration fixture"
+                }
+            }
             try { validateConfiguration(environments.getValue(flavor), configurations.getValue(flavor)) }
             catch (e: IllegalArgumentException) {
                 throw GradleException("Invalid fca.$flavor.properties: ${e.message}")
@@ -157,9 +177,9 @@ tasks.withType<com.google.gms.googleservices.GoogleServicesTask>().configureEach
                 val json = groovy.json.JsonSlurper().parse(source) as Map<*, *>
                 val project = json["project_info"] as Map<*, *>
                 val clients = (json["client"] as List<*>).map { (it as Map<*, *>)["client_info"] as Map<*, *> }
-                    .filter { (it["android_client_info"] as Map<*, *>)["package_name"] == "il.fca.companion" }
-                project["project_id"] == "family-car-agent-dev" && project["project_number"] == "452367109329" &&
-                    clients.size == 1 && clients.single()["mobilesdk_app_id"] == "1:452367109329:android:c5a668180a0a8b84bdc9f0"
+                    .filter { (it["android_client_info"] as Map<*, *>)["package_name"] == "com.familycaragent.app" }
+                project["project_id"] == "family-car-agent" && project["project_number"] == "249909620080" &&
+                    clients.size == 1 && clients.single()["mobilesdk_app_id"] == "1:249909620080:android:c0f07c3b74400bfaee33b5"
             }.getOrDefault(false)
             require(valid) { "Production Firebase configuration is missing or does not match the approved registration" }
         }

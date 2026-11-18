@@ -12,6 +12,11 @@ on:
       - .github/workflows/android.yml
       - android/**
   workflow_dispatch:
+    inputs:
+      production_release:
+        description: Build a signed Production AAB (no publication)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -52,7 +57,7 @@ jobs:
           cat > fca.prod.properties <<'EOF'
           FCA_BASE_URL=https://family-car-agent.onrender.com
           SUPABASE_URL=https://xrgijytfigcuxmdktvmd.supabase.co
-          OAUTH_CALLBACK_URI=il.fca.companion://auth/callback
+          OAUTH_CALLBACK_URI=com.familycaragent.app://auth/callback
           SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci_fixture
           EOF
       - name: Restore Firebase Dev configuration
@@ -84,11 +89,11 @@ jobs:
               config = json.loads(raw)
               project = config["project_info"]
               clients = [client["client_info"] for client in config["client"]
-                         if client["client_info"]["android_client_info"]["package_name"] == "il.fca.companion"]
-              valid = (project["project_id"] == "family-car-agent-dev"
-                       and project["project_number"] == "452367109329"
+                         if client["client_info"]["android_client_info"]["package_name"] == "com.familycaragent.app"]
+              valid = (project["project_id"] == "family-car-agent"
+                       and project["project_number"] == "249909620080"
                        and len(clients) == 1
-                       and clients[0]["mobilesdk_app_id"] == "1:452367109329:android:c5a668180a0a8b84bdc9f0")
+                       and clients[0]["mobilesdk_app_id"] == "1:249909620080:android:c0f07c3b74400bfaee33b5")
           except (ValueError, KeyError, TypeError):
               sys.exit("Invalid Firebase Production configuration JSON or structure")
           if not valid:
@@ -105,3 +110,66 @@ jobs:
         run: bash ./gradlew :app:testDevDebugUnitTest :app:lintDevDebug :app:assembleDevDebug
       - name: Prod unit tests, lint and debug assembly
         run: bash ./gradlew :app:testProdDebugUnitTest :app:lintProdDebug :app:assembleProdDebug
+
+  production-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.production_release
+    needs: android
+    runs-on: ubuntu-24.04
+    environment: android-production
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: android-actions/setup-android@v4
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+      - name: Prepare runner-only Production inputs
+        env:
+          FIREBASE_CONFIG: ${{ secrets.FIREBASE_PROD_GOOGLE_SERVICES_JSON_B64 }}
+          PUBLIC_SUPABASE_KEY: ${{ secrets.FCA_ANDROID_PROD_SUPABASE_PUBLISHABLE_KEY }}
+          UPLOAD_KEYSTORE: ${{ secrets.FCA_ANDROID_UPLOAD_KEYSTORE_B64 }}
+        run: |
+          python3 - <<'PY'
+          import base64, os, sys
+          from pathlib import Path
+          try:
+              firebase = os.environ['FIREBASE_CONFIG']
+              key = os.environ['PUBLIC_SUPABASE_KEY']
+              store = base64.b64decode(os.environ['UPLOAD_KEYSTORE'], validate=True)
+              if not firebase or not key or not store or '\n' in key or '\r' in key:
+                  raise ValueError()
+              Path('app/src/prod/google-services.json').write_text(firebase, encoding='utf-8')
+              Path('fca.prod.properties').write_text(
+                  'FCA_BASE_URL=https://family-car-agent.onrender.com\n'
+                  'SUPABASE_URL=https://xrgijytfigcuxmdktvmd.supabase.co\n'
+                  'OAUTH_CALLBACK_URI=com.familycaragent.app://auth/callback\n'
+                  'SUPABASE_PUBLISHABLE_KEY=' + key + '\n', encoding='utf-8')
+              destination = Path(os.environ['RUNNER_TEMP']) / 'fca-upload.jks'
+              destination.write_bytes(store)
+              destination.chmod(0o600)
+          except Exception:
+              sys.exit('Production build inputs unavailable or invalid')
+          PY
+      - name: Build signed Production bundle
+        env:
+          FCA_ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/fca-upload.jks
+          FCA_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.FCA_ANDROID_KEYSTORE_PASSWORD }}
+          FCA_ANDROID_KEY_ALIAS: ${{ secrets.FCA_ANDROID_KEY_ALIAS }}
+          FCA_ANDROID_KEY_PASSWORD: ${{ secrets.FCA_ANDROID_KEY_PASSWORD }}
+        run: bash ./gradlew --no-daemon -PfcaProductionRelease=true :app:bundleProdRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-production-aab
+          path: android/app/build/outputs/bundle/prodRelease/*.aab
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove runner-only signing material
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/fca-upload.jks" app/src/prod/google-services.json fca.prod.properties

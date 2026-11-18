@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.AbsoluteAlignment
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.BlendMode
@@ -280,7 +281,7 @@ private fun SettingsHeader(back: () -> Unit) {
                 Image(
                     painterResource(R.drawable.ic_chevron_back),
                     "חזרה לדשבורד",
-                    Modifier.size(22.dp)
+                    Modifier.size(22.dp).scale(scaleX = -1f, scaleY = 1f)
                 , colorFilter = fcaControlIconFilter())
             }
         }

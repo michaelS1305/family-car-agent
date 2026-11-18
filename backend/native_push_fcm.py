@@ -62,6 +62,8 @@ class Fcm:
                 credential = self.loader(self.config.credentials_path)
                 if (credential.get('type') != 'service_account'
                         or credential.get('project_id') != self.config.project
+                        or (self.config.project == 'family-car-agent' and credential.get('client_email') !=
+                            'fca-push-prod@family-car-agent.iam.gserviceaccount.com')
                         or credential.get('token_uri') != TOKEN_URL
                         or not credential.get('client_email', '').endswith('.iam.gserviceaccount.com')):
                     raise ConfigurationError()
@@ -88,7 +90,7 @@ class Fcm:
         diagnostic = (diagnostics.enabled() and self.config.environment == 'dev'
                       and platform == 'ios' and data.get('kind') == 'registration_challenge')
         # Never let an untrusted platform select an unrestricted send path.
-        if platform not in ('android','ios') or (platform == 'ios' and self.config.environment != 'dev'):
+        if not self.config.supports(platform):
             return Result('configuration')
         try:
             access = self._access_token()
@@ -99,14 +101,14 @@ class Fcm:
                 'android': {'ttl': f'{remaining}s', 'priority': 'high',
                             'restricted_package_name': self.config.android_package}}
             if platform == 'ios':
-                from native_push_ios import TOPIC
+                topic = self.config.ios_topic
                 challenge = data.get('kind') == 'registration_challenge'
                 if not challenge and not isinstance(data.get('alert'),dict):
                     return Result('invalid_payload')
                 aps = {'content-available':1} if challenge else {'alert':data['alert'],'sound':'default'}
                 message = {'token':token,
                     'data':{key:value for key,value in data.items() if key != 'alert'},
-                    'apns':{'headers':{'apns-topic':TOPIC,
+                    'apns':{'headers':{'apns-topic':topic,
                         'apns-push-type':'background' if challenge else 'alert',
                         'apns-priority':'5' if challenge else '10',
                         'apns-expiration':str(int(self.clock())+min(remaining,120))},'payload':{'aps':aps}}}

@@ -140,7 +140,7 @@ class DiagnosticTests(unittest.TestCase):
         http = Mock(); http.post.return_value.status_code = 401
         http.post.return_value.json.return_value = {'error': {'message': 'PRIVATE', 'details': [
             {'@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', 'errorCode': 'THIRD_PARTY_AUTH_ERROR'}]}}
-        config = Mock(environment='dev', android_package='test', project='test')
+        config = Mock(environment='dev', android_package='test', project='test', ios_topic='com.familycaragent.app.dev')
         payloads = []
         for enabled in ('false', 'true'):
             provider = Fcm(config, transport=http, clock=lambda: 1000)

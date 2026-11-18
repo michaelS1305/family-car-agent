@@ -23,7 +23,7 @@ class EnvironmentAuthTest {
     }
     @Test fun selectedFlavorHasExactIdentityEndpointsAndManifest() {
         val dev = BuildConfig.FLAVOR == "dev"
-        val id = if (dev) "il.fca.companion.dev" else "il.fca.companion"
+        val id = if (dev) "il.fca.companion.dev" else "com.familycaragent.app"
         assertEquals(id, BuildConfig.APPLICATION_ID)
         assertEquals(if (dev) "https://family-car-agent-dev.onrender.com" else
             "https://family-car-agent.onrender.com", BuildConfig.FCA_BASE_URL)
@@ -31,7 +31,7 @@ class EnvironmentAuthTest {
             "https://xrgijytfigcuxmdktvmd.supabase.co", BuildConfig.SUPABASE_URL)
         assertEquals("$id://auth/callback", BuildConfig.OAUTH_CALLBACK_URI)
         val context = RuntimeEnvironment.getApplication()
-        assertEquals(if (dev) "FCA Companion Dev" else "FCA Companion", context.getString(R.string.app_name))
+        assertEquals(if (dev) "FCA Companion Dev" else "Family Car Agent", context.getString(R.string.app_name))
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(BuildConfig.OAUTH_CALLBACK_URI))
             .addCategory(Intent.CATEGORY_BROWSABLE).addCategory(Intent.CATEGORY_DEFAULT)
             .setPackage(BuildConfig.APPLICATION_ID)
@@ -40,7 +40,7 @@ class EnvironmentAuthTest {
 
     @Test fun callbackForOtherEnvironmentRejectedBeforeSessionOrNetworkAccess() {
         val context = RuntimeEnvironment.getApplication()
-        val other = if (BuildConfig.FLAVOR == "dev") "il.fca.companion" else "il.fca.companion.dev"
+        val other = if (BuildConfig.FLAVOR == "dev") "com.familycaragent.app" else "il.fca.companion.dev"
         val failure = runCatching {
             SessionStore(context).finishLogin(Uri.parse("$other://auth/callback?code=unused&nonce=unused"))
         }.exceptionOrNull()

@@ -92,5 +92,5 @@ def schedule(pool, project):
                      status,next_attempt_at,created_at,updated_at)
                     SELECT gen_random_uuid(),%s,installation_ref,user_id,generation,'pending',
                       statement_timestamp(),statement_timestamp(),statement_timestamp()
-                    FROM native_push_installations WHERE user_id=%s AND status='active' AND provider_project=%s
-                    """, (event,recipient,project))
+                    FROM native_push_installations WHERE user_id=%s AND status='active'
+                    """, (event,recipient))

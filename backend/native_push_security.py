@@ -14,6 +14,10 @@ class ConfigurationError(Exception):
         super().__init__('Native push configuration unavailable')
 
 
+class InstallationUnavailable(ConfigurationError):
+    """No owned installation exists. No provider configuration may be selected."""
+
+
 @dataclass(frozen=True)
 class Config:
     project: str
@@ -25,22 +29,29 @@ class Config:
     android_package: str
 
     @classmethod
-    def load(cls):
+    def load(cls, platform="android"):
         try:
-            project = os.environ['NATIVE_PUSH_PROJECT']
-            path = os.environ['NATIVE_PUSH_CREDENTIALS_FILE']
-            key_id = os.environ['NATIVE_PUSH_KEY_ID']
-            enc = base64.b64decode(os.environ['NATIVE_PUSH_ENCRYPTION_KEY'], validate=True)
-            fp = base64.b64decode(os.environ['NATIVE_PUSH_FINGERPRINT_KEY'], validate=True)
+            environment = os.environ['NATIVE_PUSH_ENVIRONMENT']
+            production = environment == 'prod'
+            if platform not in ('android', 'ios') or (production and not ios_production_enabled()):
+                raise ValueError()
+            # Preserve the established Production encryption cohort and credential names.
+            # The historical IOS prefix now serves both native Production platforms.
+            prefix = 'NATIVE_PUSH_IOS_PROD_' if production else 'NATIVE_PUSH_'
+            project = os.environ[prefix + 'PROJECT']
+            path = os.environ[prefix + 'CREDENTIALS_FILE']
+            key_id = os.environ[prefix + 'KEY_ID']
+            enc = base64.b64decode(os.environ[prefix + 'ENCRYPTION_KEY'], validate=True)
+            fp = base64.b64decode(os.environ[prefix + 'FINGERPRINT_KEY'], validate=True)
             environment = os.environ['NATIVE_PUSH_ENVIRONMENT']
             package = os.environ['NATIVE_PUSH_ANDROID_PACKAGE']
             expected = {
                 'dev': ('il.fca.companion.dev', 'https://jouhqvbxhsvkluwkqmdg.supabase.co'),
-                'prod': ('il.fca.companion', 'https://xrgijytfigcuxmdktvmd.supabase.co'),
+                'prod': ('com.familycaragent.app', 'https://xrgijytfigcuxmdktvmd.supabase.co'),
             }.get(environment)
             if (expected is None or package != expected[0]
                     or os.environ.get('SUPABASE_URL', '').rstrip('/') != expected[1]
-                    or project != 'family-car-agent-dev'):
+                    or project != ('family-car-agent' if production else 'family-car-agent-dev')):
                 raise ValueError()
             if (not re.fullmatch(r'[a-z][a-z0-9-]{4,61}[a-z0-9]', project)
                     or not os.path.isabs(path) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', key_id)
@@ -49,6 +60,17 @@ class Config:
             return cls(project, path, key_id, enc, fp, environment, package)
         except (KeyError, ValueError, TypeError):
             raise ConfigurationError() from None
+
+    def supports(self, platform):
+        if self.project == 'family-car-agent-dev':
+            return self.environment == 'dev' and platform in ('android', 'ios')
+        return self.project == 'family-car-agent' and self.environment == 'prod' and platform in ('android', 'ios')
+
+    @property
+    def ios_topic(self):
+        if not self.supports('ios'):
+            raise ConfigurationError()
+        return 'com.familycaragent.app' if self.environment == 'prod' else 'com.familycaragent.app.dev'
 
     def fingerprint(self, value):
         return hmac.digest(self.fingerprint_key, (self.project + '\0' + value).encode(), 'sha256')
@@ -76,3 +98,29 @@ def token_context(user, installation):
 
 def nonce_context(user, challenge):
     return f'fca-native-challenge:{user}:{challenge}'
+
+
+def ios_production_enabled():
+    return (os.getenv('NATIVE_PUSH_ENVIRONMENT') == 'prod'
+            and os.getenv('NATIVE_PUSH_IOS_PROD_ENABLED', '').lower() == 'true')
+
+
+def for_platform(base, platform):
+    if not base.supports(platform):
+        raise ConfigurationError()
+    return base
+
+
+def for_installation(conn, user, base, installation):
+    # In Dev there is a single trusted cohort. Production routes by stored ownership,
+    # never by a client-supplied provider, project, environment or bundle identifier.
+    if base.environment != 'prod':
+        return base
+    row = conn.execute('SELECT platform,provider_project FROM native_push_installations '
+        'WHERE installation_ref=%s AND user_id=%s', (installation,user.user_id)).fetchone()
+    if not row:
+        raise InstallationUnavailable()
+    selected = for_platform(base,row[0])
+    if selected.project != row[1]:
+        raise ConfigurationError()
+    return selected

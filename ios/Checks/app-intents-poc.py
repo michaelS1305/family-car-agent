@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import re
@@ -14,7 +15,13 @@ PROBE_ID = "com.familycaragent.intentprobe"
 PROBE_NAME = "FCA Intent Probe"
 
 
-def generate(ios: Path, output: Path, probe=False, firebase_config=None):
+def generate(ios: Path, output: Path, probe=False, firebase_config=None, production=False):
+    if production and probe:
+        raise ValueError("Production cannot use the intent probe")
+    if production:
+        from firebase_prod_config import validate as validate_firebase
+    else:
+        from firebase_dev_config import validate as validate_firebase
     ios = ios.resolve()
     output = output.resolve()
     if output == ios or ios in output.parents:
@@ -45,6 +52,20 @@ def generate(ios: Path, output: Path, probe=False, firebase_config=None):
     accessor.write_text("import Foundation\nextension Bundle { static var module: Bundle { .main } }\n")
     info_path = ios / config["infoPath"]
     entitlements_path = ios / config["entitlementsPath"]
+    if production:
+        key = os.environ.get("FCA_IOS_PROD_SUPABASE_PUBLISHABLE_KEY", "")
+        if not key.startswith("sb_publishable_") or any(c.isspace() for c in key):
+            raise ValueError("Production public Supabase configuration required")
+        config["bundleID"] = "com.familycaragent.app"
+        info = plistlib.loads(info_path.read_bytes())
+        info.update(CFBundleDisplayName="Family Car Agent", FCAEnvironment="production", FCASupabasePublishableKey=key)
+        info["CFBundleURLTypes"] = [{"CFBundleURLName":"com.familycaragent.app.auth", "CFBundleURLSchemes":["com.familycaragent.app"]}]
+        info_path = output / "Production-Info.plist"
+        info_path.write_bytes(plistlib.dumps(info))
+        entitlements = plistlib.loads(entitlements_path.read_bytes())
+        entitlements["aps-environment"] = "production"
+        entitlements_path = output / "Production.entitlements"
+        entitlements_path.write_bytes(plistlib.dumps(entitlements))
     source_manifest = {str(p.relative_to(ios)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}
     if probe:
         config["bundleID"] = PROBE_ID
@@ -101,9 +122,9 @@ def generate(ios: Path, output: Path, probe=False, firebase_config=None):
     group = obj("rootgroup", "PBXGroup", children=source_refs + resource_refs + [products_group], sourceTree="<group>")
 
     def configs(key, settings):
-        debug = obj(key + "debug", "XCBuildConfiguration", name="Debug", buildSettings=settings)
+        debug = obj(key + "debug", "XCBuildConfiguration", name="Release" if production else "Debug", buildSettings=settings)
         return obj(key + "configs", "XCConfigurationList", buildConfigurations=[debug],
-                   defaultConfigurationIsVisible="0", defaultConfigurationName="Debug")
+                   defaultConfigurationIsVisible="0", defaultConfigurationName="Release" if production else "Debug")
 
     target_config = configs("target", {
         "PRODUCT_NAME": "FamilyCarAgent", "PRODUCT_MODULE_NAME": "FamilyCarAgent",
@@ -113,11 +134,11 @@ def generate(ios: Path, output: Path, probe=False, firebase_config=None):
         **({"ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon"} if not probe else {}),
         "CODE_SIGN_ENTITLEMENTS": str(entitlements_path),
         "CODE_SIGNING_ALLOWED": "NO", "CODE_SIGNING_REQUIRED": "NO",
-        "SWIFT_VERSION": "6.0", "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG",
-        "SWIFT_OPTIMIZATION_LEVEL": "-Onone", "IPHONEOS_DEPLOYMENT_TARGET": "17.0",
+        "SWIFT_VERSION": "6.0", "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "FCA_PRODUCTION" if production else "DEBUG",
+        "SWIFT_OPTIMIZATION_LEVEL": "-O" if production else "-Onone", "IPHONEOS_DEPLOYMENT_TARGET": "17.0",
         "SDKROOT": "iphoneos", "SUPPORTED_PLATFORMS": "iphoneos",
         "TARGETED_DEVICE_FAMILY": "1", "CURRENT_PROJECT_VERSION": "1",
-        "MARKETING_VERSION": "1.0", "ENABLE_APP_INTENTS_METADATA_EXTRACTION": "YES",
+        "MARKETING_VERSION": "1.0.0" if production else "1.0", "ENABLE_APP_INTENTS_METADATA_EXTRACTION": "YES",
         **({"OTHER_LDFLAGS": "$(inherited) -ObjC"} if not probe else {}),
     })
     target = obj("target", "PBXNativeTarget", name="FamilyCarAgent", productName="FamilyCarAgent",
@@ -135,7 +156,13 @@ def generate(ios: Path, output: Path, probe=False, firebase_config=None):
     (output / "source-manifest.json").write_text(json.dumps(source_manifest, indent=2))
 
 
-def verify(app: Path, report: Path, probe=False):
+def verify(app: Path, report: Path, probe=False, production=False):
+    if production and probe:
+        raise ValueError("Production cannot use the intent probe")
+    if production:
+        from firebase_prod_config import validate_bundle
+    else:
+        from firebase_dev_config import validate_bundle
     metadata = app / "Metadata.appintents"
     files = sorted(p for p in metadata.rglob("*") if p.is_file()) if metadata.is_dir() else []
     nonempty = [p for p in files if p.stat().st_size]
@@ -143,15 +170,15 @@ def verify(app: Path, report: Path, probe=False):
     offline_matches = [str(p.relative_to(app)) for p in nonempty if b"FCATestOfflineUploadIntent" in p.read_bytes()]
     with (app / "Info.plist").open("rb") as f:
         info = plistlib.load(f)
-    result = {"bundle_id_matches_expected": info.get("CFBundleIdentifier") == (PROBE_ID if probe else "com.familycaragent.app.dev"),
-              "environment_matches_expected": info.get("FCAEnvironment") == ("intentprobe" if probe else "development"),
+    result = {"bundle_id_matches_expected": info.get("CFBundleIdentifier") == (PROBE_ID if probe else "com.familycaragent.app" if production else "com.familycaragent.app.dev"),
+              "environment_matches_expected": info.get("FCAEnvironment") == ("intentprobe" if probe else "production" if production else "development"),
               "display_name_matches": not probe or info.get("CFBundleDisplayName") == PROBE_NAME,
               "metadata_files": [str(p.relative_to(app)) for p in nonempty],
               "intent_metadata_matches": matches, "offline_intent_metadata_matches": offline_matches,
               "device_discovery_verified": False}
     if not probe:
         validate_bundle(app)
-        result["firebase_dev_configuration_valid"] = True
+        result["firebase_production_configuration_valid" if production else "firebase_dev_configuration_valid"] = True
         result["launch_screen_dictionary_present"] = isinstance(info.get("UILaunchScreen"), dict)
         primary_icon = info.get("CFBundleIcons", {}).get("CFBundlePrimaryIcon", {})
         icon_files = primary_icon.get("CFBundleIconFiles", [])
@@ -171,7 +198,7 @@ def verify(app: Path, report: Path, probe=False):
         raise ValueError("Processed Dev Info.plist must contain a UILaunchScreen dictionary")
     if not probe and not result["app_icon_present"]:
         raise ValueError("Processed Dev app must contain compiled AppIcon resources and CFBundleIcons")
-    if not (result["bundle_id_matches_expected"] and result["environment_matches_expected"] and result["display_name_matches"] and matches and (offline_matches if probe else result["vehicle_actions_present"])):
+    if not (result["bundle_id_matches_expected"] and result["environment_matches_expected"] and result["display_name_matches"] and (not (matches or offline_matches) if production else matches) and (offline_matches if probe else result["vehicle_actions_present"])):
         raise ValueError("App Intents metadata/Dev identity check failed; inspect metadata-report.json")
 
 
@@ -182,8 +209,9 @@ if __name__ == "__main__":
     parser.add_argument("output", type=Path)
     parser.add_argument("--probe", action="store_true")
     parser.add_argument("--firebase-config", type=Path)
+    parser.add_argument("--production", action="store_true")
     args = parser.parse_args()
     if args.mode == "generate":
-        generate(args.source, args.output, args.probe, args.firebase_config)
+        generate(args.source, args.output, args.probe, args.firebase_config, args.production)
     else:
-        verify(args.source, args.output, args.probe)
+        verify(args.source, args.output, args.probe, args.production)

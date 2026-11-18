@@ -77,6 +77,7 @@ struct ContentView: View {
         .task { await model.start() }
         .onChange(of: model.chatIdentity, initial: true) { _, value in NativePushService.shared.authenticatedEntry(value) }
         .onChange(of: phase) { _, value in if value == .active { Task {
+            if let runtime = try? VehicleSessionRuntime.shared.get() { await runtime.recoverPending() }
             await model.resume()
             NativePushService.shared.authenticatedEntry(model.chatIdentity)
         } } }

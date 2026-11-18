@@ -108,6 +108,8 @@ struct VehicleUploadCompletion: Sendable {
     private let transport: any VehicleUploadTransport
     private let files: VehicleUploadFiles
     private let now: () -> Date
+    private let retryWait: @MainActor (TimeInterval) async throws -> Void
+    private var retryTask: Task<Void, Never>?
     private var tail: Task<Void, Never>?
     private var stopped = false
 
@@ -117,13 +119,17 @@ struct VehicleUploadCompletion: Sendable {
 
     init(environment: AppEnvironment, context: VehicleQueueContext, queue: VehicleEventQueue,
          authentication: any VehicleUploadAuthentication, transport: any VehicleUploadTransport,
-         directory: URL, now: @escaping () -> Date = Date.init) throws {
+         directory: URL, now: @escaping () -> Date = Date.init,
+         retryWait: @escaping @MainActor (TimeInterval) async throws -> Void = { seconds in
+             try await Task.sleep(for: .seconds(min(seconds, 86_400)))
+         }) throws {
         guard context.environment == environment.backendURL.absoluteString + "|" + environment.supabaseURL.absoluteString,
               transport.identifier == Self.sessionIdentifier(environment: environment, context: context) else {
             throw VehicleQueueError.contextUnavailable
         }
         self.context = context; self.environment = environment; self.queue = queue
         auth = authentication; self.transport = transport; self.now = now
+        self.retryWait = retryWait
         files = try VehicleUploadFiles(directory: directory.appendingPathComponent(transport.identifier, isDirectory: true))
     }
 
@@ -137,10 +143,10 @@ struct VehicleUploadCompletion: Sendable {
     }
 
     /// Immediate scheduling fence; cancellation is not a server-side revocation.
-    func fence() { stopped = true }
+    func fence() { stopped = true; retryTask?.cancel(); retryTask = nil }
 
     func suspend() async {
-        stopped = true
+        fence()
         await serial {
             try await self.queue.suspend(self.context)
             for task in await self.transport.allTasks() { self.transport.cancel(task.identifier) }
@@ -172,6 +178,7 @@ struct VehicleUploadCompletion: Sendable {
     }
 
     private func schedule() async throws {
+        retryTask?.cancel(); retryTask = nil
         try await allowed()
         let tasks = await transport.allTasks()
         try await allowed()
@@ -209,7 +216,9 @@ struct VehicleUploadCompletion: Sendable {
             if task.state == .suspended { transport.resume(task.identifier) }
             diagnostic = .registered; return
         }
-        if try files.notBefore(head.event.id).map({ $0 > now() }) == true { diagnostic = .deferred; return }
+        if let deadline = try files.notBefore(head.event.id), deadline > now() {
+            diagnostic = .deferred; retry(at: deadline); return
+        }
         let needsRefresh = head.state == .awaitingAuthentication
         if needsRefresh, try files.refreshExhausted(head.event.id) { diagnostic = .authenticationRequired; return }
         if head.state == .blocked && head.reason != VehicleEventQueue.Failure.deliveryUnknown.rawValue {
@@ -219,7 +228,11 @@ struct VehicleUploadCompletion: Sendable {
         // preparing record when the provider cannot refresh while locked/offline.
         let grant: VehicleUploadAuthorization
         do { grant = try await auth.authorization(for: context, forceRefresh: needsRefresh) }
-        catch { try files.deferUntil(head.event.id, date: now().addingTimeInterval(60)); diagnostic = .authenticationRequired; return }
+        catch {
+            let deadline = now().addingTimeInterval(60)
+            try files.deferUntil(head.event.id, date: deadline)
+            diagnostic = .authenticationRequired; retry(at: deadline); return
+        }
         try await allowed()
         guard grant.context == context, auth.isCurrent(grant), !grant.accessToken.isEmpty,
               !grant.accessToken.contains("\r"), !grant.accessToken.contains("\n") else {
@@ -322,9 +335,27 @@ struct VehicleUploadCompletion: Sendable {
         guard let attempt = row.attempt else { throw VehicleQueueError.invalidTransition }
         // Persist the cooldown before changing queue state; process death cannot
         // turn a Retry-After response into an immediate retry loop.
-        try files.deferUntil(row.event.id, date: Self.retryDate(after, now: now()))
+        let deadline = Self.retryDate(after, now: now())
+        try files.deferUntil(row.event.id, date: deadline)
         try await queue.recordFailure(context, event: row.event.id, attempt: attempt, failure: .deliveryUnknown)
         diagnostic = .deferred
+        retry(at: deadline)
+    }
+
+    /// Best effort while this process can run. Durable cooldowns remain authoritative
+    /// after suspension/relaunch; this is not an iOS background execution guarantee.
+    private func retry(at deadline: Date) {
+        retryTask?.cancel()
+        guard !stopped else { return }
+        let delay = max(1, deadline.timeIntervalSince(now()))
+        let wait = retryWait
+        retryTask = Task { @MainActor [weak self] in
+            do { try await wait(delay); try Task.checkCancellation() }
+            catch { return }
+            guard let self, !self.stopped else { return }
+            self.retryTask = nil
+            await self.wake()
+        }
     }
 
     static func retryDate(_ value: String?, now: Date) -> Date {

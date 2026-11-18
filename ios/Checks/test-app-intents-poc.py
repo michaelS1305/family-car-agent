@@ -91,6 +91,8 @@ class MetadataPoCTests(unittest.TestCase):
             for config in configs:
                 settings = objects[config]["buildSettings"]
                 self.assertEqual(settings["PRODUCT_BUNDLE_IDENTIFIER"], "com.familycaragent.app.dev")
+                self.assertEqual(settings["MARKETING_VERSION"], "1.0")
+                self.assertEqual(settings["CURRENT_PROJECT_VERSION"], "1")
                 self.assertEqual(settings["GENERATE_INFOPLIST_FILE"], "YES")
                 self.assertEqual(settings["INFOPLIST_KEY_UILaunchScreen_Generation"], "YES")
 

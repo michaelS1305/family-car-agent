@@ -46,15 +46,15 @@ import Network
             state.errorCategory = "firebase_configuration_unavailable"; return
         }
         state.configurationLoaded = true
-        guard bundle.object(forInfoDictionaryKey: "FCAEnvironment") as? String == "development",
-              bundle.bundleIdentifier == "com.familycaragent.app.dev",
+        guard let environment = try? AppEnvironment.current(),
+              bundle.object(forInfoDictionaryKey: "FCAEnvironment") as? String == environment.configurationName,
               bundle.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool == false,
               bundle.object(forInfoDictionaryKey: "FirebaseMessagingAutoInitEnabled") as? Bool == false,
               config["BUNDLE_ID"] as? String == bundle.bundleIdentifier,
-              config["PROJECT_ID"] as? String == "family-car-agent-dev",
-              config["GCM_SENDER_ID"] as? String == "452367109329",
+              config["PROJECT_ID"] as? String == environment.firebaseProject,
+              config["GCM_SENDER_ID"] as? String == environment.firebaseSender,
               let app = config["GOOGLE_APP_ID"] as? String,
-              app.range(of: "^1:452367109329:ios:[0-9a-f]+$", options: .regularExpression) != nil else {
+              environment.acceptsFirebaseApp(app) else {
             state.errorCategory = "firebase_dev_configuration"; return
         }
         state.devIdentityValidated = true
@@ -171,7 +171,8 @@ import Network
 
     func registeredAPNs(_ token: Data) {
         guard current(state.epoch), state.permitsRegistration else { return }
-        Messaging.messaging().setAPNSToken(token, type: .sandbox)
+        guard let environment = try? AppEnvironment.current() else { return }
+        Messaging.messaging().setAPNSToken(token, type: environment == .production ? .prod : .sandbox)
         state.apnsResult(succeeded: true, ticket: state.epoch)
         // Auto-init is persisted by Firebase. Keep it off even while signed in,
         // so a process restart cannot auto-register before session restoration.

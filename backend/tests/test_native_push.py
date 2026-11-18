@@ -25,7 +25,7 @@ import native_push_registration as registration
 import native_push_worker as worker
 
 
-CONFIG = Config('test-fca-project','/test-only/unused.json','test',b'e'*32,b'f'*32,
+CONFIG = Config('family-car-agent-dev','/test-only/unused.json','test',b'e'*32,b'f'*32,
                 'dev','il.fca.companion.dev')
 
 

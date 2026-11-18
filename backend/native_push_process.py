@@ -62,7 +62,9 @@ class Supervisor:
         deadline = time.monotonic() + self.seconds
         diagnostics = Channel()
         try:
-            self.child = subprocess.Popen(self.command, cwd=str(Path(__file__).resolve().parent),
+            # One trusted project per environment; each pass handles both native platforms.
+            command = self.command
+            self.child = subprocess.Popen(command, cwd=str(Path(__file__).resolve().parent),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 env=diagnostics.environment(), close_fds=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             while self.child.poll() is None:
@@ -91,7 +93,7 @@ class ChildConnections:
             yield conn
 
 
-def child_pass():
+def child_pass(platform="android"):
     from native_push_outbox import enabled
     if not enabled():
         return 0
@@ -101,7 +103,7 @@ def child_pass():
     from native_push_cleanup import cleanup
     provider = None
     try:
-        config = Config.load()
+        config = Config.load(platform)
         provider = Fcm(config)
         pool = ChildConnections()
         run_once(pool, config, provider)
@@ -120,4 +122,5 @@ if __name__ == '__main__':
     watchdog = threading.Timer(PASS_SECONDS, lambda: os._exit(124))
     watchdog.daemon = True
     watchdog.start()
-    raise SystemExit(child_pass() if sys.argv[1:] == ['--run-pass'] else 2)
+    raise SystemExit(child_pass('ios') if sys.argv[1:] == ['--run-pass-ios'] else
+                     child_pass() if sys.argv[1:] == ['--run-pass'] else 2)

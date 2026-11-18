@@ -19,6 +19,12 @@ on:
         required: false
         default: false
 
+      build_production_ipa:
+        description: 'Build Production IPA only; no upload to Apple or deployment'
+        type: boolean
+        required: false
+        default: false
+
 permissions:
   contents: read
 
@@ -53,6 +59,14 @@ jobs:
           export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
           export SWIFT_BIN="$(xcrun --find swiftc)"
           bash Checks/run-ci-checks.sh
+          bash Checks/run-native-push-checks.sh
+      - name: Offline vehicle persistence and recovery
+        run: |
+          export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          export SWIFT_BIN="$(xcrun --find swiftc)"
+          bash Checks/run-vehicle-queue-checks.sh
+          bash Checks/run-vehicle-sync-checks.sh
+          bash Checks/run-native-device-setup-checks.sh
       - name: Compile iOS Simulator package without signing
         run: |
           xcodebuild -scheme FamilyCarAgent \
@@ -145,6 +159,102 @@ jobs:
           path: |
             ${{ runner.temp }}/fca-dev-signed/FCA-Dev-AppIntents-Development.ipa
             ${{ runner.temp }}/fca-dev-signed/fca-dev-signing-report.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove temporary Firebase configuration
+        if: always()
+        shell: bash
+        run: rm -f -- "$RUNNER_TEMP/GoogleService-Info.plist"
+
+  signed_production_ipa:
+    name: Manually build and sign FCA Production IPA
+    needs: ios
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop' && inputs.build_production_ipa == true && vars.FCA_PROD_SIGN_ENABLED == 'true'
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    environment: ios-production-signing
+    env:
+      FCA_PROD_SIGN_ENABLED: ${{ vars.FCA_PROD_SIGN_ENABLED }}
+      FCA_IOS_PROD_SUPABASE_PUBLISHABLE_KEY: ${{ vars.FCA_IOS_PROD_SUPABASE_PUBLISHABLE_KEY }}
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Restore validated Firebase Production configuration
+        env:
+          FCA_IOS_PROD_GOOGLE_SERVICE_INFO_BASE64: ${{ secrets.FCA_IOS_PROD_GOOGLE_SERVICE_INFO_BASE64 }}
+        shell: bash
+        run: python3 ios/Checks/firebase_prod_config.py "$RUNNER_TEMP/GoogleService-Info.plist"
+
+      - name: Generate FCA Production Xcode wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ios/Checks/app-intents-poc.py generate \
+            "$GITHUB_WORKSPACE/ios" \
+            "$RUNNER_TEMP/fca-production-wrapper" \
+            --firebase-config "$RUNNER_TEMP/GoogleService-Info.plist" --production
+          plutil -lint "$RUNNER_TEMP/fca-production-wrapper/FCAIntentPoC.xcodeproj/project.pbxproj"
+
+      - name: Build full FCA Production app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project "$RUNNER_TEMP/fca-production-wrapper/FCAIntentPoC.xcodeproj" \
+            -target FamilyCarAgent \
+            -configuration Release \
+            -sdk iphoneos \
+            SYMROOT="$RUNNER_TEMP/fca-production-products" \
+            OBJROOT="$RUNNER_TEMP/fca-production-intermediates" \
+            SWIFT_COMPILATION_MODE=singlefile \
+            SWIFT_ENABLE_BATCH_MODE=NO \
+            OTHER_SWIFT_FLAGS="-disable-batch-mode" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Verify App Intents metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ios/Checks/app-intents-poc.py verify \
+            "$RUNNER_TEMP/fca-production-products/Release-iphoneos/FamilyCarAgent.app" \
+            "$RUNNER_TEMP/metadata-report.json" --production
+
+      - name: Upload metadata report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fca-production-metadata-report
+          path: ${{ runner.temp }}/metadata-report.json
+          if-no-files-found: warn
+
+      - name: Sign and verify FCA Production IPA
+        env:
+          FCA_IOS_PROD_CERT_P12_BASE64: ${{ secrets.FCA_IOS_PROD_CERT_P12_BASE64 }}
+          FCA_IOS_PROD_CERT_P12_PASSWORD: ${{ secrets.FCA_IOS_PROD_CERT_P12_PASSWORD }}
+          FCA_IOS_PROD_PROFILE_BASE64: ${{ secrets.FCA_IOS_PROD_PROFILE_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fca-production-signed"
+          python3 ios/Checks/sign-fca-dev.py \
+            "$RUNNER_TEMP/fca-production-products/Release-iphoneos/FamilyCarAgent.app" \
+            "$RUNNER_TEMP/fca-production-signed" --production
+
+      - name: Upload verified signed FCA Production IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: fca-production-app-intents-signed-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/fca-production-signed/FamilyCarAgent-Production.ipa
+            ${{ runner.temp }}/fca-production-signed/fca-production-signing-report.json
           if-no-files-found: error
           retention-days: 7
 

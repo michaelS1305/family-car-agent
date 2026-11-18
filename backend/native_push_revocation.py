@@ -14,7 +14,7 @@ def digest(secret):
 
 
 def prepare(conn, user, config, installation_ref, secret):
-    if config.environment != 'dev':
+    if not config.supports('ios'):
         return response('REGISTRATION_UNAVAILABLE')
     scope(conn, user)
     # Do not attach cancellation authority to any existing installation.
@@ -50,7 +50,7 @@ def permitted(conn, user_id, project, installation_ref):
 
 
 def cancel(conn, config, installation_ref, secret):
-    if config.environment != 'dev':
+    if not config.supports('ios'):
         return response('REGISTRATION_UNAVAILABLE')
     # Authenticate before acquiring the shared per-owner serialization lock.
     row = conn.execute('SELECT user_id,secret_hash FROM native_push_ios_revocations '

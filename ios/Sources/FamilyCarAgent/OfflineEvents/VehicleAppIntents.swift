@@ -1,4 +1,4 @@
-#if DEBUG && os(iOS)
+#if os(iOS)
 import AppIntents
 import CoreLocation
 import Foundation

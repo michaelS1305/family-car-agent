@@ -89,6 +89,7 @@ private actor SyncSessionExchange: AuthTransport {
     var namespace: UUID?
     var clock = Date(timeIntervalSince1970: 1_800_000_000)
     var coordinator: VehicleSyncCoordinator!
+    var retryWait: @MainActor (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }
     init(root: URL) throws {
         self.root = root
         context = try VehicleQueueContext(environment: .development,
@@ -99,8 +100,9 @@ private actor SyncSessionExchange: AuthTransport {
         try restoreCoordinator()
     }
     func restoreCoordinator() throws {
+        coordinator?.fence()
         coordinator = try VehicleSyncCoordinator(environment: .development, context: context, queue: queue,
-            authentication: auth, transport: transport, directory: root.appendingPathComponent("uploads"), now: { [unowned self] in self.clock })
+            authentication: auth, transport: transport, directory: root.appendingPathComponent("uploads"), now: { [unowned self] in self.clock }, retryWait: retryWait)
     }
     func start() async throws { try await queue.initializeFreshDevice(context) }
     func take(vehicle: UUID = UUID()) async throws -> QueuedVehicleEvent {
@@ -463,5 +465,50 @@ private actor SyncSessionExchange: AuthTransport {
         await frozen.coordinator.wake()
         precondition(frozen.transport.resumed.isEmpty && frozen.transport.created.isEmpty)
         print("PASS: task restoration, create/mapping/resume crash windows, duplicate-task prevention")
+
+        // Virtual wakeups: no network, real-time sleeps or OS background assumptions.
+        for fenced in [false, true] {
+            let f = try await fixture()
+            var waiting: CheckedContinuation<Void, Never>?
+            var delay: TimeInterval = 0
+            f.retryWait = { seconds in
+                delay = seconds
+                await withCheckedContinuation { waiting = $0 }
+            }
+            try f.restoreCoordinator()
+            let event = try await f.take()
+            await f.coordinator.wake()
+            await f.coordinator.receive(f.transport.finish(1, status: 503, after: "120"))
+            for _ in 0..<10_000 { if waiting != nil { break }; await Task.yield() }
+            precondition(waiting != nil && delay == 120 && f.transport.created.count == 1)
+            if fenced { f.coordinator.fence() }
+            f.clock.addTimeInterval(121)
+            waiting?.resume(); waiting = nil
+            for _ in 0..<10_000 { if f.transport.created.count == 2 { break }; await Task.yield() }
+            precondition(f.transport.created.count == (fenced ? 1 : 2))
+            if !fenced {
+                let body = try JSONSerialization.jsonObject(with: f.transport.created[1].bytes) as! [String: Any]
+                precondition((body["event_id"] as? String)?.lowercased() == event.id.uuidString.lowercased())
+                await f.coordinator.receive(f.transport.finish(2, body: accepted))
+            }
+            f.coordinator.fence()
+        }
+        let recovery = try await fixture()
+        var releaseRefresh: CheckedContinuation<Void, Never>?
+        recovery.retryWait = { _ in await withCheckedContinuation { releaseRefresh = $0 } }
+        try recovery.restoreCoordinator()
+        _ = try await recovery.take()
+        await recovery.coordinator.wake()
+        recovery.auth.refreshOffline = true
+        await recovery.coordinator.receive(recovery.transport.finish(1, status: 401))
+        for _ in 0..<10_000 { if releaseRefresh != nil { break }; await Task.yield() }
+        precondition(releaseRefresh != nil && recovery.transport.created.count == 1)
+        recovery.auth.refreshOffline = false; recovery.clock.addTimeInterval(61)
+        releaseRefresh?.resume(); releaseRefresh = nil
+        for _ in 0..<10_000 { if recovery.transport.created.count == 2 { break }; await Task.yield() }
+        precondition(recovery.transport.created.count == 2 && recovery.auth.force.last == true)
+        await recovery.coordinator.receive(recovery.transport.finish(2, body: accepted))
+        recovery.coordinator.fence()
+        print("PASS: automatic cooldown retry, preserved event identity, logout fence and offline JWT refresh recovery")
     }
 }

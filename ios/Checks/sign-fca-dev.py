@@ -124,7 +124,7 @@ def call(label, *args):
     return result.stdout
 
 
-def pkcs12_diagnostics(cert_file):
+def pkcs12_diagnostics(cert_file, production=False):
     """Best-effort diagnostics only; never change the Apple import decision.
 
     OpenSSL inherits the existing password environment variable. Neither the
@@ -161,7 +161,7 @@ def pkcs12_diagnostics(cert_file):
     try:
         # -noout suppresses all credential output. MAC verification remains on.
         call("Diagnostic PKCS12 validation", executable, "pkcs12",
-             "-in", str(cert_file), "-noout", "-passin", "env:FCA_PROBE_P12_PASSWORD")
+             "-in", str(cert_file), "-noout", "-passin", "env:FCA_IOS_PROD_CERT_P12_PASSWORD" if production else "env:FCA_PROBE_P12_PASSWORD")
         print("PKCS12 preflight: PASS")
     except SignError:
         print("PKCS12 preflight: FAIL; diagnostic_category=PKCS12_VALIDATION_FAILED")
@@ -288,10 +288,10 @@ def signed_entitlements(app):
     )
 
 
-def verify_push_entitlements(entitlements):
+def verify_push_entitlements(entitlements, production=False):
     require(
-        entitlements.get("aps-environment") == "development",
-        "Development APNs entitlement required",
+        entitlements.get("aps-environment") == ("production" if production else "development"),
+        "APNs entitlement does not match the requested environment",
     )
 
     require(
@@ -301,9 +301,10 @@ def verify_push_entitlements(entitlements):
     )
 
 
-def verify_profile(profile):
+def verify_profile(profile, production=False):
+    INSTALLED_BUNDLE = "com.familycaragent.app" if production else "com.familycaragent.app.dev"
     require(
-        profile.get("Name") == PROFILE_NAME,
+        (bool(profile.get("Name")) if production else profile.get("Name") == PROFILE_NAME),
         "Unexpected FCA Dev provisioning profile name",
     )
 
@@ -335,8 +336,8 @@ def verify_profile(profile):
     )
 
     require(
-        bool(profile.get("ProvisionedDevices")),
-        "Development profile has no registered devices",
+        ("ProvisionedDevices" not in profile if production else bool(profile.get("ProvisionedDevices"))),
+        "Profile device scope does not match the requested signing mode",
     )
 
     require(
@@ -353,11 +354,11 @@ def verify_profile(profile):
         profile.get("Entitlements", {})
     )
 
-    verify_push_entitlements(entitlements)
+    verify_push_entitlements(entitlements, production)
 
     require(
-        entitlements.get("get-task-allow") is True,
-        "Not a Development provisioning profile",
+        entitlements.get("get-task-allow") is (False if production else True),
+        "Provisioning profile debugging entitlement does not match signing mode",
     )
 
     expected_app_id = f"{TEAM}.{INSTALLED_BUNDLE}"
@@ -443,7 +444,16 @@ def set_user_keychains(paths):
     )
 
 
-def sign(input_app, evidence):
+def sign(input_app, evidence, production=False):
+    SOURCE_BUNDLE = INSTALLED_BUNDLE = "com.familycaragent.app" if production else "com.familycaragent.app.dev"
+    IPA_NAME = "FamilyCarAgent-Production.ipa" if production else "FCA-Dev-AppIntents-Development.ipa"
+    REPORT_NAME = "fca-production-signing-report.json" if production else "fca-dev-signing-report.json"
+    if production:
+        from firebase_prod_config import validate_bundle
+        require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+                and os.environ.get("FCA_PROD_SIGN_ENABLED") == "true", "Production signing requires explicit manual approval")
+    else:
+        from firebase_dev_config import validate_bundle
     require(
         sys.platform == "darwin",
         "FCA Dev signing requires macOS",
@@ -481,8 +491,8 @@ def sign(input_app, evidence):
     )
 
     require(
-        info.get("FCAEnvironment") == "development",
-        "Source is not FCA Dev",
+        info.get("FCAEnvironment") == ("production" if production else "development"),
+        "Source environment does not match signing mode",
     )
 
     require(
@@ -507,17 +517,17 @@ def sign(input_app, evidence):
 
         # Environment names retained for ios.yml compatibility.
         decode_secret(
-            "FCA_PROBE_P12_BASE64",
+            "FCA_IOS_PROD_CERT_P12_BASE64" if production else "FCA_PROBE_P12_BASE64",
             cert_file,
         )
 
         decode_secret(
-            "FCA_DEV_PROFILE_BASE64",
+            "FCA_IOS_PROD_PROFILE_BASE64" if production else "FCA_DEV_PROFILE_BASE64",
             profile_file,
         )
 
         cert_password = os.environ.get(
-            "FCA_PROBE_P12_PASSWORD",
+            "FCA_IOS_PROD_CERT_P12_PASSWORD" if production else "FCA_PROBE_P12_PASSWORD",
             "",
         )
 
@@ -526,7 +536,7 @@ def sign(input_app, evidence):
             "P12 password missing",
         )
 
-        pkcs12_diagnostics(cert_file)
+        pkcs12_diagnostics(cert_file, production)
 
         profile = plistlib.loads(
             call(
@@ -539,7 +549,7 @@ def sign(input_app, evidence):
             )
         )
 
-        entitlements, expiration = verify_profile(profile)
+        entitlements, expiration = verify_profile(profile, production)
 
         entitlements_file = root / "entitlements.plist"
         entitlements_file.write_bytes(
@@ -746,7 +756,7 @@ def sign(input_app, evidence):
             )
 
             verify_push_entitlements(
-                signed_entitlements(signed)
+                signed_entitlements(signed), production
             )
 
             validate_bundle(signed)
@@ -824,7 +834,7 @@ def sign(input_app, evidence):
             )
 
             verify_push_entitlements(
-                signed_entitlements(packaged)
+                signed_entitlements(packaged), production
             )
 
             validate_bundle(packaged)
@@ -843,15 +853,15 @@ def sign(input_app, evidence):
 
             report = {
                 "bundle_id": INSTALLED_BUNDLE,
-                "environment": "development",
-                "profile_name": PROFILE_NAME,
+                "environment": "production" if production else "development",
+                "profile_name": profile.get("Name"),
                 "profile_expires": expiration.isoformat(),
-                "development_signature_verified": True,
+                "distribution_signature_verified" if production else "development_signature_verified": True,
                 "signing_certificate_authorized_by_profile": True,
                 "embedded_profile_verified": True,
                 "entitlements_match_requested": True,
-                "development_apns_entitlement_verified": True,
-                "firebase_dev_configuration_verified": True,
+                "production_apns_entitlement_verified" if production else "development_apns_entitlement_verified": True,
+                "firebase_production_configuration_verified" if production else "firebase_dev_configuration_verified": True,
                 "app_intents_metadata_preserved": True,
                 "ipa_roundtrip_verified": True,
                 "preflight_signing_verified": True,
@@ -899,12 +909,14 @@ def main():
         type=Path,
     )
 
+    parser.add_argument("--production", action="store_true")
     args = parser.parse_args()
 
     try:
         sign(
             args.app,
             args.evidence,
+            args.production,
         )
     except SignError as exc:
         print(str(exc), file=sys.stderr)
