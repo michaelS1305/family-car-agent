@@ -2,15 +2,13 @@ name: Android CI
 
 on:
   push:
-    branches: [develop, main]
+    branches: [develop]
     paths:
       - .github/workflows/android.yml
       - android/**
   pull_request:
-    branches: [develop, main]
-    paths:
-      - .github/workflows/android.yml
-      - android/**
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       production_release:
@@ -22,11 +20,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-ci-${{ github.workflow }}-${{ github.ref }}
+  group: android-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   android:
+    if: >-
+      (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/develop')
+    env:
+      PRODUCTION: ${{ github.event_name == 'pull_request' || inputs.production_release == true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -36,6 +39,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Record tested revision
+        env:
+          TESTED_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          printf 'Tested revision: `%s`\nPR head: `%s`\nPR base: `%s`\n' "$TESTED_SHA" "$PR_HEAD_SHA" "$PR_BASE_SHA" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -60,59 +71,74 @@ jobs:
           OAUTH_CALLBACK_URI=com.familycaragent.app://auth/callback
           SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci_fixture
           EOF
-      - name: Restore Firebase Dev configuration
-        shell: bash
-        env:
-          FIREBASE_DEV_CONFIG: ${{ secrets.FCA_FIREBASE_DEV_GOOGLE_SERVICES_JSON }}
-        run: |
-          if [ -z "$FIREBASE_DEV_CONFIG" ]; then
-            echo "Missing Firebase Dev configuration secret"
-            exit 1
-          fi
-          printf '%s' "$FIREBASE_DEV_CONFIG" > app/src/dev/google-services.json
-      - name: Restore Firebase Production configuration
-        shell: bash
-        env:
-          # Despite the legacy suffix, this secret contains raw JSON, not Base64.
-          FIREBASE_PROD_CONFIG: ${{ secrets.FIREBASE_PROD_GOOGLE_SERVICES_JSON_B64 }}
+      - name: Create non-secret Firebase validation fixtures
         run: |
           python3 - <<'PY'
           import json
-          import os
-          import sys
           from pathlib import Path
-
-          raw = os.environ.get("FIREBASE_PROD_CONFIG", "")
-          if not raw.strip():
-              sys.exit("Missing Firebase Production configuration secret")
-          try:
-              config = json.loads(raw)
-              project = config["project_info"]
-              clients = [client["client_info"] for client in config["client"]
-                         if client["client_info"]["android_client_info"]["package_name"] == "com.familycaragent.app"]
-              valid = (project["project_id"] == "family-car-agent"
-                       and project["project_number"] == "249909620080"
-                       and len(clients) == 1
-                       and clients[0]["mobilesdk_app_id"] == "1:249909620080:android:c0f07c3b74400bfaee33b5")
-          except (ValueError, KeyError, TypeError):
-              sys.exit("Invalid Firebase Production configuration JSON or structure")
-          if not valid:
-              sys.exit("Firebase Production configuration does not match the approved registration")
-          destination = Path("app/src/prod/google-services.json")
-          destination.parent.mkdir(parents=True, exist_ok=True)
-          destination.write_text(raw, encoding="utf-8")
+          for flavor, package, project, sender, app in [
+              ('dev', 'il.fca.companion.dev', 'family-car-agent-dev', '452367109329', '1:452367109329:android:0000000000000000'),
+              ('prod', 'com.familycaragent.app', 'family-car-agent', '249909620080', '1:249909620080:android:c0f07c3b74400bfaee33b5'),
+          ]:
+              target = Path('app/src') / flavor / 'google-services.json'
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(json.dumps({
+                  'project_info': {'project_number': sender, 'project_id': project},
+                  'client': [{'client_info': {'mobilesdk_app_id': app,
+                      'android_client_info': {'package_name': package}},
+                      'api_key': [{'current_key': 'AIza' + '0' * 35}]}],
+                  'configuration_version': '1',
+              }))
+          PY
+      - name: Restore Development Firebase and optional public runtime configuration
+        if: env.PRODUCTION != 'true' && github.ref == 'refs/heads/develop'
+        env:
+          FIREBASE_DEV_CONFIG: ${{ secrets.FCA_FIREBASE_DEV_GOOGLE_SERVICES_JSON }}
+          DEV_PUBLIC_KEY: ${{ vars.FCA_ANDROID_DEV_SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          from pathlib import Path
+          firebase = os.environ.get('FIREBASE_DEV_CONFIG', '')
+          if not firebase:
+              sys.exit('Missing Development Firebase configuration')
+          Path('app/src/dev/google-services.json').write_text(firebase)
+          key = os.environ.get('DEV_PUBLIC_KEY', '')
+          if key:
+              if not key.startswith('sb_publishable_') or any(c.isspace() for c in key):
+                  sys.exit('Invalid Development public configuration')
+              path = Path('fca.dev.properties')
+              path.write_text(path.read_text().replace('sb_publishable_ci_fixture', key))
+          else:
+              print('Development APK uses a test-only Supabase fixture; configure FCA_ANDROID_DEV_SUPABASE_PUBLISHABLE_KEY for device use.')
           PY
       - name: Verify Gradle runtime
         run: bash ./gradlew --version
       - name: Environment configuration guards
         run: bash ./gradlew :app:testEnvironmentConfiguration
       - name: Dev unit tests, lint and debug assembly
+        if: env.PRODUCTION != 'true'
         run: bash ./gradlew :app:testDevDebugUnitTest :app:lintDevDebug :app:assembleDevDebug
       - name: Prod unit tests, lint and debug assembly
+        if: env.PRODUCTION == 'true'
         run: bash ./gradlew :app:testProdDebugUnitTest :app:lintProdDebug :app:assembleProdDebug
+      - name: Upload Development APK
+        if: env.PRODUCTION != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-development-${{ vars.FCA_ANDROID_DEV_SUPABASE_PUBLISHABLE_KEY != '' && 'apk' || 'test-only-apk' }}-${{ github.sha }}
+          path: android/app/build/outputs/apk/dev/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
 
   production-release:
-    if: github.event_name == 'workflow_dispatch' && inputs.production_release
+    # Enable only AFTER the security prerequisites in .github/CI.md are configured.
+    if: >-
+      vars.FCA_PROD_SIGN_ENABLED == 'true' &&
+      ((github.event_name == 'pull_request' && !github.event.pull_request.draft &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.head.ref == 'develop' && github.base_ref == 'main') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop' && inputs.production_release))
     needs: android
     runs-on: ubuntu-24.04
     environment: android-production
@@ -124,6 +150,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Record tested revision
+        env:
+          TESTED_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          printf 'Tested revision: `%s`\nPR head: `%s`\nPR base: `%s`\n' "$TESTED_SHA" "$PR_HEAD_SHA" "$PR_BASE_SHA" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -133,7 +167,7 @@ jobs:
       - name: Prepare runner-only Production inputs
         env:
           FIREBASE_CONFIG: ${{ secrets.FIREBASE_PROD_GOOGLE_SERVICES_JSON_B64 }}
-          PUBLIC_SUPABASE_KEY: ${{ secrets.FCA_ANDROID_PROD_SUPABASE_PUBLISHABLE_KEY }}
+          PUBLIC_SUPABASE_KEY: ${{ vars.FCA_ANDROID_PROD_SUPABASE_PUBLISHABLE_KEY }}
           UPLOAD_KEYSTORE: ${{ secrets.FCA_ANDROID_UPLOAD_KEYSTORE_B64 }}
         run: |
           python3 - <<'PY'
@@ -166,10 +200,27 @@ jobs:
         run: bash ./gradlew --no-daemon -PfcaProductionRelease=true :app:bundleProdRelease
       - uses: actions/upload-artifact@v4
         with:
-          name: android-production-aab
+          name: android-production-aab-${{ github.sha }}
           path: android/app/build/outputs/bundle/prodRelease/*.aab
           if-no-files-found: error
           retention-days: 7
       - name: Remove runner-only signing material
         if: always()
         run: rm -f -- "$RUNNER_TEMP/fca-upload.jks" app/src/prod/google-services.json fca.prod.properties
+
+  required:
+    name: Android required
+    if: always()
+    needs: [android, production-release]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require successful validation and requested Production signing
+        env:
+          VALIDATION: ${{ needs.android.result }}
+          SIGNING: ${{ needs.production-release.result }}
+          PRODUCTION: ${{ github.event_name == 'pull_request' || inputs.production_release == true }}
+        run: |
+          test "$VALIDATION" = success || { echo 'Android validation did not succeed'; exit 1; }
+          if [ "$PRODUCTION" = true ]; then
+            test "$SIGNING" = success || { echo 'Production signing did not succeed. Check trusted develop PR, security setup and FCA_PROD_SIGN_ENABLED; skipped signing is not approval.'; exit 1; }
+          fi

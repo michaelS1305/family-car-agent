@@ -1,6 +1,8 @@
 """Production build policy tests using synthetic public plist/profile data only."""
 import datetime as dt
 import importlib.util
+import copy
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -111,6 +113,48 @@ class ProductionChecks(unittest.TestCase):
                 'GITHUB_EVENT_NAME':'push','GITHUB_REF':'refs/heads/develop','FCA_PROD_SIGN_ENABLED':'true'}):
             with self.assertRaisesRegex(sign.SignError,'explicit manual approval'):
                 sign.sign(Path('unused'),Path('unused'),production=True)
+
+    def test_production_pr_signing_event_fence(self):
+        repository = {'full_name': 'michaelS1305/family-car-agent', 'fork': False}
+        payload = {'action': 'synchronize', 'number': 12, 'pull_request': {
+            'head': {'repo': repository, 'ref': 'develop'},
+            'base': {'repo': repository, 'ref': 'main'}, 'draft': False}}
+        with tempfile.TemporaryDirectory() as temp:
+            event = Path(temp) / 'event.json'
+            env = {'GITHUB_EVENT_NAME': 'pull_request', 'GITHUB_REF': 'refs/pull/12/merge',
+                   'GITHUB_REPOSITORY': repository['full_name'], 'GITHUB_EVENT_PATH': str(event),
+                   'FCA_PROD_SIGN_ENABLED': 'true'}
+            with patch.dict(os.environ, env, clear=True):
+                event.write_text(json.dumps(payload))
+                sign.authorize_signing(production=True)
+                for key, value in [('GITHUB_EVENT_NAME', 'pull_request_target'),
+                                   ('GITHUB_REF', 'refs/heads/main'),
+                                   ('GITHUB_REPOSITORY', 'untrusted/fork'),
+                                   ('FCA_PROD_SIGN_ENABLED', '')]:
+                    with self.subTest(key=key), patch.dict(os.environ, {key: value}), self.assertRaises(sign.SignError):
+                        sign.authorize_signing(production=True)
+                changes = [
+                    ('head', 'ref', 'feature'), ('base', 'ref', 'develop'),
+                    ('head', 'repo', {'full_name': 'untrusted/fork', 'fork': True}),
+                    ('head', 'repo', {'full_name': repository['full_name'], 'fork': True}),
+                ]
+                for side, key, value in changes:
+                    altered = copy.deepcopy(payload)
+                    altered['pull_request'][side][key] = value
+                    event.write_text(json.dumps(altered))
+                    with self.assertRaises(sign.SignError):
+                        sign.authorize_signing(production=True)
+                for altered in ({}, dict(payload, action='closed'),
+                                dict(payload, pull_request=dict(payload['pull_request'], draft=True))):
+                    event.write_text(json.dumps(altered))
+                    with self.assertRaises(sign.SignError):
+                        sign.authorize_signing(production=True)
+                event.write_text('invalid-json')
+                with self.assertRaises(sign.SignError):
+                    sign.authorize_signing(production=True)
+                with patch.dict(os.environ, {'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REF': 'refs/heads/develop'}):
+                    sign.authorize_signing(production=True)
+                    sign.authorize_signing(production=False)
 
     def test_production_signing_waits_for_validation_and_offline_recovery_checks(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/ios.yml').read_text()
