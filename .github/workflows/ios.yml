@@ -2,10 +2,8 @@ name: iOS CI
 
 on:
   push:
-    branches: [develop]
-    paths:
-      - .github/workflows/ios.yml
-      - ios/**
+    # Every main push must get a fresh Production candidate.
+    branches: [develop, main]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -27,12 +25,38 @@ permissions:
   contents: read
 
 concurrency:
-  group: ios-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ios-ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    outputs:
+      run_ios: ${{ steps.scope.outputs.run_ios }}
+    steps:
+      - uses: actions/github-script@v7
+        id: scope
+        with:
+          script: |
+            // Keep the previous develop path filtering; every main push must run.
+            let run = true;
+            if (context.eventName === 'push' && context.ref === 'refs/heads/develop' &&
+                !/^0+$/.test(context.payload.before)) {
+              const comparison = await github.rest.repos.compareCommitsWithBasehead({
+                ...context.repo, basehead: `${context.payload.before}...${context.sha}`
+              });
+              const files = comparison.data.files || [];
+              // GitHub caps comparison files at 300; run conservatively if truncated.
+              run = files.length >= 300 || files.some(file =>
+                [file.filename, file.previous_filename || ''].some(path =>
+                  path.startsWith('ios/') || path === '.github/workflows/ios.yml'));
+            }
+            core.setOutput('run_ios', String(run));
+
   ios:
+    needs: scope
     if: >-
+      needs.scope.outputs.run_ios == 'true' &&
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
       (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/develop')
     name: iOS validation
@@ -40,7 +64,7 @@ jobs:
     timeout-minutes: 20
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-      PRODUCTION: ${{ github.event_name == 'pull_request' || inputs.build_production_ipa == true }}
+      PRODUCTION: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.build_production_ipa == true }}
     defaults:
       run:
         working-directory: ios
@@ -201,13 +225,16 @@ jobs:
     # Repository-level opt-in, enabled only after .github/CI.md security setup.
     if: >-
       vars.FCA_PROD_SIGN_ENABLED == 'true' &&
-      ((github.event_name == 'pull_request' && !github.event.pull_request.draft &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'michaelS1305/family-car-agent') ||
+       (github.event_name == 'pull_request' && !github.event.pull_request.draft &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         github.event.pull_request.head.ref == 'develop' && github.base_ref == 'main') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop' && inputs.build_production_ipa))
     runs-on: macos-26
     timeout-minutes: 30
 
+    outputs:
+      artifact_id: ${{ steps.production_artifact.outputs.artifact-id }}
     environment: ios-production-signing
     env:
       FCA_PROD_SIGN_ENABLED: ${{ vars.FCA_PROD_SIGN_ENABLED }}
@@ -232,6 +259,11 @@ jobs:
           FCA_IOS_PROD_GOOGLE_SERVICE_INFO_BASE64: ${{ secrets.FCA_IOS_PROD_GOOGLE_SERVICE_INFO_BASE64 }}
         shell: bash
         run: python3 ios/Checks/firebase_prod_config.py "$RUNNER_TEMP/GoogleService-Info.plist"
+
+      - name: Allocate immutable main build number
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          python3 ios/Checks/testflight_upload.py build-number >> "$GITHUB_ENV"
 
       - name: Generate FCA Production Xcode wrapper
         shell: bash
@@ -292,6 +324,7 @@ jobs:
             "$RUNNER_TEMP/fca-production-signed" --production
 
       - name: Upload verified signed FCA Production IPA
+        id: production_artifact
         uses: actions/upload-artifact@v4
         with:
           name: ios-production-ipa-${{ github.sha }}
@@ -309,20 +342,60 @@ jobs:
   required:
     name: iOS required
     if: always()
-    needs: [ios, signed_dev_ipa, signed_production_ipa]
+    needs: [scope, ios, signed_dev_ipa, signed_production_ipa]
     runs-on: ubuntu-24.04
     steps:
       - name: Require successful validation and expected signing
         env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          RUN_IOS: ${{ needs.scope.outputs.run_ios }}
           VALIDATION: ${{ needs.ios.result }}
           PRODUCTION_SIGNING: ${{ needs.signed_production_ipa.result }}
           DEVELOPMENT_SIGNING: ${{ needs.signed_dev_ipa.result }}
-          PRODUCTION: ${{ github.event_name == 'pull_request' || inputs.build_production_ipa == true }}
+          PRODUCTION: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.build_production_ipa == true }}
           DEV_EXPECTED: ${{ vars.FCA_DEV_SIGN_ENABLED == 'true' && github.ref == 'refs/heads/develop' && (github.event_name == 'push' || inputs.build_signed_ipa == true) }}
         run: |
+          test "$SCOPE_RESULT" = success || { echo 'iOS scope evaluation failed'; exit 1; }
+          if [ "$PRODUCTION" != true ] && [ "$RUN_IOS" = false ]; then
+            echo 'No iOS changes on develop'; exit 0
+          fi
           test "$VALIDATION" = success || { echo 'iOS validation did not succeed'; exit 1; }
           if [ "$PRODUCTION" = true ]; then
             test "$PRODUCTION_SIGNING" = success || { echo 'Production signing did not succeed. Check trusted develop PR, security setup and FCA_PROD_SIGN_ENABLED; skipped signing is not approval.'; exit 1; }
           elif [ "$DEV_EXPECTED" = true ]; then
             test "$DEVELOPMENT_SIGNING" = success || { echo 'Development signing did not succeed'; exit 1; }
           fi
+
+  testflight:
+    name: Upload verified Production IPA to TestFlight
+    needs: [ios, signed_production_ipa, required]
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      github.repository == 'michaelS1305/family-car-agent' &&
+      vars.FCA_TESTFLIGHT_UPLOAD_ENABLED == 'true' &&
+      needs.ios.result == 'success' && needs.signed_production_ipa.result == 'success' &&
+      needs.required.result == 'success'
+    runs-on: macos-26
+    timeout-minutes: 30
+    environment: ios-testflight-upload
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Reject automatic replay of an upload attempt
+        run: |
+          test "$GITHUB_RUN_ATTEMPT" = 1 || { echo 'Automatic upload on rerun is blocked. Check App Store Connect before authorizing any recovery.'; exit 1; }
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.signed_production_ipa.outputs.artifact_id }}
+          path: ${{ runner.temp }}/testflight-input
+          merge-multiple: true
+      - name: Verify artifact and upload once
+        env:
+          FCA_ASC_API_KEY_BASE64: ${{ secrets.FCA_ASC_API_KEY_BASE64 }}
+          FCA_ASC_KEY_ID: ${{ vars.FCA_ASC_KEY_ID }}
+          FCA_ASC_ISSUER_ID: ${{ vars.FCA_ASC_ISSUER_ID }}
+        run: python3 ios/Checks/testflight_upload.py upload "$RUNNER_TEMP/testflight-input"

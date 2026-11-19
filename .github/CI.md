@@ -26,7 +26,7 @@ conditions run before environment variables are available.
 | Non-draft internal develop → main PR opened/updated | All four workflows; Production mobile configuration | AAB + IPA after validation, only when Production opt-in is enabled |
 | Fork or other source branch → main | Automatic secret-free Production validation | No Production signing; required mobile gates fail explicitly |
 | Draft PR | Expensive validation/signing skipped | None; ready-for-review event starts validation |
-| Merge/push to main | No workflow push trigger | No duplicate build |
+| Merge/push to main | iOS Production validation on every push | Verified Production IPA; optional automatic TestFlight upload (see `ios/TESTFLIGHT.md`) |
 | Manual dispatch | Explicit retry/diagnostic escape hatch | Mobile dispatch requires develop; Production requires the corresponding input and opt-in; iOS Dev uses its existing input |
 
 PR validation uses synthetic public Firebase/Supabase configuration; no signing
@@ -47,8 +47,8 @@ or reruns may repeat work; this is not a global exactly-once scheduler.
 
 All PRs run all four workflows without path filters, so required checks cannot
 remain pending on documentation-only or cross-component PRs. Pushes retain their
-component filters. This deliberately favors reliable merge protection over adding
-a change-detection subsystem. All jobs check out `github.sha`: the PR **merge
+component filters; iOS preserves develop filtering through a read-only changed-file
+check so every main push can run. All jobs check out `github.sha`: the PR **merge
 candidate**, not just the head. Artifacts include that SHA; summaries record merge,
 head and base SHAs. Require an up-to-date main base before merging.
 
@@ -123,7 +123,9 @@ Dev signing is automatic on develop push when `FCA_DEV_SIGN_ENABLED=true`.
 No keys/certificates are regenerated. Signing remains on ephemeral hosted runners;
 checkout credentials are not persisted, tokens have contents-read permission,
 and temporary signing material uses the existing cleanup. No build is uploaded
-to Google Play/TestFlight, published as a release, or deployed to Render/Supabase.
+to Google Play, published as a release, or deployed to Render/Supabase.
+iOS main pushes can upload to TestFlight after the separate owner activation
+described in `ios/TESTFLIGHT.md`; PR and Development builds cannot upload.
 
 ## Artifacts and local validation
 

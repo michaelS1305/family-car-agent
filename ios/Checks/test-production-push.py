@@ -114,6 +114,28 @@ class ProductionChecks(unittest.TestCase):
             with self.assertRaisesRegex(sign.SignError,'explicit manual approval'):
                 sign.sign(Path('unused'),Path('unused'),production=True)
 
+    def test_trusted_main_push_signing_and_unique_build_override(self):
+        with patch.dict(os.environ, {'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF': 'refs/heads/main',
+                                     'GITHUB_REPOSITORY': 'michaelS1305/family-car-agent',
+                                     'FCA_PROD_SIGN_ENABLED': 'true'}, clear=True):
+            sign.authorize_signing(production=True)
+            with self.assertRaises(sign.SignError): sign.authorize_signing(production=False)
+            with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'other/repo'}):
+                with self.assertRaises(sign.SignError): sign.authorize_signing(production=True)
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+            'FCA_IOS_PROD_SUPABASE_PUBLISHABLE_KEY': 'sb_publishable_synthetic',
+            'FCA_IOS_PROD_BUILD_NUMBER': '1000.1.23',
+        }):
+            root = Path(temp)
+            config = root / 'GoogleService-Info.plist'
+            config.write_bytes(plistlib.dumps(CONFIG))
+            wrapper.generate(Path(__file__).resolve().parents[1], root / 'wrapper', firebase_config=config, production=True)
+            info = plistlib.loads((root / 'wrapper/Production-Info.plist').read_bytes())
+            project = plistlib.loads((root / 'wrapper/FCAIntentPoC.xcodeproj/project.pbxproj').read_bytes())
+            self.assertEqual(info['CFBundleVersion'], '1000.1.23')
+            self.assertTrue(any(o.get('buildSettings', {}).get('CURRENT_PROJECT_VERSION') == '1000.1.23'
+                                for o in project['objects'].values()))
+
     def test_production_pr_signing_event_fence(self):
         repository = {'full_name': 'michaelS1305/family-car-agent', 'fork': False}
         payload = {'action': 'synchronize', 'number': 12, 'pull_request': {

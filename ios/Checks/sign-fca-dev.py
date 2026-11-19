@@ -451,6 +451,10 @@ def authorize_signing(production=False):
     if production:
         require(os.environ.get("FCA_PROD_SIGN_ENABLED") == "true",
                 "Production signing is not enabled")
+        if event == "push" and ref == "refs/heads/main":
+            require(os.environ.get("GITHUB_REPOSITORY") == "michaelS1305/family-car-agent",
+                    "Production signing requires the trusted repository")
+            return
         if event == "pull_request":
             try:
                 payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())

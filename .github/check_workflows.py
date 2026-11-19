@@ -19,7 +19,7 @@ def evaluate(expression, context):
         for key in match.group().split('.'):
             result = result.get(key, False) if isinstance(result, dict) else False
         return repr(result)
-    expression = re.sub(r'\b(?:github|inputs|vars)\.[\w.]+', value, expression)
+    expression = re.sub(r'\b(?:github|inputs|vars|needs)\.[\w.]+', value, expression)
     expression = expression.replace('&&', ' and ').replace('||', ' or ')
     expression = re.sub(r'!(?!=)', 'not ', expression)
     expression = re.sub(r"(?<!['\w])true(?!['\w])", 'True', expression)
@@ -37,12 +37,12 @@ class WorkflowChecks(unittest.TestCase):
         for name, workflow in self.workflows.items():
             with self.subTest(workflow=name):
                 self.assertEqual(set(workflow['on']), {'push', 'pull_request', 'workflow_dispatch'})
-                self.assertEqual(workflow['on']['push']['branches'], ['develop'])
+                self.assertEqual(workflow['on']['push']['branches'], ['develop', 'main'] if name == 'ios' else ['develop'])
                 self.assertEqual(workflow['on']['pull_request']['branches'], ['main'])
                 self.assertNotIn('paths', workflow['on']['pull_request'])
                 self.assertNotIn('closed', workflow['on']['pull_request']['types'])
                 self.assertEqual(workflow['permissions'], {'contents': 'read'})
-                self.assertEqual(workflow['concurrency']['cancel-in-progress'], 'true')
+                self.assertEqual(workflow['concurrency']['cancel-in-progress'], "${{ github.ref != 'refs/heads/main' }}" if name == 'ios' else 'true')
                 self.assertIn('github.event.pull_request.number || github.ref', workflow['concurrency']['group'])
                 for job in workflow['jobs'].values():
                     for step in job['steps']:
@@ -71,11 +71,33 @@ class WorkflowChecks(unittest.TestCase):
                 ('workflow_dispatch', 'develop', 'repo', 'develop', 'main', True, False, False, False),
             ]:
                 context = {'github': {'event_name': event, 'ref': 'refs/heads/' + branch,
-                                     'repository': 'repo', 'base_ref': base,
-                                     'event': {'pull_request': {'draft': draft, 'head': {'repo': {'full_name': source}, 'ref': head}}}},
+                                     'repository': 'michaelS1305/family-car-agent', 'base_ref': base,
+                                     'event': {'pull_request': {'draft': draft, 'head': {'repo': {'full_name': 'michaelS1305/family-car-agent' if source == 'repo' else source}, 'ref': head}}}},
                            'vars': {'FCA_PROD_SIGN_ENABLED': 'true' if enabled else ''}, 'inputs': {flag: manual}}
                 with self.subTest(workflow=name, event=event, head=head, enabled=enabled, source=source, draft=draft):
-                    self.assertEqual(evaluate(expression, context), expected)
+                    self.assertEqual(evaluate(expression, context), expected or (name == 'ios' and event == 'push' and branch == 'main' and enabled))
+
+    def test_testflight_only_uploads_successful_main_artifact(self):
+        jobs = self.workflows['ios']['jobs']
+        upload = jobs['testflight']
+        self.assertEqual(upload['needs'], ['ios', 'signed_production_ipa', 'required'])
+        self.assertEqual(upload['environment'], 'ios-testflight-upload')
+        for event, branch in [('push', 'main'), ('push', 'develop'), ('pull_request', 'main'), ('workflow_dispatch', 'main')]:
+            for result in ('success', 'skipped', 'failure', 'cancelled'):
+                for dependency in upload['needs']:
+                    context = {'github': {'event_name': event, 'ref': 'refs/heads/' + branch,
+                                          'repository': 'michaelS1305/family-car-agent'},
+                               'vars': {'FCA_TESTFLIGHT_UPLOAD_ENABLED': 'true'},
+                               'needs': {name: {'result': result if name == dependency else 'success'} for name in upload['needs']}}
+                    self.assertEqual(evaluate(upload['if'], context), event == 'push' and branch == 'main' and result == 'success')
+                    context['vars']['FCA_TESTFLIGHT_UPLOAD_ENABLED'] = ''
+                    self.assertFalse(evaluate(upload['if'], context))
+        download = next(s for s in upload['steps'] if s.get('uses') == 'actions/download-artifact@v4')
+        self.assertEqual(download['with']['artifact-ids'], '${{ needs.signed_production_ipa.outputs.artifact_id }}')
+        self.assertNotIn('run-id', download['with'])
+        self.assertNotIn('xcodebuild', str(upload))
+        self.assertNotIn('sign-fca-dev.py', str(upload))
+        self.assertIn('GITHUB_RUN_ATTEMPT', str(upload))
 
     def test_dependency_and_secret_boundaries(self):
         for name, validation, signing, environment in [
@@ -133,10 +155,10 @@ class WorkflowChecks(unittest.TestCase):
                                           ('ios', 'VALIDATION', 'PRODUCTION_SIGNING')]:
             script = self.workflows[name]['jobs']['required']['steps'][0]['run']
             for result in ('success', 'skipped', 'failure', 'cancelled'):
-                env = dict(os.environ, PRODUCTION='true', **{validation: 'success', signing: result})
+                env = dict(os.environ, PRODUCTION='true', SCOPE_RESULT='success', RUN_IOS='true', **{validation: 'success', signing: result})
                 code = subprocess.run(['bash', '-c', script], env=env, capture_output=True).returncode
                 self.assertEqual(code == 0, result == 'success')
-            env = dict(os.environ, PRODUCTION='true', **{validation: 'failure', signing: 'success'})
+            env = dict(os.environ, PRODUCTION='true', SCOPE_RESULT='success', RUN_IOS='true', **{validation: 'failure', signing: 'success'})
             self.assertNotEqual(subprocess.run(['bash', '-c', script], env=env, capture_output=True).returncode, 0)
 
     def test_dev_signing_is_automatic_but_never_on_pr(self):
