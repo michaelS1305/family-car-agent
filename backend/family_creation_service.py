@@ -138,6 +138,7 @@ def create_family_for_auth_user(
     family_name,
     address_resolution_token,
     user_name,
+    *, legal_acceptance,
 ):
     normalized_family_name = _required_text(family_name, "INVALID_FAMILY_NAME")
     normalized_user_name = _required_text(user_name, "INVALID_USER_NAME")
@@ -152,6 +153,7 @@ def create_family_for_auth_user(
             user_name=normalized_user_name,
             auth_user_id=auth_user_id,
             resolution_token=address_resolution_token,
+            legal_acceptance=legal_acceptance,
         )
     except AddressConfirmationInvalidError as exc:
         raise FamilyCreationError("ADDRESS_RESOLUTION_EXPIRED", 409) from exc

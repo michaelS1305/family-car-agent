@@ -8,6 +8,9 @@ import threading
 from unittest.mock import Mock, patch
 
 
+LEGAL_ACCEPTANCE = {"legal_accepted": True, "terms_version": "1.2", "privacy_version": "1.2"}
+
+
 class RecordingContext:
     def __init__(self, value=None):
         self.value = value
@@ -184,6 +187,7 @@ class AtomicFamilyCreationTests(unittest.TestCase):
                 user_name="מיכאל",
                 home_latitude=32.0809,
                 home_longitude=34.7806,
+                legal_acceptance=LEGAL_ACCEPTANCE,
             )
 
     def test_success_uses_one_connection_and_one_transaction(self):
@@ -193,14 +197,14 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         family_cursor.fetchone.return_value = (7,)
         update_cursor = Mock(name="update_cursor")
         update_cursor.fetchone.return_value = (17,)
-        self.connection.execute.side_effect = [Mock(), user_cursor, family_cursor, update_cursor]
+        self.connection.execute.side_effect = [Mock(), user_cursor, family_cursor, update_cursor, Mock()]
 
         family_id = self.call_atomic_creation()
 
         self.assertEqual(family_id, 7)
         database.pool.connection.assert_called_once_with()
         self.connection.transaction.assert_called_once_with()
-        self.assertEqual(self.connection.execute.call_count, 4)
+        self.assertEqual(self.connection.execute.call_count, 5)
         self.assertTrue(self.transaction_context.committed)
         self.assertFalse(self.transaction_context.rolled_back)
 
@@ -283,6 +287,7 @@ class AtomicFamilyCreationTests(unittest.TestCase):
             user_cursor,
             family_cursor,
             update_cursor,
+            Mock(),
         ]
 
         family_id = database.create_family_with_first_user(
@@ -292,6 +297,7 @@ class AtomicFamilyCreationTests(unittest.TestCase):
             home_latitude=32.0809,
             home_longitude=34.7806,
             auth_user_id="auth-user-uuid",
+            legal_acceptance=LEGAL_ACCEPTANCE,
         )
 
         self.assertEqual(family_id, 7)
@@ -299,12 +305,12 @@ class AtomicFamilyCreationTests(unittest.TestCase):
             "pg_advisory_xact_lock",
             self.connection.execute.call_args_list[0].args[0],
         )
-        user_insert = self.connection.execute.call_args_list[-3]
+        user_insert = self.connection.execute.call_args_list[-4]
         self.assertEqual(
             user_insert.args[1],
             ("מיכאל", "auth-user-uuid"),
         )
-        self.assertEqual(self.connection.execute.call_args_list[-2].args[1][-1], 17)
+        self.assertEqual(self.connection.execute.call_args_list[-3].args[1][-1], 17)
         self.assertTrue(self.transaction_context.committed)
 
     def test_pwa_duplicate_auth_user_rolls_back_before_family_insert(self):
@@ -320,6 +326,7 @@ class AtomicFamilyCreationTests(unittest.TestCase):
                 home_latitude=32.0809,
                 home_longitude=34.7806,
                 auth_user_id="auth-user-uuid",
+                legal_acceptance=LEGAL_ACCEPTANCE,
             )
 
         self.assertEqual(self.connection.execute.call_count, 2)
@@ -346,6 +353,7 @@ class AtomicFamilyCreationTests(unittest.TestCase):
                 home_latitude=32.0809,
                 home_longitude=34.7806,
                 auth_user_id="auth-user-uuid",
+                legal_acceptance=LEGAL_ACCEPTANCE,
             )
 
         self.assertEqual(self.connection.execute.call_count, 3)
@@ -378,6 +386,7 @@ class AtomicFamilyCreationTests(unittest.TestCase):
                     home_latitude=32.0809,
                     home_longitude=34.7806,
                     auth_user_id="deleted-auth-user-uuid",
+                    legal_acceptance=LEGAL_ACCEPTANCE,
                 )
 
         self.assertTrue(self.transaction_context.rolled_back)
@@ -537,7 +546,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
             with self.subTest(step=step), patch.object(database, "_lock_pwa_join_session", return_value={"step": step, "family_id": 7}):
                 self.connection.execute.return_value = self.cursor(None)
                 with self.assertRaises(database.InvalidJoinStepError):
-                    database.complete_pwa_join("synthetic-user", "name")
+                    database.complete_pwa_join("synthetic-user", "name", legal_acceptance=LEGAL_ACCEPTANCE)
                 self.assertFalse(any("INSERT INTO users" in call.args[0] for call in self.connection.execute.call_args_list))
 
     def test_join_wrong_code_does_not_advance(self):
@@ -562,9 +571,10 @@ class AtomicPwaJoinTests(unittest.TestCase):
             self.cursor((7,)),
             self.cursor((17,)),
             self.cursor(),
+            self.cursor(),
         ]
 
-        result = database.complete_pwa_join("auth-user-uuid", "מיכאל")
+        result = database.complete_pwa_join("auth-user-uuid", "מיכאל", legal_acceptance=LEGAL_ACCEPTANCE)
 
         self.assertEqual(result, {"created": True, "user_id": 17, "family_id": 7})
         self.assertTrue(self.transaction_context.committed)
@@ -574,7 +584,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
         self.assertEqual(user_insert.args[1], ("מיכאל", 7, "auth-user-uuid"))
         self.assertIn(
             "DELETE FROM pwa_join_sessions",
-            self.connection.execute.call_args_list[8].args[0],
+            self.connection.execute.call_args_list[9].args[0],
         )
 
     def test_user_insert_failure_rolls_back_without_deleting_join_session(self):
@@ -590,7 +600,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
         ]
 
         with self.assertRaisesRegex(RuntimeError, "user insert failed"):
-            database.complete_pwa_join("auth-user-uuid", "מיכאל")
+            database.complete_pwa_join("auth-user-uuid", "מיכאל", legal_acceptance=LEGAL_ACCEPTANCE)
 
         self.assertTrue(self.transaction_context.rolled_back)
         self.assertFalse(self.transaction_context.committed)
@@ -761,7 +771,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
         ]
 
         with self.assertRaises(database.AuthUserAlreadyMappedError):
-            database.complete_pwa_join("auth-user-uuid", "מיכאל")
+            database.complete_pwa_join("auth-user-uuid", "מיכאל", legal_acceptance=LEGAL_ACCEPTANCE)
 
         self.assertTrue(self.transaction_context.rolled_back)
         self.assertEqual(self.connection.execute.call_count, 6)
@@ -784,7 +794,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
         ]
 
         with self.assertRaises(database.AuthUserAlreadyMappedError):
-            database.complete_pwa_join("auth-user-uuid", "מיכאל")
+            database.complete_pwa_join("auth-user-uuid", "מיכאל", legal_acceptance=LEGAL_ACCEPTANCE)
 
         self.assertTrue(self.transaction_context.rolled_back)
         self.assertFalse(self.transaction_context.committed)

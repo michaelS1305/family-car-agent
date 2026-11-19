@@ -1,3 +1,4 @@
+from legal_acceptance import LegalAcceptance
 from typing import Literal
 from datetime import datetime
 from uuid import UUID
@@ -237,7 +238,7 @@ class CreateFamilyAddressRequest(BaseModel):
     home_address: str = Field(max_length=200)
 
 
-class CreateFamilyRequest(BaseModel):
+class CreateFamilyRequest(LegalAcceptance):
     model_config = ConfigDict(extra="forbid")
 
     family_name: str = Field(max_length=HUMAN_NAME_MAX_LENGTH)
@@ -264,7 +265,7 @@ class JoinFamilyCodeRequest(BaseModel):
     family_code: str = Field(max_length=6)
 
 
-class JoinFamilyCompleteRequest(BaseModel):
+class JoinFamilyCompleteRequest(LegalAcceptance):
     user_name: str = Field(max_length=HUMAN_NAME_MAX_LENGTH)
 
 

@@ -592,6 +592,7 @@ def create_family(
             family_name=request.family_name,
             address_resolution_token=request.address_resolution_token,
             user_name=request.user_name,
+            legal_acceptance={key: getattr(request, key) for key in ("legal_accepted", "terms_version", "privacy_version")},
         )
     except FamilyCreationError as error:
         _raise_family_creation_error(error)
@@ -696,6 +697,7 @@ def complete_join(
         return complete_join_family(
             authenticated_user.auth_user_id,
             request.user_name,
+            legal_acceptance={key: getattr(request, key) for key in ("legal_accepted", "terms_version", "privacy_version")},
         )
     except JoinFamilyError as error:
         _raise_join_family_error(error)

@@ -128,6 +128,13 @@ class OnboardingModelTest {
         assertEquals(31.5, model.addressLocation!!.latitude, 0.0)
         model.back(); assertNull(model.addressLocation)
     }
+    private fun assertLegalAcceptance(payload: JSONObject) {
+        assertEquals(true, payload.get("legal_accepted"))
+        assertEquals("1.2", payload.getString("terms_version"))
+        assertEquals("1.2", payload.getString("privacy_version"))
+        assertFalse(payload.has("auth_user_id"))
+        assertFalse(payload.has("accepted_at"))
+    }
     private class Gateway : OnboardingGateway {
         val calls = mutableListOf<Triple<String, String, JSONObject?>>()
         var activated = false
@@ -248,8 +255,9 @@ class OnboardingModelTest {
         assertFalse(gateway.calls.any { it.first == "/api/onboarding/create-family" })
         model.consent = true; model.next()
         val payload = gateway.calls.single { it.first == "/api/onboarding/create-family" }.third!!
-        assertEquals(setOf("family_name", "user_name", "address_resolution_token"), payload.keys().asSequence().toSet())
+        assertEquals(setOf("family_name", "user_name", "address_resolution_token", "legal_accepted", "terms_version", "privacy_version"), payload.keys().asSequence().toSet())
         assertEquals("fixture-resolution", payload.getString("address_resolution_token"))
+        assertLegalAcceptance(payload)
         assertEquals(EntryScreen.SUCCESS, model.screen); assertEquals("abc123", model.createdCode)
         assertTrue(gateway.activated)
         model.next(); assertEquals(EntryScreen.AUTHENTICATED_APP, model.screen)
@@ -283,6 +291,7 @@ class OnboardingModelTest {
         assertEquals(listOf("start", "family-name", "address", "address-confirmation", "code", "complete", "me"),
             gateway.calls.map { it.first.substringAfterLast('/') })
         assertEquals("ab12cd", gateway.calls[4].third!!.getString("family_code"))
+        assertLegalAcceptance(gateway.calls.single { it.first.endsWith("/complete") }.third!!)
         model.next(); assertEquals(EntryScreen.AUTHENTICATED_APP, model.screen)
         assertEquals("שם מהשרת", model.authenticatedName)
         model.back(); assertEquals(EntryScreen.AUTHENTICATED_APP, model.screen)

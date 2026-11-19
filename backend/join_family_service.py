@@ -108,9 +108,9 @@ def _serialize_datetime(value):
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
-def _call_database(function, *args):
+def _call_database(function, *args, **kwargs):
     try:
-        return function(*args)
+        return function(*args, **kwargs)
     except JoinSessionLockedError as exc:
         raise JoinFamilyError(
             "JOIN_LOCKED",
@@ -278,11 +278,11 @@ def submit_join_family_code(auth_user_id, family_code):
     return _public_session(result["session"])
 
 
-def complete_join_family(auth_user_id, user_name):
+def complete_join_family(auth_user_id, user_name, *, legal_acceptance):
     if not isinstance(user_name, str) or len(user_name) > HUMAN_NAME_MAX_LENGTH:
         raise JoinFamilyError("INVALID_USER_NAME", 400)
     normalized_name = normalize_human_name(user_name)
     if normalized_name is None:
         raise JoinFamilyError("INVALID_USER_NAME", 400)
-    _call_database(complete_pwa_join, auth_user_id, normalized_name)
+    _call_database(complete_pwa_join, auth_user_id, normalized_name, legal_acceptance=legal_acceptance)
     return {"created": True}

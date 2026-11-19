@@ -6,6 +6,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 
+LEGAL_ACCEPTANCE = {"legal_accepted": True, "terms_version": "1.2", "privacy_version": "1.2"}
+
+
 def stub_module(name, **attributes):
     module = types.ModuleType(name)
     for attribute_name, value in attributes.items():
@@ -106,7 +109,7 @@ class FamilyCreationServiceTests(unittest.TestCase):
             "user_name": " מיכאל ",
         }
         values.update(overrides)
-        return service.create_family_for_auth_user(**values)
+        return service.create_family_for_auth_user(**values, legal_acceptance=LEGAL_ACCEPTANCE)
 
     def assert_error(self, code, **overrides):
         with self.assertRaises(service.FamilyCreationError) as raised:
@@ -134,6 +137,7 @@ class FamilyCreationServiceTests(unittest.TestCase):
             user_name="מיכאל",
             auth_user_id="auth-user-uuid",
             resolution_token=resolved.resolution_token,
+            legal_acceptance=LEGAL_ACCEPTANCE,
         )
 
     def test_numeric_family_and_personal_names_are_rejected(self):
@@ -271,6 +275,7 @@ class FamilyCreationServiceTests(unittest.TestCase):
                 family_name="כהן",
                 address_resolution_token=resolved.resolution_token,
                 user_name="מיכאל",
+                legal_acceptance=LEGAL_ACCEPTANCE,
             )
 
         self.assertEqual(raised.exception.code, "ADDRESS_RESOLUTION_EXPIRED")

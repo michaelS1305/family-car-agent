@@ -169,7 +169,8 @@ class OnboardingModel(private val gateway: OnboardingGateway, private val curren
                 4 -> {
                     gateway.request("/api/onboarding/create-family", "POST", JSONObject()
                         .put("family_name", familyName).put("user_name", userName)
-                        .put("address_resolution_token", checkNotNull(resolution).token))
+                        .put("address_resolution_token", checkNotNull(resolution).token)
+                        .put("legal_accepted", consent).put("terms_version", "1.2").put("privacy_version", "1.2"))
                     completed = true; finishAccount()
                 }
             }
@@ -181,6 +182,7 @@ class OnboardingModel(private val gateway: OnboardingGateway, private val curren
                 // Invalid attempts still reach the authoritative server counter.
                 4 -> "code" to JSONObject().put("family_code", joinCode)
                 else -> "complete" to JSONObject().put("user_name", userName)
+                    .put("legal_accepted", consent).put("terms_version", "1.2").put("privacy_version", "1.2")
             }
             addressLocation = null
             val result = gateway.request(joinPath(suffix), "POST", payload)

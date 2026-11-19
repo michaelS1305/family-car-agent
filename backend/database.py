@@ -1,3 +1,4 @@
+from legal_acceptance import record_legal_acceptance
 import os
 import logging
 from psycopg_pool import ConnectionPool
@@ -1465,6 +1466,7 @@ def create_family_with_first_user(
     home_longitude=None,
     auth_user_id=None,
     resolution_token=None,
+    *, legal_acceptance,
 ):
     try:
         with pool.connection() as conn:
@@ -1555,6 +1557,7 @@ def create_family_with_first_user(
                 ).fetchone()
                 if updated_user is None:
                     raise RuntimeError("Failed to assign family creator to family")
+                record_legal_acceptance(conn, auth_user_id, legal_acceptance)
                 if confirmation_digest is not None:
                     conn.execute("DELETE FROM family_address_confirmations WHERE token_digest = %s", (confirmation_digest,))
 
@@ -2181,7 +2184,7 @@ def verify_pwa_join_family_code(auth_user_id, family_code):
             return {"success": True, "session": _join_session_from_row(row)}
 
 
-def complete_pwa_join(auth_user_id, user_name):
+def complete_pwa_join(auth_user_id, user_name, *, legal_acceptance):
     try:
         with pool.connection() as conn:
             with conn.transaction():
@@ -2216,6 +2219,7 @@ def complete_pwa_join(auth_user_id, user_name):
                     (user_name, session["family_id"], auth_user_id),
                 ).fetchone()
 
+                record_legal_acceptance(conn, auth_user_id, legal_acceptance)
                 conn.execute(
                     "DELETE FROM pwa_join_sessions WHERE auth_user_id = %s",
                     (auth_user_id,),

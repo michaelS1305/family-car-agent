@@ -16,6 +16,9 @@ from tests.test_database_atomic_creation import load_database_module_without_rea
 database = load_database_module_without_real_connection()
 
 
+LEGAL_ACCEPTANCE = {"legal_accepted": True, "terms_version": "1.2", "privacy_version": "1.2"}
+
+
 @unittest.skipUnless(os.environ.get("GEMINI_TEST_DATABASE_URL"), "Isolated PostgreSQL not configured")
 class FamilyAddressPostgresTests(unittest.TestCase):
     def setUp(self):
@@ -36,6 +39,7 @@ class FamilyAddressPostgresTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
         with self.connection() as conn:
             conn.execute("CREATE TABLE auth_users (id uuid PRIMARY KEY)")
+            conn.execute("""CREATE TABLE legal_acceptances (auth_user_id uuid REFERENCES auth_users(id) ON DELETE CASCADE NOT NULL, terms_version text NOT NULL, privacy_version text NOT NULL, accepted_at timestamptz NOT NULL DEFAULT clock_timestamp(), PRIMARY KEY(auth_user_id, terms_version, privacy_version))""")
             conn.execute("""CREATE TABLE families (id serial PRIMARY KEY, name text,
                 family_code text UNIQUE NOT NULL, home_address text NOT NULL,
                 home_latitude double precision, home_longitude double precision,
@@ -94,7 +98,7 @@ class FamilyAddressPostgresTests(unittest.TestCase):
         return database.issue_family_address_confirmation(auth, address, "display", latitude, longitude, user_id=user, family_id=family)
 
     def create(self, auth, token):
-        return database.create_family_with_first_user("family", None, "creator", auth_user_id=auth, resolution_token=token)
+        return database.create_family_with_first_user("family", None, "creator", auth_user_id=auth, resolution_token=token, legal_acceptance=LEGAL_ACCEPTANCE)
 
     def family(self, latitude=10, longitude=10):
         auth = self.auth()
@@ -117,7 +121,7 @@ class FamilyAddressPostgresTests(unittest.TestCase):
         # A fresh module has no process-local state and consumes the same row.
         other = load_database_module_without_real_connection()
         with patch.object(other, "pool", database.pool):
-            other.create_family_with_first_user("family", None, "creator", auth_user_id=auth, resolution_token=token)
+            other.create_family_with_first_user("family", None, "creator", auth_user_id=auth, resolution_token=token, legal_acceptance=LEGAL_ACCEPTANCE)
         self.assertEqual(self.query("SELECT count(*) FROM family_address_confirmations"), [(0,)])
         self.assertEqual(self.query("SELECT count(*) FROM family_code_history"), [(1,)])
 

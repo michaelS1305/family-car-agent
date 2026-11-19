@@ -19,6 +19,9 @@ from models import (
 )
 
 
+LEGAL_ACCEPTANCE = {"legal_accepted": True, "terms_version": "1.2", "privacy_version": "1.2"}
+
+
 class FamilyCodeRegenerateModelTests(unittest.TestCase):
     def test_empty_only(self):
         self.assertEqual(FamilyCodeRegenerateRequest().model_dump(), {})
@@ -93,9 +96,9 @@ class OnboardingModelTests(unittest.TestCase):
             "address_resolution_token": "opaque",
             "user_name": "מיכאל",
         }
-        self.assertEqual(CreateFamilyRequest(**values).family_name, "כהן")
+        self.assertEqual(CreateFamilyRequest(**values, **LEGAL_ACCEPTANCE).family_name, "כהן")
         with self.assertRaises(ValidationError):
-            CreateFamilyRequest(**values, family_code="chosen1")
+            CreateFamilyRequest(**values, family_code="chosen1", **LEGAL_ACCEPTANCE)
 
     def test_name_fields_are_bounded_without_restricting_unicode(self):
         self.assertEqual(
@@ -103,7 +106,7 @@ class OnboardingModelTests(unittest.TestCase):
             "א" * 100,
         )
         self.assertEqual(
-            JoinFamilyCompleteRequest(user_name="é" * 100).user_name,
+            JoinFamilyCompleteRequest(user_name="é" * 100, **LEGAL_ACCEPTANCE).user_name,
             "é" * 100,
         )
         for model, field in (
@@ -117,6 +120,8 @@ class OnboardingModelTests(unittest.TestCase):
                 "address_resolution_token": "opaque",
                 "user_name": "מיכאל",
             } if model is CreateFamilyRequest else {}
+            if model in (CreateFamilyRequest, JoinFamilyCompleteRequest):
+                values.update(LEGAL_ACCEPTANCE)
             values[field] = "א" * 101
             with self.subTest(model=model.__name__, field=field):
                 with self.assertRaises(ValidationError):
