@@ -15,6 +15,9 @@ import deletion_gate as gate
 from tests.test_database_atomic_creation import load_database_module_without_real_connection
 
 
+LEGAL_ACCEPTANCE = {"legal_accepted": True, "terms_version": "1.2", "privacy_version": "1.2"}
+
+
 class DeletionUnitTests(unittest.TestCase):
     def test_safe_status_hints(self):
         for row, expected in (
@@ -85,6 +88,7 @@ class AccountDeletionPostgresTests(unittest.TestCase):
         # Explicit disposable fixture, NOT a production migration.
         self.query('''
           CREATE TABLE auth_users(id uuid PRIMARY KEY);
+          CREATE TABLE legal_acceptances(auth_user_id uuid NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE, terms_version text NOT NULL, privacy_version text NOT NULL, accepted_at timestamptz NOT NULL DEFAULT clock_timestamp(), PRIMARY KEY(auth_user_id,terms_version,privacy_version));
           CREATE TABLE families(id serial PRIMARY KEY,name text,family_code text UNIQUE,
             created_by_user_id integer NOT NULL,home_address text,home_latitude float8,home_longitude float8,created_at text);
           CREATE TABLE users(id serial PRIMARY KEY,auth_user_id uuid UNIQUE REFERENCES auth_users ON DELETE SET NULL,
@@ -333,7 +337,7 @@ class AccountDeletionPostgresTests(unittest.TestCase):
         with self.assertRaises(gate.IdentityUnavailable):
             self.database.start_pwa_join_session(self.creator[0])
         with self.assertRaises(gate.IdentityUnavailable):
-            self.database.create_family_with_first_user('x','x','x',auth_user_id=self.creator[0])
+            self.database.create_family_with_first_user('x','x','x',auth_user_id=self.creator[0], legal_acceptance=LEGAL_ACCEPTANCE)
         with self.assertRaises(gate.IdentityUnavailable):
             self.database.regenerate_family_code(self.creator[1],self.family)
 
@@ -370,7 +374,7 @@ class AccountDeletionPostgresTests(unittest.TestCase):
         def join():
             barrier.wait()
             try:
-                return self.database.complete_pwa_join(joiner,'new member')['created']
+                return self.database.complete_pwa_join(joiner,'new member', legal_acceptance=LEGAL_ACCEPTANCE)['created']
             except self.database.InvalidJoinStepError:
                 return False
         def cleanup():
@@ -524,7 +528,7 @@ class AccountDeletionPostgresTests(unittest.TestCase):
         for operation in (
             lambda: self.database.start_pwa_join_session(self.creator[0]),
             lambda: self.database.issue_family_address_confirmation(self.creator[0],'x','x',1,1),
-            lambda: self.database.create_family_with_first_user('x','x','x',auth_user_id=self.creator[0]),
+            lambda: self.database.create_family_with_first_user('x','x','x',auth_user_id=self.creator[0], legal_acceptance=LEGAL_ACCEPTANCE),
         ):
             with self.assertRaises(gate.IdentityUnavailable):
                 operation()

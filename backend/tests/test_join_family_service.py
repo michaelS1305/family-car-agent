@@ -7,6 +7,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 
+LEGAL_ACCEPTANCE = {"legal_accepted": True, "terms_version": "1.2", "privacy_version": "1.2"}
+
+
 class FakeAuthUserAlreadyMappedError(Exception):
     pass
 
@@ -480,19 +483,20 @@ class JoinFamilyServiceTests(unittest.TestCase):
             "family_id": 7,
         }
 
-        result = service.complete_join_family("verified-auth-user", " מיכאל ")
+        result = service.complete_join_family("verified-auth-user", " מיכאל ", legal_acceptance=LEGAL_ACCEPTANCE)
 
         self.assertTrue(result["created"])
         database_stub.complete_pwa_join.assert_called_once_with(
             "verified-auth-user",
             "מיכאל",
+            legal_acceptance=LEGAL_ACCEPTANCE,
         )
 
     def test_complete_rejects_numeric_names_without_database_write(self):
         for value in ("111", "Michael1"):
             with self.subTest(value=value):
                 with self.assertRaises(service.JoinFamilyError) as raised:
-                    service.complete_join_family("verified-auth-user", value)
+                    service.complete_join_family("verified-auth-user", value, legal_acceptance=LEGAL_ACCEPTANCE)
                 self.assertEqual(raised.exception.code, "INVALID_USER_NAME")
         database_stub.complete_pwa_join.assert_not_called()
 
@@ -504,7 +508,7 @@ class JoinFamilyServiceTests(unittest.TestCase):
         database_stub.submit_pwa_join_family_name.assert_not_called()
 
         with self.assertRaises(service.JoinFamilyError) as user_error:
-            service.complete_join_family("verified-auth-user", "א" * 101)
+            service.complete_join_family("verified-auth-user", "א" * 101, legal_acceptance=LEGAL_ACCEPTANCE)
         self.assertEqual(user_error.exception.code, "INVALID_USER_NAME")
         database_stub.complete_pwa_join.assert_not_called()
 
@@ -512,7 +516,7 @@ class JoinFamilyServiceTests(unittest.TestCase):
         database_stub.complete_pwa_join.side_effect = FakeAuthUserAlreadyMappedError()
 
         with self.assertRaises(service.JoinFamilyError) as raised:
-            service.complete_join_family("verified-auth-user", "מיכאל")
+            service.complete_join_family("verified-auth-user", "מיכאל", legal_acceptance=LEGAL_ACCEPTANCE)
 
         self.assertEqual(raised.exception.code, "AUTH_USER_ALREADY_MAPPED")
         self.assertEqual(raised.exception.status_code, 409)

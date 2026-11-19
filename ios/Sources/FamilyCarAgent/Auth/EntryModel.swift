@@ -553,7 +553,8 @@ import Combine
                 case 4:
                     guard let token = resolutionToken else { throw AuthFailure.rejected(409, "ADDRESS_RESOLUTION_EXPIRED") }
                     let result = try await request(CreatedResult.self, "/api/onboarding/create-family",
-                        ["family_name": .text(familyName), "user_name": .text(userName), "address_resolution_token": .text(token)])
+                        ["family_name": .text(familyName), "user_name": .text(userName), "address_resolution_token": .text(token),
+                         "legal_accepted": .flag(consent), "terms_version": .text("1.2"), "privacy_version": .text("1.2")])
                     guard result.created else { throw AuthFailure.invalidResponse }
                     completed = true; try await finish(existing: false)
                 default: throw AuthFailure.invalidResponse
@@ -566,7 +567,8 @@ import Combine
                 case 2: suffix = "address"; fields = ["home_address": .text(address)]
                 case 3: suffix = "address-confirmation"; fields = ["confirmed": .flag(true)]
                 case 4: suffix = "code"; fields = ["family_code": .text(familyCode)]
-                default: suffix = "complete"; fields = ["user_name": .text(userName)]
+                default: suffix = "complete"; fields = ["user_name": .text(userName),
+                    "legal_accepted": .flag(consent), "terms_version": .text("1.2"), "privacy_version": .text("1.2")]
                 }
                 do {
                     if step == 5 {

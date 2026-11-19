@@ -192,6 +192,7 @@ actor TestBackend: BackendTransport {
     let bodies = await backend.bodies
     let tokenBodies = bodies.compactMap { $0 }.compactMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     AuthCheck.check(tokenBodies.contains { $0["address_resolution_token"] as? String == "synthetic-token" && $0["latitude"] == nil }, "final create sends token not coordinates")
+    try await checkLegalPayload(backend, path: "/api/onboarding/create-family")
     model.enter(); AuthCheck.check(model.screen == .ready, "success continues to existing app state")
     model.logout(); model.selectRoute(.join)
     await backend.reply("/api/onboarding/join-family/start", #"{"step":"family_name"}"#)
@@ -240,6 +241,7 @@ actor TestBackend: BackendTransport {
     let duringCompletion = await backend.paths.count
     AuthCheck.check(duringCompletion == beforeCompletion + 1, "join completion is not submitted twice")
     await backend.release(); await completing.value
+    try await checkLegalPayload(backend, path: "/api/onboarding/join-family/complete")
     AuthCheck.check(model.screen == .success && model.createdCode.isEmpty && vault.value?.activated == true, "join complete activates without exposing family code")
     model.logout(); model.selectRoute(.join)
     await backend.reply("/api/onboarding/join-family/start", #"{"step":"address_confirmed","resolved_address":"Test"}"#)
@@ -356,4 +358,14 @@ actor TestBackend: BackendTransport {
     _ = try await recovery.access(owner: owner, force: true, forDeletion: true)
     AuthCheck.check(vault.value?.deletionPending == true, "refresh preserves durable deletion fence")
 
+}
+
+@MainActor private func checkLegalPayload(_ backend: TestBackend, path: String) async throws {
+    let paths = await backend.paths
+    let bodies = await backend.bodies
+    let index = paths.lastIndex(of: path)!
+    let fields = try JSONSerialization.jsonObject(with: bodies[index]!) as! [String: Any]
+    AuthCheck.check(fields["legal_accepted"] as? Bool == true, "explicit acceptance sent")
+    AuthCheck.check(fields["terms_version"] as? String == "1.2" && fields["privacy_version"] as? String == "1.2", "approved legal versions")
+    AuthCheck.check(fields["accepted_at"] == nil && fields["auth_user_id"] == nil, "server controls identity and time")
 }

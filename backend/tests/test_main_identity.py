@@ -13,6 +13,9 @@ import fastapi.responses
 from identity import AuthenticatedSupabaseUser, CurrentUser
 
 
+LEGAL_ACCEPTANCE = {"legal_accepted": True, "terms_version": "1.2", "privacy_version": "1.2"}
+
+
 class FakeHTTPException(Exception):
     def __init__(self, status_code, detail, headers=None):
         super().__init__(str(detail))
@@ -926,6 +929,7 @@ class CreateFamilyRouteTests(unittest.TestCase):
             auth_user_id="forged",
             user_id=999,
             family_id=888,
+            **LEGAL_ACCEPTANCE,
         )
 
         response = main.create_family(
@@ -944,6 +948,7 @@ class CreateFamilyRouteTests(unittest.TestCase):
             family_name="כהן",
             address_resolution_token="opaque-resolution-token",
             user_name="מיכאל",
+            legal_acceptance=LEGAL_ACCEPTANCE,
         )
 
     def test_unexpected_create_failure_returns_structured_server_error(self):
@@ -955,6 +960,7 @@ class CreateFamilyRouteTests(unittest.TestCase):
             family_code="482731",
             address_resolution_token="opaque-resolution-token",
             user_name="מיכאל",
+            **LEGAL_ACCEPTANCE,
         )
 
         with self.assertRaises(FakeHTTPException) as raised:
@@ -985,6 +991,7 @@ class CreateFamilyRouteTests(unittest.TestCase):
             family_code="482731",
             address_resolution_token="opaque-resolution-token",
             user_name="מיכאל",
+            **LEGAL_ACCEPTANCE,
         )
 
         with self.assertRaises(FakeHTTPException) as raised:
@@ -1004,6 +1011,20 @@ class CreateFamilyRouteTests(unittest.TestCase):
 
 
 class JoinFamilyRouteTests(unittest.TestCase):
+    def test_completion_passes_jwt_identity_and_explicit_acceptance_only(self):
+        join_family_stub.complete_join_family.reset_mock()
+        request = types.SimpleNamespace(
+            user_name="Name", auth_user_id="forged", accepted_at="forged",
+            **LEGAL_ACCEPTANCE,
+        )
+        result = main.complete_join(
+            request, AuthenticatedSupabaseUser(auth_user_id="verified-auth-user"),
+        )
+        self.assertEqual(result, {"created": True})
+        join_family_stub.complete_join_family.assert_called_once_with(
+            "verified-auth-user", "Name", legal_acceptance=LEGAL_ACCEPTANCE,
+        )
+
     def setUp(self):
         join_family_stub.submit_join_family_name.reset_mock(
             return_value=True,

@@ -15,6 +15,9 @@ from uuid import uuid4
 from tests.test_database_atomic_creation import database, RecordingContext
 
 
+LEGAL_ACCEPTANCE = {"legal_accepted": True, "terms_version": "1.2", "privacy_version": "1.2"}
+
+
 class AllocatorTests(unittest.TestCase):
     def setUp(self):
         self.conn = Mock()
@@ -135,6 +138,7 @@ class FamilyCodePostgresTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         with self.connection() as conn:
+            conn.execute("""CREATE TABLE legal_acceptances (auth_user_id text NOT NULL, terms_version text NOT NULL, privacy_version text NOT NULL, accepted_at timestamptz NOT NULL DEFAULT clock_timestamp(), PRIMARY KEY(auth_user_id, terms_version, privacy_version))""")
             conn.execute("""CREATE TABLE families (
                 id serial PRIMARY KEY, name text, family_code text NOT NULL UNIQUE,
                 home_address text, home_latitude double precision, home_longitude double precision,
@@ -172,7 +176,7 @@ class FamilyCodePostgresTests(unittest.TestCase):
             return conn.execute(sql, params).fetchall()
 
     def create(self, auth):
-        return database.create_family_with_first_user(name="test", home_address="test", user_name="test", auth_user_id=auth)
+        return database.create_family_with_first_user(name="test", home_address="test", user_name="test", auth_user_id=auth, legal_acceptance=LEGAL_ACCEPTANCE)
 
     def current(self):
         return self.query("SELECT family_code FROM families WHERE id=%s", (self.family,))[0][0]
@@ -214,10 +218,10 @@ class FamilyCodePostgresTests(unittest.TestCase):
         self.assertEqual(self.query("SELECT step,family_name_attempts,family_code_attempts FROM pwa_join_sessions WHERE auth_user_id='joiner'"), [("family_code", 1, 1)])
         self.assertEqual(self.query("SELECT * FROM pwa_join_sessions WHERE auth_user_id='locked'"), locked)
         with self.assertRaises(database.InvalidJoinStepError):
-            database.complete_pwa_join("joiner", "name")
+            database.complete_pwa_join("joiner", "name", legal_acceptance=LEGAL_ACCEPTANCE)
         self.assertFalse(database.verify_pwa_join_family_code("joiner", old)["success"])
         self.assertTrue(database.verify_pwa_join_family_code("joiner", new)["success"])
-        self.assertTrue(database.complete_pwa_join("joiner", "name")["created"])
+        self.assertTrue(database.complete_pwa_join("joiner", "name", legal_acceptance=LEGAL_ACCEPTANCE)["created"])
 
     def test_regeneration_rollback_restores_code_history_and_session(self):
         self.session("user_name")
@@ -272,7 +276,7 @@ class FamilyCodePostgresTests(unittest.TestCase):
 
     def test_completion_before_regeneration_remains_member(self):
         self.session("user_name")
-        result, _ = self.ordered(lambda: database.complete_pwa_join("joiner", "name"), self.regenerate, "_lock_pwa_join_session")
+        result, _ = self.ordered(lambda: database.complete_pwa_join("joiner", "name", legal_acceptance=LEGAL_ACCEPTANCE), self.regenerate, "_lock_pwa_join_session")
         self.assertTrue(result["created"])
         self.assertEqual(self.query("SELECT family_id FROM users WHERE auth_user_id='joiner'"), [(self.family,)])
 
@@ -280,6 +284,6 @@ class FamilyCodePostgresTests(unittest.TestCase):
         self.session("user_name")
         def complete():
             with self.assertRaises(database.InvalidJoinStepError):
-                database.complete_pwa_join("joiner", "name")
+                database.complete_pwa_join("joiner", "name", legal_acceptance=LEGAL_ACCEPTANCE)
         self.ordered(self.regenerate, complete, "_allocate_family_code")
         self.assertEqual(self.query("SELECT count(*) FROM users WHERE auth_user_id='joiner'"), [(0,)])
