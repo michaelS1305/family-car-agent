@@ -108,6 +108,26 @@ class WorkflowChecks(unittest.TestCase):
                     for source in re.findall(r"python3 - <<'PY'\n(.*?)\nPY", script, re.S):
                         ast.parse(source)
 
+    def test_simulator_preserves_package_conditions_for_both_environments(self):
+        step = next(step for step in self.workflows['ios']['jobs']['ios']['steps']
+                    if step.get('name') == 'Compile iOS Simulator package without signing')
+        # Capture actual shell arguments without Xcode, builds, or signing.
+        script = "xcodebuild() { printf '%s\\n' \"$@\"; }\n" + step['run']
+        for production, configuration, flag in [('false', 'Debug', 'DEBUG'),
+                                                ('true', 'Release', 'FCA_PRODUCTION')]:
+            result = subprocess.run(
+                ['bash', '-eu', '-c', script], text=True, capture_output=True, check=True,
+                env=dict(os.environ, PRODUCTION=production, RUNNER_TEMP='/tmp/fca-ci-check'),
+            )
+            args = result.stdout.splitlines()
+            self.assertEqual(args[args.index('-configuration') + 1], configuration)
+            # Xcode must expand inherited settings, NOT the shell. Without this,
+            # Firebase loses SWIFT_PACKAGE and selects its non-SPM imports.
+            self.assertIn('SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) ' + flag, args)
+            self.assertEqual(result.stderr, '')
+            self.assertIn('CODE_SIGNING_ALLOWED=NO', args)
+            self.assertIn('CODE_SIGNING_REQUIRED=NO', args)
+
     def test_required_gates_fail_on_skipped_failed_or_cancelled_signing(self):
         for name, validation, signing in [('android', 'VALIDATION', 'SIGNING'),
                                           ('ios', 'VALIDATION', 'PRODUCTION_SIGNING')]:

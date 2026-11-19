@@ -82,10 +82,11 @@ jobs:
           configuration=Debug
           flags=DEBUG
           if [ "$PRODUCTION" = true ]; then configuration=Release; flags=FCA_PRODUCTION; fi
+          # Preserve SPM's SWIFT_PACKAGE; Firebase uses it to select its module imports.
           xcodebuild -scheme FamilyCarAgent \
             -destination 'generic/platform=iOS Simulator' \
             -configuration "$configuration" \
-            SWIFT_ACTIVE_COMPILATION_CONDITIONS="$flags" \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS="\$(inherited) $flags" \
             -derivedDataPath "$RUNNER_TEMP/fca-ios-derived" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 
