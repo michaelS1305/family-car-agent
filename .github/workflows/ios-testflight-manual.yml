@@ -1,0 +1,92 @@
+﻿name: Manual TestFlight Upload
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  upload:
+    runs-on: macos-26
+    environment: ios-testflight-upload
+    timeout-minutes: 30
+
+    steps:
+      - name: Download existing signed IPA
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 44902601567
+          github-token: ${{ github.token }}
+          name: ios-production-ipa-7e7d0291fafd98eca3d7add2d71e948a4ac17d50
+          path: ${{ runner.temp }}/testflight-input
+
+      - name: Upload existing IPA to App Store Connect
+        env:
+          FCA_ASC_API_KEY_BASE64: ${{ secrets.FCA_ASC_API_KEY_BASE64 }}
+          FCA_ASC_KEY_ID: ${{ vars.FCA_ASC_KEY_ID }}
+          FCA_ASC_ISSUER_ID: ${{ vars.FCA_ASC_ISSUER_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, plistlib, re, subprocess, tempfile, uuid, zipfile
+
+          folder = pathlib.Path(os.environ["RUNNER_TEMP"]) / "testflight-input"
+          ipa = folder / "FamilyCarAgent-Production.ipa"
+          report = json.loads((folder / "fca-production-signing-report.json").read_text())
+
+          assert report["bundle_id"] == "com.familycaragent.app"
+          assert report["environment"] == "production"
+          for field in (
+              "distribution_signature_verified",
+              "signing_certificate_authorized_by_profile",
+              "embedded_profile_verified",
+              "entitlements_match_requested",
+              "production_apns_entitlement_verified",
+              "firebase_production_configuration_verified",
+              "app_intents_metadata_preserved",
+              "ipa_roundtrip_verified",
+              "preflight_signing_verified",
+          ):
+              assert report[field] is True, field
+
+          assert hashlib.sha256(ipa.read_bytes()).hexdigest() == report["ipa_sha256"]
+
+          with zipfile.ZipFile(ipa) as archive:
+              matches = [n for n in archive.namelist()
+                         if re.fullmatch(r"Payload/[^/]+\.app/Info.plist", n)]
+              assert len(matches) == 1
+              info = plistlib.loads(archive.read(matches[0]))
+
+          assert info["CFBundleIdentifier"] == "com.familycaragent.app"
+          assert info["FCAEnvironment"] == "production"
+          assert info["CFBundleVersion"] == "1000.1.22"
+          assert info["CFBundleShortVersionString"] == "1.0.0"
+
+          key_id = os.environ["FCA_ASC_KEY_ID"]
+          issuer = os.environ["FCA_ASC_ISSUER_ID"]
+          assert re.fullmatch(r"[A-Z0-9]{10}", key_id)
+          uuid.UUID(issuer)
+          key = base64.b64decode(os.environ["FCA_ASC_API_KEY_BASE64"], validate=True)
+          assert key.startswith(b"-----BEGIN PRIVATE KEY-----")
+
+          with tempfile.TemporaryDirectory() as temp:
+              keyfile = pathlib.Path(temp) / f"AuthKey_{key_id}.p8"
+              keyfile.write_bytes(key)
+              keyfile.chmod(0o600)
+              env = {k: v for k, v in os.environ.items() if not k.startswith("FCA_ASC_")}
+              result = subprocess.run(
+                  ["xcrun", "altool", "--upload-app", "--type", "ios",
+                   "--file", str(ipa), "--apiKey", key_id,
+                   "--apiIssuer", issuer, "--p8-file-path", str(keyfile),
+                   "--output-format", "json"],
+                  env=env, capture_output=True, text=True, timeout=1500
+              )
+              if result.returncode:
+                  raise RuntimeError("Apple upload failed; check App Store Connect before retrying")
+
+          print("IPA upload accepted by Apple. TestFlight processing pending.")
+          PY
