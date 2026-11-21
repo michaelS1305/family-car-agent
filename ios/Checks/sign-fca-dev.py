@@ -444,26 +444,57 @@ def set_user_keychains(paths):
     )
 
 
+def authorize_signing(production=False):
+    """Event fence, not a substitute for protected branches/environment secrets."""
+    event = os.environ.get("GITHUB_EVENT_NAME")
+    ref = os.environ.get("GITHUB_REF")
+    if production:
+        require(os.environ.get("FCA_PROD_SIGN_ENABLED") == "true",
+                "Production signing is not enabled")
+        if event == "push" and ref == "refs/heads/main":
+            require(os.environ.get("GITHUB_REPOSITORY") == "michaelS1305/family-car-agent",
+                    "Production signing requires the trusted repository")
+            return
+        if event == "pull_request":
+            try:
+                payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+                pr = payload["pull_request"]
+                repository = "michaelS1305/family-car-agent"
+                valid = (
+                    os.environ.get("GITHUB_REPOSITORY") == repository
+                    and payload["action"] in ("opened", "synchronize", "reopened", "ready_for_review")
+                    and pr["head"]["repo"]["full_name"] == repository
+                    and pr["head"]["repo"]["fork"] is False
+                    and pr["base"]["repo"]["full_name"] == repository
+                    and pr["head"]["ref"] == "develop"
+                    and pr["base"]["ref"] == "main"
+                    and pr["draft"] is False
+                    and type(payload["number"]) is int and payload["number"] > 0
+                    and ref == f"refs/pull/{payload['number']}/merge"
+                )
+            except (OSError, ValueError, KeyError, TypeError):
+                valid = False
+            require(valid, "Production signing requires a trusted develop-to-main PR")
+            return
+        require(event == "workflow_dispatch" and ref == "refs/heads/develop",
+                "Production signing requires explicit manual approval or a trusted PR")
+        return
+    require(ref == "refs/heads/develop" and event in ("push", "workflow_dispatch"),
+            "Signing requires authorized develop workflow")
+
+
 def sign(input_app, evidence, production=False):
     SOURCE_BUNDLE = INSTALLED_BUNDLE = "com.familycaragent.app" if production else "com.familycaragent.app.dev"
     IPA_NAME = "FamilyCarAgent-Production.ipa" if production else "FCA-Dev-AppIntents-Development.ipa"
     REPORT_NAME = "fca-production-signing-report.json" if production else "fca-dev-signing-report.json"
+    authorize_signing(production)
     if production:
         from firebase_prod_config import validate_bundle
-        require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-                and os.environ.get("FCA_PROD_SIGN_ENABLED") == "true", "Production signing requires explicit manual approval")
     else:
         from firebase_dev_config import validate_bundle
     require(
         sys.platform == "darwin",
         "FCA Dev signing requires macOS",
-    )
-
-    require(
-        os.environ.get("GITHUB_REF") == "refs/heads/develop"
-        and os.environ.get("GITHUB_EVENT_NAME")
-        in ("push", "workflow_dispatch"),
-        "Signing requires authorized develop workflow",
     )
 
     require(

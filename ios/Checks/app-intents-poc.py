@@ -52,13 +52,17 @@ def generate(ios: Path, output: Path, probe=False, firebase_config=None, product
     accessor.write_text("import Foundation\nextension Bundle { static var module: Bundle { .main } }\n")
     info_path = ios / config["infoPath"]
     entitlements_path = ios / config["entitlementsPath"]
+    build_number = "1"
     if production:
+        build_number = os.environ.get("FCA_IOS_PROD_BUILD_NUMBER", "1")
+        if not re.fullmatch(r"[1-9][0-9]{0,3}(?:\.[0-9]{1,2}){0,2}", build_number):
+            raise ValueError("Invalid Production build number")
         key = os.environ.get("FCA_IOS_PROD_SUPABASE_PUBLISHABLE_KEY", "")
         if not key.startswith("sb_publishable_") or any(c.isspace() for c in key):
             raise ValueError("Production public Supabase configuration required")
         config["bundleID"] = "com.familycaragent.app"
         info = plistlib.loads(info_path.read_bytes())
-        info.update(CFBundleDisplayName="Family Car Agent", FCAEnvironment="production", FCASupabasePublishableKey=key)
+        info.update(CFBundleDisplayName="Family Car Agent", FCAEnvironment="production", FCASupabasePublishableKey=key, CFBundleVersion=build_number)
         info["CFBundleURLTypes"] = [{"CFBundleURLName":"com.familycaragent.app.auth", "CFBundleURLSchemes":["com.familycaragent.app"]}]
         info_path = output / "Production-Info.plist"
         info_path.write_bytes(plistlib.dumps(info))
@@ -137,7 +141,7 @@ def generate(ios: Path, output: Path, probe=False, firebase_config=None, product
         "SWIFT_VERSION": "6.0", "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "FCA_PRODUCTION" if production else "DEBUG",
         "SWIFT_OPTIMIZATION_LEVEL": "-O" if production else "-Onone", "IPHONEOS_DEPLOYMENT_TARGET": "17.0",
         "SDKROOT": "iphoneos", "SUPPORTED_PLATFORMS": "iphoneos",
-        "TARGETED_DEVICE_FAMILY": "1", "CURRENT_PROJECT_VERSION": "1",
+        "TARGETED_DEVICE_FAMILY": "1", "CURRENT_PROJECT_VERSION": build_number,
         "MARKETING_VERSION": "1.0.0" if production else "1.0", "ENABLE_APP_INTENTS_METADATA_EXTRACTION": "YES",
         **({"OTHER_LDFLAGS": "$(inherited) -ObjC"} if not probe else {}),
     })
