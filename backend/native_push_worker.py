@@ -170,6 +170,7 @@ def challenge_pass(pool, config, provider):
         conn.execute("UPDATE native_push_registration_challenges SET lease_token=%s,"
             "lease_until=LEAST(expires_at,clock_timestamp()+interval '30 seconds'),send_attempts=send_attempts+1 "
             "WHERE challenge_ref=%s", (lease,row[0]))
+    diagnostics.trace(config, row[7], row[0], row[1], reason='selected', state='pending', stage='selection')
     stage = 'credentials_preparation'
     cancelled = False
     try:
@@ -209,6 +210,23 @@ def challenge_pass(pool, config, provider):
             cursor = conn.execute("UPDATE native_push_registration_challenges SET status='cancelled'," + ERASE +
                          " WHERE challenge_ref=%s AND lease_token=%s AND status='pending'", (row[0],lease))
             cancelled = cursor.rowcount == 1
+    # Observe committed state separately: diagnostic failure cannot roll back delivery.
+    final_state = 'unavailable'
+    if diagnostics.production_enabled() and row[7] == 'ios':
+        try:
+            with _transaction(pool) as conn:
+                _limits(conn)
+                observed = conn.execute('SELECT status FROM native_push_registration_challenges WHERE challenge_ref=%s',
+                                        (row[0],)).fetchone()
+                if observed and observed[0] in diagnostics.STATES:
+                    final_state = observed[0]
+        except Exception:
+            pass
+    diagnostics.trace(config, row[7], row[0], row[1],
+        reason='terminal_delivery_failure' if cancelled else 'delivery_result', state=final_state,
+        stage=stage, result=result.code,
+        http_status=getattr(provider, 'diagnostic_http_status', None) if stage == 'fcm_request_response' else None,
+        fcm_code=getattr(provider, 'diagnostic_fcm_code', None) if stage == 'fcm_request_response' else None)
     diagnostics.emit(config, row[7], {
         'stage': stage, 'result': result.code, 'cancelled': cancelled,
         'http_status': getattr(provider, 'diagnostic_http_status', None) if stage == 'fcm_request_response' else None,

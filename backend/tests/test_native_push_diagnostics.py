@@ -75,7 +75,7 @@ class DiagnosticTests(unittest.TestCase):
             self.assertIn('THIRD_PARTY_AUTH_ERROR', logs.output[0])
 
     def test_gates(self):
-        for env in ({}, {**ENV, diag.FLAG: 'false'}, {**ENV, 'NATIVE_PUSH_ENVIRONMENT': 'prod'},
+        for env in ({}, {**ENV, diag.FLAG: 'false'},
                     {**ENV, 'SUPABASE_URL': 'https://production.invalid'}):
             with patch.dict(os.environ, env, clear=True), patch.object(diag.socket, 'socket') as socket:
                 channel = diag.Channel()

@@ -3,6 +3,7 @@
 The caller owns the transaction. No bearer credentials are retained here.
 Preparation precedes registration, so cancellation can win even before begin.
 """
+import native_push_diagnostics as diagnostics
 import hashlib
 import hmac
 
@@ -64,8 +65,9 @@ def cancel(conn, config, installation_ref, secret):
         'token_ciphertext=NULL,token_fingerprint=NULL,encryption_key_id=NULL,revoked_at=clock_timestamp(),'
         "updated_at=clock_timestamp() WHERE installation_ref=%s AND user_id=%s AND platform='ios' "
         "AND provider_project=%s AND status<>'revoked'", (installation_ref,row[0],config.project))
-    conn.execute("UPDATE native_push_registration_challenges SET status='cancelled'," + ERASE +
+    cancelled = conn.execute("UPDATE native_push_registration_challenges SET status='cancelled'," + ERASE +
         " WHERE installation_ref=%s AND user_id=%s AND status='pending' AND EXISTS "
         "(SELECT 1 FROM native_push_installations i WHERE i.installation_ref=native_push_registration_challenges.installation_ref "
-        "AND i.platform='ios')", (installation_ref,row[0]))
+        "AND i.platform='ios') RETURNING challenge_ref", (installation_ref,row[0]))
+    diagnostics.transitions(cancelled, config, 'ios', installation_ref, 'capability_revocation')
     return response('REVOKED')

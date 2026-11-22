@@ -4,6 +4,7 @@ Installation ownership never transfers. Account switch must revoke under the old
 identity and use a new installation reference under the new identity.
 """
 from datetime import timedelta
+import native_push_diagnostics as diagnostics
 import hmac
 import secrets
 from uuid import uuid4
@@ -100,8 +101,9 @@ def begin(conn, user, config, *, installation_ref, request_id, platform, token):
                            "AND status='pending' AND installation_ref<>%s", (user.user_id, installation_ref)).fetchone()[0]
     if pending >= 5:
         return response('RATE_LIMITED')
-    conn.execute("UPDATE native_push_registration_challenges SET status='cancelled'," + ERASE +
-                 " WHERE installation_ref=%s AND user_id=%s AND status='pending'", (installation_ref,user.user_id))
+    cancelled = conn.execute("UPDATE native_push_registration_challenges SET status='cancelled'," + ERASE +
+                 " WHERE installation_ref=%s AND user_id=%s AND status='pending' RETURNING challenge_ref", (installation_ref,user.user_id))
+    diagnostics.transitions(cancelled, config, platform, installation_ref, 'registration_replacement')
     ref, nonce = uuid4(), secrets.token_urlsafe(32)
     conn.execute('INSERT INTO native_push_registration_challenges '
         '(challenge_ref,installation_ref,user_id,request_id,expected_generation,candidate_token_ciphertext,'
@@ -142,6 +144,9 @@ def confirm(conn, user, config, *, installation_ref, challenge_ref, nonce):
     if expires <= now or generation != installation[0] or attempts >= 5:
         conn.execute("UPDATE native_push_registration_challenges SET status=%s," + ERASE +
             ' WHERE challenge_ref=%s', ('expired' if expires <= now else 'cancelled',challenge_ref))
+        diagnostics.trace(config, installation[2], challenge_ref, installation_ref,
+            reason='verification_expired' if expires <= now else 'generation_mismatch' if generation != installation[0] else 'verification_limit',
+            state='expired' if expires <= now else 'cancelled')
         return response('REGISTRATION_UNAVAILABLE')
     conn.execute('UPDATE native_push_registration_challenges SET verify_attempts=verify_attempts+1 WHERE challenge_ref=%s',
                  (challenge_ref,))
@@ -149,6 +154,8 @@ def confirm(conn, user, config, *, installation_ref, challenge_ref, nonce):
         if attempts + 1 >= 5:
             conn.execute("UPDATE native_push_registration_challenges SET status='cancelled'," + ERASE +
                          ' WHERE challenge_ref=%s', (challenge_ref,))
+            diagnostics.trace(config, installation[2], challenge_ref, installation_ref,
+                              reason='verification_limit', state='cancelled')
         return response('REGISTRATION_UNAVAILABLE')
     key_cohort(conn,config)
     candidate = config.open(cipher,key_id,token_context(user.user_id,installation_ref))
@@ -161,6 +168,8 @@ def confirm(conn, user, config, *, installation_ref, challenge_ref, nonce):
                     "AND status='active' AND installation_ref<>%s", (config.project,fingerprint,installation_ref)).fetchone():
         conn.execute("UPDATE native_push_registration_challenges SET status='cancelled'," + ERASE +
                      ' WHERE challenge_ref=%s', (challenge_ref,))
+        diagnostics.trace(config, installation[2], challenge_ref, installation_ref,
+                          reason='token_conflict', state='cancelled')
         return response('REGISTRATION_UNAVAILABLE')
     conn.execute("UPDATE native_push_installations SET generation=generation+1,status='active',"
         'token_ciphertext=%s,token_fingerprint=%s,encryption_key_id=%s,verified_at=%s,revoked_at=NULL,'
@@ -168,6 +177,7 @@ def confirm(conn, user, config, *, installation_ref, challenge_ref, nonce):
         (cipher,fingerprint,key_id,now,now,now,installation_ref,user.user_id))
     conn.execute("UPDATE native_push_registration_challenges SET status='consumed',activated_generation=%s," + ERASE +
                  ' WHERE challenge_ref=%s', (generation+1,challenge_ref))
+    diagnostics.trace(config, installation[2], challenge_ref, installation_ref, reason='verified', state='consumed')
     return response('ACTIVE', generation=generation+1)
 
 
@@ -188,6 +198,7 @@ def revoke(conn, user, config, installation_ref, expected_generation):
         "AND provider_project=%s AND status<>'revoked' RETURNING installation_ref",
         (installation_ref,user.user_id,expected_generation,config.project)).fetchone()
     if changed:
-        conn.execute("UPDATE native_push_registration_challenges SET status='cancelled'," + ERASE +
-            " WHERE installation_ref=%s AND user_id=%s AND status='pending'", (installation_ref,user.user_id))
+        cancelled = conn.execute("UPDATE native_push_registration_challenges SET status='cancelled'," + ERASE +
+            " WHERE installation_ref=%s AND user_id=%s AND status='pending' RETURNING challenge_ref", (installation_ref,user.user_id))
+        diagnostics.transitions(cancelled, config, 'ios' if ios else 'android', installation_ref, 'explicit_revocation')
     return response('REVOKED' if changed else 'REGISTRATION_UNAVAILABLE')
