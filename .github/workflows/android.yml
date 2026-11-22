@@ -52,6 +52,12 @@ jobs:
           distribution: temurin
           # Match tracked Gradle daemon criteria; application targets stay 17.
           java-version: '25'
+          cache: gradle
+          cache-dependency-path: |
+            android/**/*.gradle.kts
+            android/gradle.properties
+            android/gradle/gradle-daemon-jvm.properties
+            android/gradle/wrapper/gradle-wrapper.properties
       - uses: android-actions/setup-android@v4
       - name: Install Android SDK platform and build tools
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
@@ -118,10 +124,10 @@ jobs:
         run: bash ./gradlew :app:testEnvironmentConfiguration
       - name: Dev unit tests, lint and debug assembly
         if: env.PRODUCTION != 'true'
-        run: bash ./gradlew :app:testDevDebugUnitTest :app:lintDevDebug :app:assembleDevDebug
+        run: python3 ../.github/android_gradle_retry.py :app:testDevDebugUnitTest :app:lintDevDebug :app:assembleDevDebug
       - name: Prod unit tests, lint and debug assembly
         if: env.PRODUCTION == 'true'
-        run: bash ./gradlew :app:testProdDebugUnitTest :app:lintProdDebug :app:assembleProdDebug
+        run: python3 ../.github/android_gradle_retry.py :app:testProdDebugUnitTest :app:lintProdDebug :app:assembleProdDebug
       - name: Upload Development APK
         if: env.PRODUCTION != 'true'
         uses: actions/upload-artifact@v4
