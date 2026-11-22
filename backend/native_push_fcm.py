@@ -87,8 +87,8 @@ class Fcm:
     def send(self, token, data, *, expires_at, platform):
         self.diagnostic_http_status = None
         self.diagnostic_fcm_code = None
-        diagnostic = (diagnostics.enabled() and self.config.environment == 'dev'
-                      and platform == 'ios' and data.get('kind') == 'registration_challenge')
+        diagnostic = (diagnostics.capture(self.config, platform)
+                      and data.get('kind') == 'registration_challenge')
         # Never let an untrusted platform select an unrestricted send path.
         if not self.config.supports(platform):
             return Result('configuration')

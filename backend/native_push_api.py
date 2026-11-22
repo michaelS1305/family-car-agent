@@ -10,6 +10,7 @@ from identity import CurrentUser
 from native_push_outbox import enabled, wakeup
 from native_push_security import Config, ConfigurationError, InstallationUnavailable, for_platform, for_installation
 from vehicle_api import vehicle_pool, _call
+import native_push_diagnostics as diagnostics
 import native_push_registration as registration
 import native_push_refresh as refresh
 import native_push_revocation as revocation
@@ -54,7 +55,7 @@ def configuration():
 def run(pool, operation):
     def execute():
         try:
-            with pool.connection() as conn:
+            with diagnostics.committed(), pool.connection() as conn:
                 conn.execute("SET LOCAL lock_timeout='1s'")
                 conn.execute("SET LOCAL statement_timeout='3s'")
                 result = operation(conn)
