@@ -11,6 +11,8 @@ from vehicle_api import vehicle_pool, _call
 import vehicle_lifecycle as lifecycle
 import vehicle_bindings
 from native_push_outbox import commit_boundary
+import return_recovery
+from vehicle_identity import VehicleIdentityError
 
 router = APIRouter(prefix='/api/devices', tags=['devices'])
 
@@ -37,12 +39,32 @@ class Return(Take):
     location_at: AwareDatetime
 
 
+class ReturnVerification(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    invoked_at: AwareDatetime
+    location_at: AwareDatetime
+    latitude: float = Field(strict=True, ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(strict=True, ge=-180, le=180, allow_inf_nan=False)
+    accuracy_m: float = Field(strict=True, gt=0, le=100, allow_inf_nan=False)
+
+
+class ReturnRecovery(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    recovery_id: UUID4
+    original_return: Return
+    verification: ReturnVerification
+
+
 def run(pool, response, operation):
     response.headers['Cache-Control'] = 'no-store'
     def execute():
         try:
             with commit_boundary(), pool.connection() as conn:
-                return operation(conn)
+                result = operation(conn)
+            # Refusal records must commit before the public HTTP error is raised.
+            if isinstance(result, return_recovery.Refusal):
+                raise VehicleIdentityError(result.code, result.message, result.status_code)
+            return result
         except IdentityUnavailable:
             raise HTTPException(403, detail={'code': 'IDENTITY_UNAVAILABLE', 'message': 'Identity unavailable'}) from None
     return _call(execute)
@@ -97,4 +119,17 @@ def return_event(device_ref: UUID, body: Return, response: Response,
                  user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):
     event = NativeEvent(body.event_id, device_ref, body.vehicle_ref, 'return', body.occurred_at,
                         body.device_sequence, body.take_event_id)
-    return run(pool, response, lambda c: vehicle_bindings.admit_return(c, user, event, body))
+    return run(pool, response, lambda c: vehicle_bindings.admit_return(c, user, event, body, record_rejection=True))
+
+
+@router.post('/{device_ref}/events/return/{event_id}/recovery')
+def recover_return(device_ref: UUID, event_id: UUID4, body: ReturnRecovery, response: Response,
+                   user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):
+    original = body.original_return
+    if original.event_id != event_id:
+        raise HTTPException(409, detail={'code': 'RETURN_RECOVERY_EVIDENCE_MISMATCH',
+                                        'message': 'Return recovery could not be completed'})
+    event = NativeEvent(original.event_id, device_ref, original.vehicle_ref, 'return',
+                        original.occurred_at, original.device_sequence, original.take_event_id)
+    return run(pool, response, lambda c: return_recovery.recover(
+        c, user, event, original, body.recovery_id, body.verification))

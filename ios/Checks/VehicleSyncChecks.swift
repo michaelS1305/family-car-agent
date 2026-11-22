@@ -11,6 +11,24 @@ private func rejectionSQL(_ directory: URL, _ statement: String) throws {
     guard sqlite3_exec(db, statement, nil, nil, nil) == SQLITE_OK else { throw VehicleQueueError.storage }
 }
 
+private func migrationRows(_ directory: URL, _ query: String) throws -> [[String?]] {
+    var db: OpaquePointer?
+    guard sqlite3_open_v2(directory.appendingPathComponent("vehicle-events.sqlite").path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { throw VehicleQueueError.storage }
+    defer { sqlite3_close_v2(db) }
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK else { throw VehicleQueueError.storage }
+    defer { sqlite3_finalize(statement) }
+    var rows: [[String?]] = []
+    while true {
+        let result = sqlite3_step(statement)
+        if result == SQLITE_DONE { return rows }
+        guard result == SQLITE_ROW else { throw VehicleQueueError.storage }
+        rows.append((0..<sqlite3_column_count(statement)).map { column in
+            sqlite3_column_text(statement, column).map { String(cString: $0) }
+        })
+    }
+}
+
 @MainActor private final class SyncSessionVault: SessionVault {
     var saved: AuthSession?
     var failWrite = false
@@ -125,6 +143,59 @@ private actor SyncSessionExchange: AuthTransport {
         let accepted = #"{"kind":"accepted","admission_outcome":"accepted","transition":"redundant_take"}"#
         let duplicate = #"{"kind":"retry","admission_outcome":"accepted"}"#
         let terminal = #"{"kind":"terminal","admission_outcome":"vehicle_retired"}"#
+
+        // Build an independent v2 database with the shipped v2 schema and real
+        // accepted TAKE, legacy blocked RETURN and pending TAKE payloads.
+        let migrationSource = try await fixture()
+        let migrationTake = try await migrationSource.take()
+        await migrationSource.coordinator.wake()
+        await migrationSource.coordinator.receive(migrationSource.transport.finish(1, body: accepted))
+        migrationSource.clock.addTimeInterval(10)
+        let migrationReturn = try await migrationSource.queue.enqueueReturn(migrationSource.context,
+            vehicle: migrationTake.vehicle, occurredAt: migrationSource.clock, takeID: migrationTake.id,
+            location: .init(latitude: 32, longitude: 34, accuracy: 10, measuredAt: migrationSource.clock))
+        await migrationSource.coordinator.wake()
+        await migrationSource.coordinator.receive(migrationSource.transport.finish(2, status: 409))
+        migrationSource.coordinator.fence()
+        _ = try await migrationSource.queue.enqueueTake(migrationSource.context,
+            vehicle: migrationTake.vehicle, occurredAt: migrationSource.clock.addingTimeInterval(10))
+        let v2 = root.appendingPathComponent("legacy-v2")
+        try FileManager.default.createDirectory(at: v2, withIntermediateDirectories: true)
+        try rejectionSQL(v2, """
+            CREATE TABLE IF NOT EXISTS devices(context TEXT PRIMARY KEY,environment TEXT NOT NULL,device TEXT NOT NULL,last_sequence INTEGER NOT NULL CHECK(last_sequence>=0),active INTEGER NOT NULL CHECK(active IN(0,1)),UNIQUE(environment,device));
+            CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,context TEXT NOT NULL REFERENCES devices(context),sequence INTEGER NOT NULL CHECK(sequence>0),vehicle TEXT NOT NULL,cause TEXT REFERENCES events(id),payload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('pending','preparing','registered','awaitingAuthentication','accepted','terminal','blocked')),attempt TEXT,session TEXT,task INTEGER,reason TEXT,UNIQUE(context,sequence),UNIQUE(context,cause));
+            CREATE TABLE IF NOT EXISTS authorization_scopes(context TEXT PRIMARY KEY REFERENCES devices(context),generation TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('verificationPending','verified','revoked')),namespace TEXT);
+            CREATE TABLE IF NOT EXISTS vehicle_authorizations(context TEXT NOT NULL REFERENCES authorization_scopes(context),vehicle TEXT NOT NULL,allowed INTEGER NOT NULL CHECK(allowed IN(0,1)),PRIMARY KEY(context,vehicle));
+            PRAGMA user_version=2;
+            """)
+        let sourcePath = migrationSource.root.appendingPathComponent("db/vehicle-events.sqlite").path.replacingOccurrences(of: "'", with: "''")
+        try rejectionSQL(v2, """
+            ATTACH DATABASE '\(sourcePath)' AS original;
+            INSERT INTO devices SELECT * FROM original.devices;
+            INSERT INTO events SELECT * FROM original.events ORDER BY sequence;
+            INSERT INTO authorization_scopes SELECT * FROM original.authorization_scopes;
+            INSERT INTO vehicle_authorizations SELECT * FROM original.vehicle_authorizations;
+            DETACH DATABASE original;
+            """)
+        let tables = ["devices", "events", "authorization_scopes", "vehicle_authorizations"]
+        let before = try tables.map { try migrationRows(v2, "SELECT * FROM \($0) ORDER BY 1") }
+        let versionBefore = try migrationRows(v2, "PRAGMA user_version")
+        precondition(versionBefore == [["2"]])
+        let migrated = try VehicleEventQueue(directory: v2)
+        let preserved = try await migrated.records(migrationSource.context)
+        precondition(preserved.map { $0.event.sequence } == [1, 2, 3])
+        precondition(preserved.map(\.state) == [.accepted, .blocked, .pending])
+        precondition(preserved[1].event == migrationReturn)
+        for _ in 0..<2 {
+            let reopened = try VehicleEventQueue(directory: v2)
+            let records = try await reopened.records(migrationSource.context)
+            precondition(records.map(\.event) == preserved.map(\.event))
+            let after = try tables.map { try migrationRows(v2, "SELECT * FROM \($0) ORDER BY 1") }
+            let version = try migrationRows(v2, "PRAGMA user_version")
+            let recoveryRows = try migrationRows(v2, "SELECT * FROM return_recoveries")
+            precondition(after == before && version == [["3"]] && recoveryRows.isEmpty)
+        }
+        print("PASS: SQLite v2 to v3 preserves payloads, IDs, ordering, states, blocked RETURN and idempotent reopening")
 
         let sharedFixture = try await fixture(), ctx = sharedFixture.context
         let vault = SyncSessionVault()
@@ -513,5 +584,85 @@ private actor SyncSessionExchange: AuthTransport {
         await recovery.coordinator.receive(recovery.transport.finish(2, body: accepted))
         recovery.coordinator.fence()
         print("PASS: automatic cooldown retry, preserved event identity, logout fence and offline JWT refresh recovery")
+
+        // RETURN recovery uses a separate durable request, never a replacement event.
+        func rejectedReturn(code: String = "RETURN_OUTSIDE_HOME") async throws -> (SyncFixture, QueuedVehicleEvent) {
+            let f = try await fixture()
+            let take = try await f.take()
+            await f.coordinator.wake()
+            await f.coordinator.receive(f.transport.finish(1, body: accepted))
+            f.clock.addTimeInterval(10)
+            let event = try await f.queue.enqueueReturn(f.context, vehicle: take.vehicle, occurredAt: f.clock,
+                takeID: take.id, location: .init(latitude: 32, longitude: 34, accuracy: 10, measuredAt: f.clock))
+            await f.coordinator.wake()
+            await f.coordinator.receive(f.transport.finish(2, status: 409, body: "{\"detail\":{\"code\":\"\(code)\"}}"))
+            return (f, event)
+        }
+        func explicitReturn(_ f: SyncFixture, _ e: QueuedVehicleEvent) async throws {
+            f.clock.addTimeInterval(1)
+            let duplicate = try await f.queue.recordShortcut(f.context, vehicle: e.vehicle, kind: .returning,
+                time: f.clock, location: .init(latitude: 32.1, longitude: 34.1, accuracy: 10, measuredAt: f.clock))
+            precondition(duplicate == e)
+        }
+        let (rf, returning) = try await rejectedReturn()
+        let queued = try await rf.queue.enqueueTake(rf.context, vehicle: returning.vehicle, occurredAt: rf.clock.addingTimeInterval(1))
+        try await explicitReturn(rf, returning)
+        guard let initial = try await rf.queue.recovery(rf.context, event: returning.id) else { preconditionFailure() }
+        try await explicitReturn(rf, returning)
+        let repeated = try await rf.queue.recovery(rf.context, event: returning.id)
+        precondition(repeated?.id == initial.id && repeated?.payload == initial.payload)
+        let reopened = try VehicleEventQueue(directory: rf.root.appendingPathComponent("db"))
+        let durable = try await reopened.recovery(rf.context, event: returning.id)
+        precondition(durable?.payload == initial.payload)
+        let body = try JSONSerialization.jsonObject(with: initial.payload) as! [String: Any]
+        let originalBytes = try JSONSerialization.data(withJSONObject: body["original_return"]!, options: [.sortedKeys])
+        precondition(originalBytes == rf.transport.created[1].bytes)
+        await rf.coordinator.wake()
+        precondition(rf.transport.created.last!.request.url!.path.hasSuffix("/events/return/\(returning.id.uuidString)/recovery"))
+        let recoveryTask = rf.transport.created.last!.task
+        try rf.restoreCoordinator() // Existing task must be reattached, not duplicated.
+        await rf.coordinator.wake()
+        precondition(rf.transport.created.count == 3)
+        await rf.coordinator.receive(rf.transport.finish(recoveryTask.identifier, status: nil, failed: true))
+        rf.clock.addTimeInterval(180) // Server might have committed before timeout; replay even after expiry.
+        try rf.restoreCoordinator()
+        await rf.coordinator.wake()
+        precondition(rf.transport.created.count == 4 && rf.transport.created[3].bytes == initial.payload)
+        let receipt = "{\"kind\":\"accepted\",\"admission_outcome\":\"accepted\",\"recovery_outcome\":\"recovered\",\"event_id\":\"\(returning.id)\",\"recovery_id\":\"\(initial.id)\",\"verified_at\":\"2026-11-22T14:40:00+00:00\"}"
+        await rf.coordinator.receive(rf.transport.finish(4, body: receipt))
+        let rows = try await rf.queue.records(rf.context)
+        precondition(rows[1].event == returning && rows[1].state == .accepted && rows[2].event == queued)
+        precondition(rows.map { $0.event.sequence } == [1, 2, 3] && rf.transport.created.count == 5)
+        rf.coordinator.fence()
+
+        for code in ["RETURN_OUTSIDE_HOME", "RETURN_HOME_UNAVAILABLE", "RETURN_RECOVERY_VERIFICATION_EXPIRED",
+                     "RETURN_RECOVERY_ORDER_CONFLICT", "RETURN_RECOVERY_LEGACY_UNVERIFIED", "UNKNOWN"] {
+            let (f, e) = try await rejectedReturn()
+            try await explicitReturn(f, e)
+            let first = try await f.queue.recovery(f.context, event: e.id)!
+            await f.coordinator.wake()
+            await f.coordinator.receive(f.transport.finish(3, status: 409, body: "{\"detail\":{\"code\":\"\(code)\"}}"))
+            await f.coordinator.wake() // Never creates fresh evidence on its own.
+            precondition(f.transport.created.count == 3)
+            if ReturnRecoveryPolicy.renewable.contains(code) {
+                try await explicitReturn(f, e)
+                let next = try await f.queue.recovery(f.context, event: e.id)!
+                precondition(next.id != first.id && next.payload != first.payload)
+            } else {
+                do { try await explicitReturn(f, e); preconditionFailure("Unexpected eligibility") }
+                catch ShortcutQueueError.legacyReturn { precondition(code == "RETURN_RECOVERY_LEGACY_UNVERIFIED") }
+                catch ShortcutQueueError.recoveryBlocked { precondition(code != "RETURN_RECOVERY_LEGACY_UNVERIFIED") }
+            }
+            let saved = try await f.queue.records(f.context)
+            precondition(saved.count == 2 && saved[1].event == e && saved[1].state == .blocked)
+            f.coordinator.fence()
+        }
+        let (legacy, legacyEvent) = try await rejectedReturn(code: "UNKNOWN")
+        do { try await explicitReturn(legacy, legacyEvent); preconditionFailure("Legacy must not be inferred") }
+        catch ShortcutQueueError.legacyReturn {}
+        let legacyAttempt = try await legacy.queue.recovery(legacy.context, event: legacyEvent.id)
+        precondition(legacyAttempt == nil)
+        legacy.coordinator.fence()
+        print("PASS: RETURN recovery identity, restart, uncertain retry, expiry, refusal, legacy and queued TAKE")
     }
 }
