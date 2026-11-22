@@ -257,9 +257,15 @@ import Network
         guard let sync = coordinator, transport.identifier == VehicleSyncCoordinator.sessionIdentifier(environment: environment, context: c)
         else { throw AuthFailure.stale }
         guard let namespace = session.shortcutNamespace else { throw AuthFailure.stale }
-        _ = try await queue.recordAuthorizedShortcut(c, vehicle: vehicle, kind: kind, time: time, location: location, namespace: namespace, permit: permit)
+        let event = try await queue.recordAuthorizedShortcut(c, vehicle: vehicle, kind: kind, time: time, location: location, namespace: namespace, permit: permit)
         // Let the coordinator register eligible work before Shortcuts releases the process.
         await sync.wake()
+        if kind == .returning, let recovery = try await queue.recovery(c, event: event.id) {
+            if recovery.reason == "RETURN_RECOVERY_LEGACY_UNVERIFIED" { throw ShortcutQueueError.legacyReturn }
+            if recovery.state == .blocked || sync.diagnostic == .storageFailure || sync.diagnostic == .taskConflict {
+                throw ShortcutQueueError.recoveryBlocked
+            }
+        }
     }
 
     private func context(_ s: AuthSession) throws -> VehicleQueueContext {

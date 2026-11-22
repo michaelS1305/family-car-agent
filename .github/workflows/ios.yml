@@ -5,7 +5,7 @@ on:
     # Every main push must get a fresh Production candidate.
     branches: [develop, main]
   pull_request:
-    branches: [main]
+    branches: [develop, main]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
@@ -64,7 +64,7 @@ jobs:
     timeout-minutes: 20
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-      PRODUCTION: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.build_production_ipa == true }}
+      PRODUCTION: ${{ (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.build_production_ipa == true }}
     defaults:
       run:
         working-directory: ios
@@ -352,7 +352,7 @@ jobs:
           VALIDATION: ${{ needs.ios.result }}
           PRODUCTION_SIGNING: ${{ needs.signed_production_ipa.result }}
           DEVELOPMENT_SIGNING: ${{ needs.signed_dev_ipa.result }}
-          PRODUCTION: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.build_production_ipa == true }}
+          PRODUCTION: ${{ (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.build_production_ipa == true }}
           DEV_EXPECTED: ${{ vars.FCA_DEV_SIGN_ENABLED == 'true' && github.ref == 'refs/heads/develop' && (github.event_name == 'push' || inputs.build_signed_ipa == true) }}
         run: |
           test "$SCOPE_RESULT" = success || { echo 'iOS scope evaluation failed'; exit 1; }

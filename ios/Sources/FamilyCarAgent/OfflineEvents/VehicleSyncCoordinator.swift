@@ -192,6 +192,10 @@ struct VehicleUploadCompletion: Sendable {
             for task in tasks { transport.cancel(task.identifier) }
             diagnostic = .blocked; return // Preserve the head and sequence; never skip an unbound vehicle.
         }
+        if head.state == .blocked, let recovery = try await queue.recovery(context, event: head.event.id) {
+            try await scheduleRecovery(head, recovery: recovery, tasks: tasks)
+            return
+        }
         // Never register a replacement while any task still exists in this session.
         if !tasks.isEmpty {
             guard tasks.count == 1, let task = tasks.first, let attempt = head.attempt,
@@ -274,6 +278,13 @@ struct VehicleUploadCompletion: Sendable {
     private func consume(_ result: VehicleUploadCompletion) async throws {
         try await allowed()
         let rows = try await queue.records(context)
+        if let head = rows.first(where: { $0.state != .accepted && $0.state != .terminal }),
+           let recovery = try await queue.recovery(context, event: head.event.id),
+           recovery.state == .registered, recovery.task == result.task,
+           recovery.session == transport.identifier, result.tag == Self.recoveryTag(recovery) {
+            try await consumeRecovery(result, head: head, recovery: recovery)
+            return
+        }
         guard let row = rows.first(where: {
             guard let attempt = $0.attempt else { return false }
             return $0.state == .registered && $0.taskIdentifier == result.task
@@ -316,8 +327,135 @@ struct VehicleUploadCompletion: Sendable {
             } else { diagnostic = .blocked }
             return
         }
-        try await queue.recordFailure(context, event: row.event.id, attempt: attempt, failure: .preAdmissionRejection)
+        try await queue.recordFailure(context, event: row.event.id, attempt: attempt, failure: .preAdmissionRejection,
+                                      rejectionCode: status == 409 ? Self.errorCode(result.body) : nil)
         diagnostic = .blocked
+    }
+
+    private static func recoveryTag(_ r: VehicleRecoveryRecord) -> String { "recovery/" + r.event.uuidString + "/" + r.id.uuidString }
+
+    static func errorCode(_ body: Data) -> String? {
+        struct Envelope: Decodable {
+            struct Detail: Decodable { let code: String }
+            let detail: Detail
+        }
+        guard body.count <= 65_536 else { return nil }
+        return (try? JSONDecoder().decode(Envelope.self, from: body))?.detail.code
+    }
+
+    private func scheduleRecovery(_ head: VehicleQueueRecord, recovery r: VehicleRecoveryRecord,
+                                  tasks: [VehicleUploadTask]) async throws {
+        guard r.state != .blocked else { diagnostic = .blocked; return }
+        if !tasks.isEmpty {
+            guard tasks.count == 1, let task = tasks.first, task.tag == Self.recoveryTag(r),
+                  [.preparing, .registered].contains(r.state),
+                  r.state != .registered || (r.session == transport.identifier && r.task == task.identifier)
+            else {
+                for task in tasks { transport.cancel(task.identifier) }
+                diagnostic = .taskConflict; return // Cancellation is not completion; wait for reconciliation.
+            }
+            if task.state == .cancelling || task.state == .completed { diagnostic = .deferred; return }
+            if r.state == .preparing {
+                try await queue.updateRecovery(context, event: r.event, id: r.id, state: .registered,
+                                               session: transport.identifier, task: task.identifier)
+            }
+            try await allowed()
+            guard auth.permitsVehicle(head.event.vehicle, in: context) else { transport.cancel(task.identifier); return }
+            if task.state == .suspended { transport.resume(task.identifier) }
+            diagnostic = .registered; return
+        }
+        if let deadline = try files.notBefore(r.id), deadline > now() {
+            diagnostic = .deferred; retry(at: deadline); return
+        }
+        let refresh = r.state == .awaitingAuthentication
+        if refresh, try files.refreshExhausted(r.id) { diagnostic = .authenticationRequired; return }
+        let grant: VehicleUploadAuthorization
+        do { grant = try await auth.authorization(for: context, forceRefresh: refresh) }
+        catch {
+            let deadline = now().addingTimeInterval(60)
+            try files.deferUntil(r.id, date: deadline)
+            diagnostic = .authenticationRequired; retry(at: deadline); return
+        }
+        try await allowed()
+        guard grant.context == context, auth.isCurrent(grant), auth.permitsVehicle(head.event.vehicle, in: context),
+              !grant.accessToken.isEmpty, !grant.accessToken.contains("\r"), !grant.accessToken.contains("\n") else {
+            diagnostic = .identityUnavailable; return
+        }
+        guard await transport.allTasks().isEmpty else { diagnostic = .deferred; return }
+        if refresh { try files.reserveRefresh(r.id) }
+        try await queue.updateRecovery(context, event: r.event, id: r.id, state: .preparing)
+        let file = try files.recoveryPayload(r)
+        var request = URLRequest(url: environment.backendURL.appendingPathComponent(
+            "api/devices/\(context.device.uuidString)/events/return/\(r.event.uuidString)/recovery"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer " + grant.accessToken, forHTTPHeaderField: "Authorization")
+        try await allowed()
+        guard auth.isCurrent(grant), auth.permitsVehicle(head.event.vehicle, in: context) else { diagnostic = .identityUnavailable; return }
+        let task = try transport.create(request: request, file: file, tag: Self.recoveryTag(r))
+        do {
+            try await queue.updateRecovery(context, event: r.event, id: r.id, state: .registered,
+                                           session: transport.identifier, task: task.identifier)
+            try await allowed()
+            guard auth.isCurrent(grant), auth.permitsVehicle(head.event.vehicle, in: context) else {
+                transport.cancel(task.identifier); diagnostic = .identityUnavailable; return
+            }
+            transport.resume(task.identifier); diagnostic = .registered
+        } catch { transport.cancel(task.identifier); throw error }
+    }
+
+    private func consumeRecovery(_ result: VehicleUploadCompletion, head: VehicleQueueRecord,
+                                 recovery r: VehicleRecoveryRecord) async throws {
+        let status = result.status ?? 0
+        if result.transportFailed || result.status == nil || status == 429 || (500...599).contains(status) {
+            try await deferRecovery(r, after: result.retryAfter); return
+        }
+        if status == 401 {
+            try await queue.updateRecovery(context, event: r.event, id: r.id, state: .awaitingAuthentication)
+            try await schedule(); return
+        }
+        if Self.isAuthorizationRejection(status: status, body: result.body) {
+            try await queue.updateRecovery(context, event: r.event, id: r.id, state: .blocked, reason: "authorizationRejected")
+            stopped = true; auth.rejectAuthorization(for: context)
+            for task in await transport.allTasks() { transport.cancel(task.identifier) }
+            diagnostic = .blocked; return
+        }
+        if (200...299).contains(status) {
+            struct Receipt: Decodable {
+                let kind: String
+                let admission_outcome: String
+                let recovery_outcome: String
+                let event_id: UUID
+                let recovery_id: UUID
+                let verified_at: String
+            }
+            guard result.body.count <= 65_536,
+                  let receipt = try? JSONDecoder().decode(Receipt.self, from: result.body),
+                  receipt.kind == "accepted", receipt.admission_outcome == "accepted",
+                  receipt.recovery_outcome == "recovered", receipt.event_id == r.event,
+                  receipt.recovery_id == r.id, !receipt.verified_at.isEmpty else {
+                try await deferRecovery(r, after: nil); return
+            }
+            try await queue.updateRecovery(context, event: r.event, id: r.id, state: .accepted)
+            try? files.removeResolved(r.id)
+            try? files.removeResolved(head.event.id)
+            try await schedule(); return
+        }
+        // Only known safe fresh-evidence refusals permit a NEW explicit attempt.
+        let known = ReturnRecoveryPolicy.renewable.union([
+            "RETURN_RECOVERY_LEGACY_UNVERIFIED", "RETURN_RECOVERY_ORDER_CONFLICT",
+            "RETURN_RECOVERY_NOT_ELIGIBLE", "RETURN_RECOVERY_EVIDENCE_MISMATCH", "RETURN_RECOVERY_IDEMPOTENCY_CONFLICT"])
+        let code = status == 409 ? Self.errorCode(result.body) : nil
+        try await queue.updateRecovery(context, event: r.event, id: r.id, state: .blocked,
+            reason: code.flatMap { known.contains($0) ? $0 : nil } ?? "unrecognizedRecoveryRejection")
+        diagnostic = .blocked
+    }
+
+    private func deferRecovery(_ r: VehicleRecoveryRecord, after: String?) async throws {
+        let deadline = Self.retryDate(after, now: now())
+        try files.deferUntil(r.id, date: deadline)
+        try await queue.updateRecovery(context, event: r.event, id: r.id, state: .preparing, reason: "deliveryUnknown")
+        diagnostic = .deferred; retry(at: deadline)
     }
 
     /// FastAPI's documented envelope; neither HTTP status nor arbitrary text is evidence.
@@ -396,6 +534,24 @@ private struct VehicleUploadFiles {
         } else { try write(Self.encode(event), to: url) }
         return url
     }
+    func recoveryPayload(_ recovery: VehicleRecoveryRecord) throws -> URL {
+        let url = directory.appendingPathComponent(recovery.id.uuidString + ".json")
+        if FileManager.default.fileExists(atPath: url.path) {
+            guard try Data(contentsOf: url) == recovery.payload else { throw VehicleQueueError.conflict }
+        } else {
+            // Write a complete protected staging file, then publish it with an
+            // exclusive same-volume link. A crash cannot expose a partial body;
+            // another process cannot overwrite an existing upload's bytes.
+            let staging = directory.appendingPathComponent(UUID().uuidString + ".recovery-staging")
+            defer { try? FileManager.default.removeItem(at: staging) }
+            try write(recovery.payload, to: staging)
+            do { try FileManager.default.linkItem(at: staging, to: url) }
+            catch {
+                guard try Data(contentsOf: url) == recovery.payload else { throw VehicleQueueError.storage }
+            }
+        }
+        return url
+    }
     private func write(_ data: Data, to url: URL) throws {
         try data.write(to: url, options: .atomic)
         #if os(iOS)
@@ -421,20 +577,6 @@ private struct VehicleUploadFiles {
         }
     }
     static func encode(_ event: QueuedVehicleEvent) throws -> Data {
-        var body: [String: Any] = ["event_id": event.id.uuidString, "vehicle_ref": event.vehicle.uuidString,
-                                   "device_sequence": event.sequence, "occurred_at": timestamp(event.occurredAt)]
-        if event.kind == .returning {
-            guard let cause = event.takeID, let location = event.location else { throw VehicleQueueError.invalidInput }
-            body["take_event_id"] = cause.uuidString; body["latitude"] = location.latitude
-            body["longitude"] = location.longitude; body["accuracy_m"] = location.accuracy
-            body["location_at"] = timestamp(location.measuredAt)
-        }
-        return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
-    }
-    private static func timestamp(_ date: Date) -> String {
-        let value = date.timeIntervalSince1970, seconds = floor(value)
-        let formatter = ISO8601DateFormatter()
-        let base = formatter.string(from: Date(timeIntervalSince1970: seconds)).dropLast()
-        return String(base) + String(format: ".%09dZ", Int((value - seconds) * 1_000_000_000))
+        try VehicleEventWire.encode(event)
     }
 }

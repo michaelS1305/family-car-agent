@@ -21,7 +21,22 @@ struct VehicleQueueContext: Equatable, Sendable {
     }
 }
 
-enum ShortcutQueueError: Error { case location, alreadyTaken, noUniqueTake }
+enum ShortcutQueueError: Error { case location, alreadyTaken, noUniqueTake, legacyReturn, recoveryBlocked }
+
+enum ReturnRecoveryPolicy {
+    static let homeCodes: Set<String> = ["RETURN_HOME_UNAVAILABLE", "RETURN_OUTSIDE_HOME"]
+    static let renewable: Set<String> = homeCodes.union(["RETURN_RECOVERY_VERIFICATION_EXPIRED"])
+}
+
+struct VehicleRecoveryRecord: Sendable {
+    let id: UUID
+    let event: UUID
+    let payload: Data
+    let state: VehicleQueueState
+    let session: String?
+    let task: Int64?
+    let reason: String?
+}
 
 /// Local to one app process. Invalidation and the entire sequence-allocating
 /// transaction exclude each other. An old permit can never become valid again.
@@ -80,6 +95,37 @@ struct VehicleQueueRecord: Sendable {
 struct VehicleAdmissionReceipt: Codable, Sendable {
     let kind: String
     let admission_outcome: String?
+}
+
+/// Shared with normal uploads: recovery embeds exactly the same original wire evidence.
+enum VehicleEventWire {
+    static func encode(_ event: QueuedVehicleEvent) throws -> Data {
+        var body: [String: Any] = ["event_id": event.id.uuidString, "vehicle_ref": event.vehicle.uuidString,
+                                   "device_sequence": event.sequence, "occurred_at": timestamp(event.occurredAt)]
+        if event.kind == .returning {
+            guard let cause = event.takeID, let location = event.location else { throw VehicleQueueError.invalidInput }
+            body["take_event_id"] = cause.uuidString; body["latitude"] = location.latitude
+            body["longitude"] = location.longitude; body["accuracy_m"] = location.accuracy
+            body["location_at"] = timestamp(location.measuredAt)
+        }
+        return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+    }
+    static func recovery(_ event: QueuedVehicleEvent, id: UUID, at time: Date, location: VehicleLocationEvidence) throws -> Data {
+        try location.validate(at: time)
+        guard time >= event.occurredAt else { throw ShortcutQueueError.location }
+        return try JSONSerialization.data(withJSONObject: [
+            "recovery_id": id.uuidString,
+            "original_return": JSONSerialization.jsonObject(with: encode(event)),
+            "verification": ["invoked_at": timestamp(time), "location_at": timestamp(location.measuredAt),
+                             "latitude": location.latitude, "longitude": location.longitude, "accuracy_m": location.accuracy]
+        ], options: [.sortedKeys])
+    }
+    private static func timestamp(_ date: Date) -> String {
+        let value = date.timeIntervalSince1970, seconds = floor(value)
+        let formatter = ISO8601DateFormatter()
+        let base = formatter.string(from: Date(timeIntervalSince1970: seconds)).dropLast()
+        return String(base) + String(format: ".%09dZ", Int((value - seconds) * 1_000_000_000))
+    }
 }
 
 /// One connection per actor; BEGIN IMMEDIATE also serializes separate queue instances/processes.
@@ -227,6 +273,26 @@ actor VehicleEventQueue {
             var takeID = takeID
             if let shortcut {
                 let rows = try records(context).filter { $0.event.vehicle == vehicle }
+                if shortcut == .returning, let rejected = rows.first(where: {
+                    $0.event.kind == .returning && $0.state == .blocked
+                }) {
+                    guard rejected.reason != Failure.preAdmissionRejection.rawValue else { throw ShortcutQueueError.legacyReturn }
+                    guard let reason = rejected.reason, ReturnRecoveryPolicy.homeCodes.contains(reason),
+                          try records(context).first(where: { $0.state != .accepted && $0.state != .terminal })?.event.id == rejected.event.id
+                    else { throw ShortcutQueueError.recoveryBlocked }
+                    if let previous = try recovery(context, event: rejected.event.id) {
+                        if previous.state != .blocked { return rejected.event }
+                        if previous.reason == "RETURN_RECOVERY_LEGACY_UNVERIFIED" { throw ShortcutQueueError.legacyReturn }
+                        guard let reason = previous.reason, ReturnRecoveryPolicy.renewable.contains(reason)
+                        else { throw ShortcutQueueError.recoveryBlocked }
+                    }
+                    guard let location else { throw ShortcutQueueError.location }
+                    let recoveryID = UUID()
+                    let bytes = try VehicleEventWire.recovery(rejected.event, id: recoveryID, at: occurredAt, location: location)
+                    try db.execute("INSERT INTO return_recoveries(id,event,payload,state) VALUES(?,?,?,'preparing')",
+                                   [recoveryID.uuidString, rejected.event.id.uuidString, String(decoding: bytes, as: UTF8.self)])
+                    return rejected.event // No sequence allocation or original evidence mutation.
+                }
                 let paired = Set(rows.compactMap { $0.event.takeID })
                 let open = rows.filter { $0.event.kind == .take && $0.state != .terminal && !paired.contains($0.event.id) }
                 if shortcut == .take {
@@ -349,15 +415,48 @@ actor VehicleEventQueue {
 
     enum Failure: String, Sendable { case authentication, deliveryUnknown, preAdmissionRejection }
 
-    func recordFailure(_ context: VehicleQueueContext, event: UUID, attempt: UUID, failure: Failure) throws {
+    func recordFailure(_ context: VehicleQueueContext, event: UUID, attempt: UUID, failure: Failure, rejectionCode: String? = nil) throws {
         try db.transaction {
             try require(context)
             let row = try record(context, event)
             guard [.preparing, .registered].contains(row.state), row.attempt == attempt else {
                 throw VehicleQueueError.invalidTransition
             }
+            let code = failure == .preAdmissionRejection && row.event.kind == .returning
+                ? rejectionCode.flatMap { ReturnRecoveryPolicy.homeCodes.contains($0) ? $0 : nil } : nil
             try db.execute("UPDATE events SET state=?,reason=? WHERE id=?",
-                           [failure == .authentication ? "awaitingAuthentication" : "blocked", failure.rawValue, event.uuidString])
+                           [failure == .authentication ? "awaitingAuthentication" : "blocked", code ?? failure.rawValue, event.uuidString])
+        }
+    }
+
+    func recovery(_ context: VehicleQueueContext, event: UUID) throws -> VehicleRecoveryRecord? {
+        _ = try record(context, event)
+        guard let r = try db.rows("SELECT id,payload,state,session,task,reason FROM return_recoveries WHERE event=? ORDER BY rowid DESC LIMIT 1", [event.uuidString]).first else { return nil }
+        guard let id = r[0].flatMap(UUID.init(uuidString:)), let payload = r[1],
+              let state = r[2].flatMap(VehicleQueueState.init(rawValue:)),
+              r[4] == nil || r[4].flatMap(Int64.init) != nil else { throw VehicleQueueError.storage }
+        return .init(id: id, event: event, payload: Data(payload.utf8), state: state,
+                     session: r[3], task: r[4].flatMap(Int64.init), reason: r[5])
+    }
+
+    /// Called only after transport task reconciliation. Identity/payload never change.
+    func updateRecovery(_ context: VehicleQueueContext, event: UUID, id: UUID,
+                        state: VehicleQueueState, session: String? = nil, task: Int64? = nil, reason: String? = nil) throws {
+        try db.transaction {
+            try require(context)
+            let row = try record(context, event)
+            guard row.state == .blocked, let old = try recovery(context, event: event), old.id == id,
+                  [.preparing, .registered, .awaitingAuthentication].contains(old.state),
+                  [.preparing, .registered, .awaitingAuthentication, .blocked, .accepted].contains(state),
+                  try db.authorizedVehicles(context).contains(row.event.vehicle) else { throw VehicleQueueError.invalidTransition }
+            guard state != .registered || (session != nil && task != nil) else { throw VehicleQueueError.invalidInput }
+            guard state != .registered || old.state != .registered || (old.session == session && old.task == task)
+            else { throw VehicleQueueError.invalidTransition }
+            try db.execute("UPDATE return_recoveries SET state=?,session=?,task=?,reason=? WHERE id=?",
+                           [state.rawValue, session, task.map(String.init), reason, id.uuidString])
+            if state == .accepted {
+                try db.execute("UPDATE events SET state='accepted',reason='accepted' WHERE id=?", [event.uuidString])
+            }
         }
     }
 
@@ -436,14 +535,17 @@ private final class VehicleQueueDatabase: @unchecked Sendable {
         try execute("PRAGMA journal_mode=DELETE")
         try execute("PRAGMA synchronous=FULL")
         try transaction {
-            guard let version = try rows("PRAGMA user_version").first?[0], ["0", "1", "2"].contains(version) else {
+            guard let version = try rows("PRAGMA user_version").first?[0], ["0", "1", "2", "3"].contains(version) else {
                 throw VehicleQueueError.unsupportedSchema
             }
             try execute("CREATE TABLE IF NOT EXISTS devices(context TEXT PRIMARY KEY,environment TEXT NOT NULL,device TEXT NOT NULL,last_sequence INTEGER NOT NULL CHECK(last_sequence>=0),active INTEGER NOT NULL CHECK(active IN(0,1)),UNIQUE(environment,device))")
             try execute("CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,context TEXT NOT NULL REFERENCES devices(context),sequence INTEGER NOT NULL CHECK(sequence>0),vehicle TEXT NOT NULL,cause TEXT REFERENCES events(id),payload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('pending','preparing','registered','awaitingAuthentication','accepted','terminal','blocked')),attempt TEXT,session TEXT,task INTEGER,reason TEXT,UNIQUE(context,sequence),UNIQUE(context,cause))")
             try execute("CREATE TABLE IF NOT EXISTS authorization_scopes(context TEXT PRIMARY KEY REFERENCES devices(context),generation TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('verificationPending','verified','revoked')),namespace TEXT)")
             try execute("CREATE TABLE IF NOT EXISTS vehicle_authorizations(context TEXT NOT NULL REFERENCES authorization_scopes(context),vehicle TEXT NOT NULL,allowed INTEGER NOT NULL CHECK(allowed IN(0,1)),PRIMARY KEY(context,vehicle))")
-            try execute("PRAGMA user_version=2")
+            try execute("CREATE TABLE IF NOT EXISTS return_recoveries(id TEXT PRIMARY KEY,event TEXT NOT NULL REFERENCES events(id),payload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('preparing','registered','awaitingAuthentication','blocked','accepted')),session TEXT,task INTEGER,reason TEXT)")
+            try execute("CREATE UNIQUE INDEX IF NOT EXISTS return_recovery_active ON return_recoveries(event) WHERE state IN('preparing','registered','awaitingAuthentication')")
+            try execute("CREATE TRIGGER IF NOT EXISTS return_recovery_immutable BEFORE UPDATE OF id,event,payload ON return_recoveries BEGIN SELECT RAISE(ABORT,'immutable recovery'); END")
+            try execute("PRAGMA user_version=3")
         }
         #if os(iOS)
         try fm.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: path)
