@@ -55,6 +55,8 @@ private enum VehicleShortcut {
         } catch ShortcutQueueError.location { return "ההחזרה לא נרשמה. נדרשת מדידת מיקום עדכנית ומדויקת." }
         catch ShortcutQueueError.alreadyTaken { return "כבר קיימת לקיחה פתוחה לרכב הזה." }
         catch ShortcutQueueError.noUniqueTake { return "לא נמצאה לקיחה פתוחה וחד־משמעית לרכב הזה במכשיר." }
+        catch ShortcutQueueError.legacyReturn { return "ההחזרה הקודמת חסומה ללא סיבת דחייה מאומתת. המידע נשמר; נדרשת בדיקה פרטנית מול התמיכה." }
+        catch ShortcutQueueError.recoveryBlocked { return "לא ניתן לשחזר את ההחזרה אוטומטית. המידע נשמר; פנו לתמיכה לבדיקת סדר האירועים או סיבת הדחייה." }
         catch { return "לא ניתן לרשום את האירוע. בדקו שהמכשיר נפתח לאחר האתחול ושהרכב משויך לחשבון." }
     }
 }

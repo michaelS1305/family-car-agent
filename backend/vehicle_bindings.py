@@ -75,7 +75,17 @@ def return_home(conn, user, device_ref):
         return {'latitude': latitude, 'longitude': longitude}
 
 
-def admit_return(conn, user, event, evidence):
+def verify_home(conn, user, evidence):
+    latitude, longitude = _home(conn, user)
+    try:
+        distance = calculate_distance_meters(evidence.latitude, evidence.longitude, latitude, longitude)
+    except (ValueError, OverflowError):
+        raise VehicleIdentityError('RETURN_OUTSIDE_HOME', 'Home verification failed', 409) from None
+    if not isfinite(distance) or distance + evidence.accuracy_m > 500:
+        raise VehicleIdentityError('RETURN_OUTSIDE_HOME', 'Home verification failed', 409)
+
+
+def admit_return(conn, user, event, evidence, *, record_rejection=False):
     if event.event_type != 'return':
         unavailable()
     with _bounded_connection(conn) as conn, lifecycle._scope(conn, user):
@@ -94,15 +104,13 @@ def admit_return(conn, user, event, evidence):
             age = (event.occurred_at - evidence.location_at).total_seconds()
             if not 0 <= age <= 30:
                 raise VehicleIdentityError('RETURN_LOCATION_INVALID', 'Location unavailable', 422)
-            latitude, longitude = _home(conn, user)
             try:
-                distance = calculate_distance_meters(evidence.latitude, evidence.longitude, latitude, longitude)
-            except (ValueError, OverflowError):
-                # Finite antipodal inputs can still encounter floating-point
-                # roundoff in the shared haversine helper. Fail closed safely.
-                raise VehicleIdentityError('RETURN_OUTSIDE_HOME', 'Home verification failed', 409) from None
-            if not isfinite(distance) or distance + evidence.accuracy_m > 500:
-                raise VehicleIdentityError('RETURN_OUTSIDE_HOME', 'Home verification failed', 409)
+                verify_home(conn, user, evidence)
+            except VehicleIdentityError as error:
+                if not record_rejection:
+                    raise
+                from return_recovery import record_rejection as persist
+                return persist(conn, user, event, evidence, device, vehicle, error)
         # No GPS stored. Exact event/cause matching and all side effects belong to
         # the existing receipt/reconciliation engine, including committed retries.
         return admit_native_event(conn, user, event)
