@@ -58,7 +58,7 @@ class ProductionDiagnosticsTests(unittest.TestCase):
         with patch.dict(os.environ, ENV), self.assertLogs('native_push_diagnostics') as logs:
             result = asyncio.run(Supervisor([sys.executable, '-B', '-c', code], seconds=5).run(asyncio.Event()))
         self.assertEqual(result, 'complete')
-        self.assertEqual(len(logs.output), 2)
+        self.assertEqual(len(logs.output), 3)
         self.assertNotIn('PRIVATE', str(logs.output))
 
     def test_worker_outcomes_and_committed_state(self):
@@ -148,3 +148,111 @@ class ProductionDiagnosticsTests(unittest.TestCase):
             with d.committed():
                 self.assertEqual(registration.revoke(conn, user, config, ref, 1)['code'], 'REVOKED')
             self.assertEqual(publish.call_args.args[0]['reason'], 'explicit_revocation')
+
+
+class PassDiagnosticsTests(unittest.TestCase):
+    def test_initialization_failure_and_missing_messages_are_sanitized(self):
+        with patch.dict(os.environ, ENV, clear=True), patch.object(d.socket, 'socket', side_effect=OSError('PRIVATE')):
+            channel = d.Channel()
+            with self.assertLogs('native_push_diagnostics') as logs:
+                channel.summary('child_failed')
+            event = json.loads(logs.output[0].split('diagnostic ', 1)[1])
+            self.assertEqual(event['initialization'], 'failed')
+            self.assertTrue(event['missing_diagnostics'])
+            self.assertEqual(event['valid_messages'], 0)
+            self.assertNotIn('PRIVATE', str(logs.output))
+
+    def test_missing_invalid_and_valid_packets(self):
+        with patch.dict(os.environ, ENV, clear=True):
+            channel = d.Channel()
+            channel.close()
+            channel.socket = Mock()
+            event = ProductionDiagnosticsTests().event()
+            packet = lambda pid: json.dumps(dict(key=channel.key, pass_id=pid, event=event)).encode()
+            channel.socket.recvfrom.side_effect = [(b'PRIVATE', None), (packet('wrong'), None),
+                                                 (packet(channel.pass_id), None), BlockingIOError()]
+            with self.assertLogs('native_push_diagnostics') as logs:
+                channel.report()
+                channel.summary('completed')
+            self.assertEqual(channel.valid_messages, 1)
+            self.assertEqual(channel.transport, 'ok')
+            self.assertNotIn('PRIVATE', str(logs.output))
+            self.assertIn(channel.pass_id, logs.output[0])
+            channel.close()
+
+    def test_completion_shutdown_deadline_and_failure_preserve_outcomes(self):
+        async def check(code, stop_requested, expected, reason):
+            stop = asyncio.Event()
+            child = Mock(returncode=code)
+            def spawn(*args, **kwargs):
+                if stop_requested:
+                    stop.set()
+                return child
+            child.poll.return_value = None if stop_requested else code
+            supervisor = Supervisor()
+            async def close():
+                supervisor.child = None
+            with patch('native_push_process.subprocess.Popen', side_effect=spawn), patch.object(supervisor, 'close', side_effect=close):
+                with patch.object(d.Channel, 'summary') as summary:
+                    self.assertEqual(await supervisor.run(stop), expected)
+                    summary.assert_called_once_with(reason)
+        with patch.dict(os.environ, ENV, clear=True):
+            for values in [(0, False, 'complete', 'completed'), (1, False, 'failed', 'child_failed'),
+                           (124, False, 'uncertain', 'deadline'), (0, True, 'uncertain', 'shutdown')]:
+                asyncio.run(check(*values))
+
+    def test_failure_stages(self):
+        from native_push_security import ConfigurationError
+        for failure, expected_stage in [('credentials', 'credentials_preparation'),
+                                        ('token', 'token_decryption'), ('nonce', 'token_decryption'),
+                                        ('eligibility', 'eligibility_validation'), ('fcm', 'fcm_request_response')]:
+            conn = Mock()
+            row = (uuid4(), uuid4(), 7, b'PRIVATE', 'PRIVATE', b'PRIVATE', datetime.now(timezone.utc), 'ios', 1)
+            reads = [row]
+            if failure not in ('credentials', 'token', 'nonce'):
+                reads.append(None if failure == 'eligibility' else (1,))
+            reads.append(('cancelled',))
+            conn.execute.return_value.fetchone.side_effect = reads
+            conn.execute.return_value.rowcount = 1
+            @contextmanager
+            def connection():
+                yield conn
+            config = Mock(environment='prod', project='family-car-agent')
+            config.open.side_effect = ([ConfigurationError()] if failure == 'token' else
+                                       ['PRIVATE', ConfigurationError()] if failure == 'nonce' else None)
+            config.open.return_value = 'PRIVATE'
+            provider = Mock(diagnostic_http_status=401, diagnostic_fcm_code=None)
+            if failure == 'credentials':
+                provider.prepare.side_effect = ConfigurationError()
+            provider.send.return_value = Result('configuration')
+            with patch.dict(os.environ, ENV, clear=True), self.assertLogs('native_push_diagnostics') as logs:
+                challenge_pass(SimpleNamespace(connection=connection), config, provider)
+            result = json.loads(logs.output[-1].split('diagnostic ', 1)[1])
+            self.assertEqual(result['stage'], expected_stage)
+            self.assertEqual(result['reason'], 'terminal_delivery_failure')
+            self.assertNotIn('PRIVATE', str(logs.output))
+            if failure != 'fcm':
+                provider.send.assert_not_called()
+
+
+    def test_empty_healthy_pass_is_quiet_and_receive_failure_is_reported(self):
+        with patch.dict(os.environ, ENV, clear=True):
+            channel = d.Channel()
+            channel.close()
+            channel.socket = Mock()
+            channel.socket.recvfrom.side_effect = BlockingIOError()
+            with patch.object(d.logging, 'getLogger') as logger:
+                channel.report()
+                channel.summary('completed')
+                channel.summary('PRIVATE')
+                logger.assert_not_called()
+            channel.socket.recvfrom.side_effect = OSError('PRIVATE')
+            with self.assertLogs('native_push_diagnostics') as logs:
+                channel.report()
+                channel.summary('completed')
+            event = json.loads(logs.output[0].split('diagnostic ', 1)[1])
+            self.assertEqual(set(event), {'pass_id', 'initialization', 'valid_messages', 'termination', 'transport', 'missing_diagnostics'})
+            self.assertEqual(event['transport'], 'failed')
+            self.assertTrue(event['missing_diagnostics'])
+            self.assertNotIn('PRIVATE', str(logs.output))
+            channel.close()

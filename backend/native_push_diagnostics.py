@@ -9,12 +9,14 @@ from uuid import UUID
 import json
 import logging
 import os
+import re
 import secrets
 import socket
 
 FLAG = 'NATIVE_PUSH_IOS_DEV_DIAGNOSTICS'
 PORT = '_FCA_PUSH_DIAGNOSTIC_PORT'
 KEY = '_FCA_PUSH_DIAGNOSTIC_KEY'
+PASS = '_FCA_PUSH_DIAGNOSTIC_PASS'
 STAGES = {'credentials_preparation', 'token_decryption', 'eligibility_validation', 'fcm_request_response'}
 RESULTS = {'configuration', 'expired', 'invalid_payload', 'unregistered', 'accepted',
            'rate_limited', 'provider_unavailable', 'transport_uncertain', 'identity_unavailable'}
@@ -112,7 +114,7 @@ def _publish(event):
             logging.getLogger(__name__).warning('native_push_ios_challenge_diagnostic %s',
                                                json.dumps(event, sort_keys=True))
             return
-        packet = json.dumps({'key': os.environ[KEY], 'event': event}).encode()
+        packet = json.dumps({'key': os.environ[KEY], 'pass_id': os.environ.get(PASS), 'event': event}).encode()
         if len(packet) <= 1024:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as channel:
                 channel.setblocking(False)
@@ -154,25 +156,35 @@ class Channel:
     def __init__(self):
         self.socket = None
         self.key = None
+        self.pass_id = secrets.token_hex(16)
+        self.initialization = 'disabled'
+        self.valid_messages = 0
+        self.transport = 'ok'
         try:
             if enabled() or production_enabled():
                 self.key = secrets.token_hex(16)
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self.socket.setblocking(False)
                 self.socket.bind(('127.0.0.1', 0))
+                self.initialization = 'ready'
         except Exception:
+            self.initialization = 'failed'
             self.close()
 
     def environment(self):
         env = dict(os.environ)
         env.pop(PORT, None)
         env.pop(KEY, None)
+        env.pop(PASS, None)
         if self.socket is not None:
             try:
                 port = self.socket.getsockname()[1]
                 env[PORT] = str(port)
                 env[KEY] = self.key
+                if production_enabled():
+                    env[PASS] = self.pass_id
             except Exception:
+                self.initialization = 'failed'
                 self.close()
         return env
 
@@ -182,20 +194,49 @@ class Channel:
                 return
             # Bounded reads, no waiting, no raw datagram logging.
             for _ in range(4):
-                packet, _ = self.socket.recvfrom(1025)
+                try:
+                    packet, _ = self.socket.recvfrom(1025)
+                except BlockingIOError:
+                    break
                 if len(packet) > 1024:
                     continue
                 try:
                     value = json.loads(packet)
                 except (ValueError, UnicodeError, RecursionError):
                     continue
-                if (type(value) is dict and set(value) == {'key', 'event'}
+                if (type(value) is dict and set(value) == ({'key', 'pass_id', 'event'} if production_enabled() else {'key', 'event'})
+                        and (not production_enabled() or value['pass_id'] == self.pass_id)
                         and value['key'] == self.key
                         and (production_valid(value['event']) if production_enabled() else valid(value['event']))):
+                    self.valid_messages = getattr(self, 'valid_messages', 0) + 1
+                    event = dict(value['event'])
+                    if production_enabled():
+                        event['pass_id'] = self.pass_id
                     logging.getLogger(__name__).warning('native_push_ios_challenge_diagnostic %s',
-                                                        json.dumps(value['event'], sort_keys=True))
+                                                        json.dumps(event, sort_keys=True))
                     if not production_enabled():
                         break
+        except Exception:
+            self.transport = 'failed'
+
+    def summary(self, termination):
+        # Parent-owned, closed schema. Never serialize exceptions or child output.
+        try:
+            if not production_enabled():
+                return
+            if (termination not in {'completed', 'shutdown', 'deadline', 'child_failed'}
+                    or not re.fullmatch(r'[0-9a-f]{32}', self.pass_id)
+                    or self.initialization not in {'ready', 'failed', 'disabled'}
+                    or self.transport not in {'ok', 'failed'}
+                    or type(self.valid_messages) is not int or not 0 <= self.valid_messages <= 4):
+                return
+            abnormal = termination != 'completed' or self.initialization != 'ready' or self.transport != 'ok'
+            # Idle healthy passes remain quiet. One bounded summary per interesting pass.
+            if abnormal or self.valid_messages:
+                event = dict(pass_id=self.pass_id, initialization=self.initialization,
+                             valid_messages=self.valid_messages, termination=termination,
+                             transport=self.transport, missing_diagnostics=abnormal and self.valid_messages == 0)
+                logging.getLogger(__name__).warning('native_push_pass_diagnostic %s', json.dumps(event, sort_keys=True))
         except Exception:
             pass
 
