@@ -15,12 +15,24 @@ def eligible(output):
     if not sections:
         return False
     for section in sections:
-        causes = [line.strip().removeprefix('>').strip() for line in section.splitlines() if line.strip().startswith('>')]
+        entries = [(len(line) - len(line.lstrip()), line.strip()[1:].strip())
+                   for line in section.splitlines() if line.strip().startswith('>')]
+        causes = [cause for _, cause in entries]
         if not causes or not any(RATE_LIMIT.fullmatch(line) for line in causes):
             return False
-        for cause in causes:
+        for index, cause in enumerate(causes):
             if RATE_LIMIT.fullmatch(cause) or RESOURCE.fullmatch(cause):
                 continue
+            if re.fullmatch(r"Failed to transform [^\s]+ \([\w.\-]+:[\w.\-]+:[^\s]+\) to match attributes (?:\{[^\r\n]+\}|\*{3}[^\r\n]+\*{3})\.", cause):
+                # Only a nested 429 can justify this envelope, never a sibling error.
+                children = []
+                for indent, child in entries[index + 1:]:
+                    if indent <= entries[index][0]:
+                        break
+                    children.append(child)
+                if children and any(RATE_LIMIT.fullmatch(child) for child in children):
+                    continue  # Every child is still checked against the allowlist below.
+                return False
             # Gradle's dependency-resolution envelope, never a test/lint/compiler result.
             if re.fullmatch(r"Could not resolve (?:all (?:files|artifacts|dependencies) for configuration .+|[\w.\-]+:[\w.\-]+:[^\s]+)\.?", cause):
                 continue
