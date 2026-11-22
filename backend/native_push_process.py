@@ -61,6 +61,7 @@ class Supervisor:
             return 'stopped'
         deadline = time.monotonic() + self.seconds
         diagnostics = Channel()
+        termination = 'child_failed'
         try:
             # One trusted project per environment; each pass handles both native platforms.
             command = self.command
@@ -69,9 +70,11 @@ class Supervisor:
                 env=diagnostics.environment(), close_fds=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             while self.child.poll() is None:
                 if stop.is_set() or time.monotonic() >= deadline:
+                    termination = 'shutdown' if stop.is_set() else 'deadline'
                     return 'uncertain'
                 await asyncio.sleep(.025)
             code = self.child.returncode
+            termination = 'completed' if code == 0 else 'deadline' if code == 124 else 'child_failed'
             return 'complete' if code == 0 else ('uncertain' if code == 124 or code < 0 else 'failed')
         except OSError:
             return 'failed'
@@ -79,6 +82,7 @@ class Supervisor:
             try:
                 await self.close()
                 diagnostics.report()
+                diagnostics.summary(termination)
             finally:
                 diagnostics.close()
 
