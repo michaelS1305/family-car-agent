@@ -34,6 +34,56 @@ jobs:
           python3 - <<'PY'
           import base64, hashlib, json, os, pathlib, plistlib, re, subprocess, tempfile, uuid, zipfile
 
+          def upload_diagnostics(stdout, stderr):
+              # Never echo raw Apple output: it can include credentials, paths,
+              # headers and nested request data. Emit only closed-schema fields.
+              domains = {"NSCocoaErrorDomain", "NSURLErrorDomain", "ITunesConnectionOperationErrorDomain",
+                         "ITunesSoftwareServiceErrorDomain", "ITunesTransporterErrorDomain"}
+              safe_phrases = (
+                  "Redundant Binary Upload", "bundle version must be higher",
+                  "previously used bundle version", "already been uploaded",
+                  "Invalid Pre-Release Train", "train version is closed",
+                  "Validation failed", "Asset validation failed", "Invalid Bundle",
+                  "Unable to authenticate", "Authentication failed", "Unauthorized",
+                  "Forbidden", "Invalid API key", "Could not find a suitable application record",
+                  "You must first sign the relevant contracts", "Missing required icon",
+                  "Invalid Signature", "Invalid Provisioning Profile", "Request timed out",
+                  "The request timed out", "Could not connect to the server",
+              )
+              emitted = 0
+              for output in (stdout, stderr):
+                  if not isinstance(output, str) or len(output) > 262144:
+                      continue
+                  try:
+                      document = json.loads(output)
+                  except (ValueError, RecursionError):
+                      continue
+                  errors = document.get("product-errors", []) if isinstance(document, dict) else []
+                  if not isinstance(errors, list):
+                      continue
+                  for error in errors[:8]:
+                      if not isinstance(error, dict) or emitted >= 8:
+                          continue
+                      raw_code = error.get("code")
+                      code = str(raw_code) if isinstance(raw_code, (str, int)) and not isinstance(raw_code, bool) else ""
+                      if not re.fullmatch(r"(?:-?[0-9]{1,6}|ITMS-[0-9]{4,6})", code):
+                          code = "unrecognized"
+                      category = error.get("domain")
+                      if not isinstance(category, str) or category not in domains:
+                          category = "apple_upload_error"
+                      # Only recognized literal fragments are shown; arbitrary
+                      # values (including unknown secrets) never reach the log.
+                      message = error.get("message", "")
+                      safe = [phrase for phrase in safe_phrases
+                              if isinstance(message, str) and phrase.casefold() in message.casefold()]
+                      print("APPLE_UPLOAD_DIAG " + json.dumps({
+                          "category": category, "code": code,
+                          "message": "; ".join(safe) if safe else "Apple error text withheld: unrecognized diagnostic wording",
+                      }, sort_keys=True), flush=True)
+                      emitted += 1
+              if not emitted:
+                  print('APPLE_UPLOAD_DIAG {"category":"unparsed_apple_error","code":"unavailable","message":"No supported Apple JSON error; raw output withheld"}', flush=True)
+
           folder = pathlib.Path(os.environ["RUNNER_TEMP"]) / "testflight-input"
           ipa = folder / "FamilyCarAgent-Production.ipa"
           report = json.loads((folder / "fca-production-signing-report.json").read_text())
@@ -86,7 +136,8 @@ jobs:
                   env=env, capture_output=True, text=True, timeout=1500
               )
               if result.returncode:
-                  raise RuntimeError("Apple upload failed; check App Store Connect before retrying")
+                  upload_diagnostics(result.stdout, result.stderr)
+                  raise SystemExit(result.returncode)
 
           print("IPA upload accepted by Apple. TestFlight processing pending.")
           PY
