@@ -261,8 +261,8 @@ import Network
         // Let the coordinator register eligible work before Shortcuts releases the process.
         await sync.wake()
         if kind == .returning, let recovery = try await queue.recovery(c, event: event.id) {
-            if recovery.reason == "RETURN_RECOVERY_LEGACY_UNVERIFIED" { throw ShortcutQueueError.legacyReturn }
-            if recovery.state == .blocked || sync.diagnostic == .storageFailure || sync.diagnostic == .taskConflict {
+            if let failure = ReturnRecoveryPolicy.shortcutFailure(recovery) { throw failure }
+            if sync.diagnostic == .storageFailure || sync.diagnostic == .taskConflict {
                 throw ShortcutQueueError.recoveryBlocked
             }
         }

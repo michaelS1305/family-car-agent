@@ -332,7 +332,7 @@ struct VehicleUploadCompletion: Sendable {
         diagnostic = .blocked
     }
 
-    private static func recoveryTag(_ r: VehicleRecoveryRecord) -> String { "recovery/" + r.event.uuidString + "/" + r.id.uuidString }
+    private static func recoveryTag(_ r: VehicleRecoveryRecord) -> String { (r.reconciliation ? "reconciliation/" : "recovery/") + r.event.uuidString + "/" + r.id.uuidString }
 
     static func errorCode(_ body: Data) -> String? {
         struct Envelope: Decodable {
@@ -386,7 +386,7 @@ struct VehicleUploadCompletion: Sendable {
         try await queue.updateRecovery(context, event: r.event, id: r.id, state: .preparing)
         let file = try files.recoveryPayload(r)
         var request = URLRequest(url: environment.backendURL.appendingPathComponent(
-            "api/devices/\(context.device.uuidString)/events/return/\(r.event.uuidString)/recovery"))
+            "api/devices/\(context.device.uuidString)/events/return/\(r.event.uuidString)/\(r.reconciliation ? "reconciliation" : "recovery")"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer " + grant.accessToken, forHTTPHeaderField: "Authorization")
@@ -420,6 +420,33 @@ struct VehicleUploadCompletion: Sendable {
             for task in await transport.allTasks() { transport.cancel(task.identifier) }
             diagnostic = .blocked; return
         }
+        if (200...299).contains(status), r.reconciliation {
+            struct Resolution: Decodable {
+                let kind: String
+                let event_id: UUID
+                let reconciliation_id: UUID
+                let operation_id: UUID
+                let device_sequence: Int64
+                let last_processed_sequence: Int64
+                let historical_receipt: VehicleAdmissionReceipt
+                let effective_at: String
+                let session_effect: String
+            }
+            guard result.body.count <= 65_536,
+                  let receipt = try? JSONDecoder().decode(Resolution.self, from: result.body),
+                  receipt.kind == "resolved_current_state", receipt.event_id == r.event,
+                  receipt.device_sequence == head.event.sequence,
+                  receipt.last_processed_sequence == head.event.sequence,
+                  receipt.historical_receipt.kind == "terminal",
+                  receipt.historical_receipt.admission_outcome == "before_finalized_boundary",
+                  receipt.session_effect == "closed_linked_session", !receipt.effective_at.isEmpty else {
+                try await deferRecovery(r, after: nil); return
+            }
+            try await queue.updateRecovery(context, event: r.event, id: r.id, state: .accepted, acknowledgment: String(decoding: result.body, as: UTF8.self))
+            try? files.removeResolved(r.id)
+            try? files.removeResolved(head.event.id)
+            try await schedule(); return
+        }
         if (200...299).contains(status) {
             struct Receipt: Decodable {
                 let kind: String
@@ -442,7 +469,11 @@ struct VehicleUploadCompletion: Sendable {
             try await schedule(); return
         }
         // Only known safe fresh-evidence refusals permit a NEW explicit attempt.
-        let known = ReturnRecoveryPolicy.renewable.union([
+        let reconciliationCodes: Set<String> = ["RETURN_RECONCILIATION_NOT_FINALIZED", "RETURN_RECONCILIATION_NOT_ELIGIBLE",
+            "RETURN_RECONCILIATION_SEQUENCE_CONFLICT", "RETURN_RECONCILIATION_EVIDENCE_MISMATCH",
+            "RETURN_RECONCILIATION_IDEMPOTENCY_CONFLICT", "RETURN_RECONCILIATION_VERIFICATION_EXPIRED",
+            "RETURN_RECONCILIATION_STATE_CHANGED", "RETURN_RECONCILIATION_INVALID_CHRONOLOGY"]
+        let known = ReturnRecoveryPolicy.renewable.union(r.reconciliation ? reconciliationCodes : []).union([
             "RETURN_RECOVERY_LEGACY_UNVERIFIED", "RETURN_RECOVERY_ORDER_CONFLICT",
             "RETURN_RECOVERY_NOT_ELIGIBLE", "RETURN_RECOVERY_EVIDENCE_MISMATCH", "RETURN_RECOVERY_IDEMPOTENCY_CONFLICT"])
         let code = status == 409 ? Self.errorCode(result.body) : nil

@@ -54,6 +54,8 @@ class VehicleAdmissionPostgresTests(unittest.TestCase):
             ddl = source.split("ALTER TABLE public.users ADD CONSTRAINT", 1)[1].split("-- Nullable-first UUID backfill", 1)[0]
             conn.execute(("ALTER TABLE public.users ADD CONSTRAINT" + ddl).replace("public.", self.schema + "."))
             conn.execute("INSERT INTO families(id) VALUES(10),(20)")
+        from tests.return_reconciliation_schema import apply
+        apply(self.query, self.schema)
         self.users = {}
         for user_id, family in ((1, 10), (2, 10), (3, 20)):
             auth = uuid4()

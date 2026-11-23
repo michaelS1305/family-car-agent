@@ -69,7 +69,11 @@ class RecoverySchemaChecks(unittest.TestCase):
                    for node in module.body if isinstance(node, ast.ClassDef)}
         wire = QUEUE.split('enum VehicleEventWire {', 1)[1].split('/// One connection', 1)[0]
         keys = set(re.findall(r'"([a-z_]+)"(?:\s*:|\])', wire))
-        self.assertEqual(keys, classes['Take'] | classes['Return'] | classes['ReturnVerification'] | classes['ReturnRecovery'])
+        # The request-id key is selected explicitly, not a literal dictionary key.
+        self.assertIn('(reconciliation ? "reconciliation_id" : "recovery_id")', wire)
+        shared = keys - {'reconciliation_id'}
+        self.assertEqual(shared | {'recovery_id'}, classes['Take'] | classes['Return'] | classes['ReturnVerification'] | classes['ReturnRecovery'])
+        self.assertEqual(shared | {'reconciliation_id'}, classes['Take'] | classes['Return'] | classes['ReturnVerification'] | classes['ReturnReconciliation'])
 
 
 if __name__ == '__main__':

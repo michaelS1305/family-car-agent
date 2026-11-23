@@ -21,9 +21,18 @@ struct VehicleQueueContext: Equatable, Sendable {
     }
 }
 
-enum ShortcutQueueError: Error { case location, alreadyTaken, noUniqueTake, legacyReturn, recoveryBlocked }
+enum ShortcutQueueError: Error { case location, alreadyTaken, noUniqueTake, legacyReturn, recoveryBlocked, locationExpired, retryStored }
 
 enum ReturnRecoveryPolicy {
+    static func shortcutFailure(_ task: VehicleRecoveryRecord) -> ShortcutQueueError? {
+        if task.reason == "RETURN_RECOVERY_LEGACY_UNVERIFIED" { return .legacyReturn }
+        if task.state == .blocked {
+            if ["RETURN_RECOVERY_VERIFICATION_EXPIRED", "RETURN_RECONCILIATION_VERIFICATION_EXPIRED"].contains(task.reason) { return .locationExpired }
+            return .recoveryBlocked
+        }
+        if task.reason == "deliveryUnknown" || task.state == .awaitingAuthentication { return .retryStored }
+        return nil
+    }
     static let homeCodes: Set<String> = ["RETURN_HOME_UNAVAILABLE", "RETURN_OUTSIDE_HOME"]
     static let renewable: Set<String> = homeCodes.union(["RETURN_RECOVERY_VERIFICATION_EXPIRED"])
 }
@@ -36,6 +45,7 @@ struct VehicleRecoveryRecord: Sendable {
     let session: String?
     let task: Int64?
     let reason: String?
+    var reconciliation: Bool = false
 }
 
 /// Local to one app process. Invalidation and the entire sequence-allocating
@@ -110,11 +120,11 @@ enum VehicleEventWire {
         }
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
-    static func recovery(_ event: QueuedVehicleEvent, id: UUID, at time: Date, location: VehicleLocationEvidence) throws -> Data {
+    static func recovery(_ event: QueuedVehicleEvent, id: UUID, at time: Date, location: VehicleLocationEvidence, reconciliation: Bool = false) throws -> Data {
         try location.validate(at: time)
         guard time >= event.occurredAt else { throw ShortcutQueueError.location }
         return try JSONSerialization.data(withJSONObject: [
-            "recovery_id": id.uuidString,
+            (reconciliation ? "reconciliation_id" : "recovery_id"): id.uuidString,
             "original_return": JSONSerialization.jsonObject(with: encode(event)),
             "verification": ["invoked_at": timestamp(time), "location_at": timestamp(location.measuredAt),
                              "latitude": location.latitude, "longitude": location.longitude, "accuracy_m": location.accuracy]
@@ -280,16 +290,20 @@ actor VehicleEventQueue {
                     guard let reason = rejected.reason, ReturnRecoveryPolicy.homeCodes.contains(reason),
                           try records(context).first(where: { $0.state != .accepted && $0.state != .terminal })?.event.id == rejected.event.id
                     else { throw ShortcutQueueError.recoveryBlocked }
+                    var reconciliation = false
                     if let previous = try recovery(context, event: rejected.event.id) {
                         if previous.state != .blocked { return rejected.event }
                         if previous.reason == "RETURN_RECOVERY_LEGACY_UNVERIFIED" { throw ShortcutQueueError.legacyReturn }
-                        guard let reason = previous.reason, ReturnRecoveryPolicy.renewable.contains(reason)
+                        reconciliation = previous.reconciliation || previous.reason == "RETURN_RECOVERY_ORDER_CONFLICT"
+                        let renewable = ReturnRecoveryPolicy.renewable.union(["RETURN_RECOVERY_ORDER_CONFLICT", "RETURN_RECONCILIATION_VERIFICATION_EXPIRED"])
+                        guard let reason = previous.reason, renewable.contains(reason)
                         else { throw ShortcutQueueError.recoveryBlocked }
                     }
                     guard let location else { throw ShortcutQueueError.location }
                     let recoveryID = UUID()
-                    let bytes = try VehicleEventWire.recovery(rejected.event, id: recoveryID, at: occurredAt, location: location)
-                    try db.execute("INSERT INTO return_recoveries(id,event,payload,state) VALUES(?,?,?,'preparing')",
+                    let bytes = try VehicleEventWire.recovery(rejected.event, id: recoveryID, at: occurredAt, location: location, reconciliation: reconciliation)
+                    let table = reconciliation ? "return_reconciliations" : "return_recoveries"
+                    try db.execute("INSERT INTO \(table)(id,event,payload,state) VALUES(?,?,?,'preparing')",
                                    [recoveryID.uuidString, rejected.event.id.uuidString, String(decoding: bytes, as: UTF8.self)])
                     return rejected.event // No sequence allocation or original evidence mutation.
                 }
@@ -431,17 +445,20 @@ actor VehicleEventQueue {
 
     func recovery(_ context: VehicleQueueContext, event: UUID) throws -> VehicleRecoveryRecord? {
         _ = try record(context, event)
-        guard let r = try db.rows("SELECT id,payload,state,session,task,reason FROM return_recoveries WHERE event=? ORDER BY rowid DESC LIMIT 1", [event.uuidString]).first else { return nil }
+        let reconciliationRows = try db.rows("SELECT id,payload,state,session,task,reason FROM return_reconciliations WHERE event=? ORDER BY rowid DESC LIMIT 1", [event.uuidString])
+        let reconciliation = !reconciliationRows.isEmpty
+        let table = reconciliation ? "return_reconciliations" : "return_recoveries"
+        guard let r = try db.rows("SELECT id,payload,state,session,task,reason FROM \(table) WHERE event=? ORDER BY rowid DESC LIMIT 1", [event.uuidString]).first else { return nil }
         guard let id = r[0].flatMap(UUID.init(uuidString:)), let payload = r[1],
               let state = r[2].flatMap(VehicleQueueState.init(rawValue:)),
               r[4] == nil || r[4].flatMap(Int64.init) != nil else { throw VehicleQueueError.storage }
         return .init(id: id, event: event, payload: Data(payload.utf8), state: state,
-                     session: r[3], task: r[4].flatMap(Int64.init), reason: r[5])
+                     session: r[3], task: r[4].flatMap(Int64.init), reason: r[5], reconciliation: reconciliation)
     }
 
     /// Called only after transport task reconciliation. Identity/payload never change.
     func updateRecovery(_ context: VehicleQueueContext, event: UUID, id: UUID,
-                        state: VehicleQueueState, session: String? = nil, task: Int64? = nil, reason: String? = nil) throws {
+                        state: VehicleQueueState, session: String? = nil, task: Int64? = nil, reason: String? = nil, acknowledgment: String? = nil) throws {
         try db.transaction {
             try require(context)
             let row = try record(context, event)
@@ -452,10 +469,16 @@ actor VehicleEventQueue {
             guard state != .registered || (session != nil && task != nil) else { throw VehicleQueueError.invalidInput }
             guard state != .registered || old.state != .registered || (old.session == session && old.task == task)
             else { throw VehicleQueueError.invalidTransition }
-            try db.execute("UPDATE return_recoveries SET state=?,session=?,task=?,reason=? WHERE id=?",
+            let table = old.reconciliation ? "return_reconciliations" : "return_recoveries"
+            try db.execute("UPDATE \(table) SET state=?,session=?,task=?,reason=? WHERE id=?",
                            [state.rawValue, session, task.map(String.init), reason, id.uuidString])
             if state == .accepted {
-                try db.execute("UPDATE events SET state='accepted',reason='accepted' WHERE id=?", [event.uuidString])
+                if old.reconciliation {
+                    guard let acknowledgment else { throw VehicleQueueError.invalidInput }
+                    try db.execute("UPDATE return_reconciliations SET acknowledgment=? WHERE id=?", [acknowledgment, id.uuidString])
+                }
+                try db.execute("UPDATE events SET state=?,reason=? WHERE id=?",
+                    [old.reconciliation ? "terminal" : "accepted", old.reconciliation ? "resolved_current_state" : "accepted", event.uuidString])
             }
         }
     }
@@ -535,7 +558,7 @@ private final class VehicleQueueDatabase: @unchecked Sendable {
         try execute("PRAGMA journal_mode=DELETE")
         try execute("PRAGMA synchronous=FULL")
         try transaction {
-            guard let version = try rows("PRAGMA user_version").first?[0], ["0", "1", "2", "3"].contains(version) else {
+            guard let version = try rows("PRAGMA user_version").first?[0], ["0", "1", "2", "3", "4"].contains(version) else {
                 throw VehicleQueueError.unsupportedSchema
             }
             try execute("CREATE TABLE IF NOT EXISTS devices(context TEXT PRIMARY KEY,environment TEXT NOT NULL,device TEXT NOT NULL,last_sequence INTEGER NOT NULL CHECK(last_sequence>=0),active INTEGER NOT NULL CHECK(active IN(0,1)),UNIQUE(environment,device))")
@@ -545,7 +568,16 @@ private final class VehicleQueueDatabase: @unchecked Sendable {
             try execute("CREATE TABLE IF NOT EXISTS return_recoveries(id TEXT PRIMARY KEY,event TEXT NOT NULL REFERENCES events(id),payload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('preparing','registered','awaitingAuthentication','blocked','accepted')),session TEXT,task INTEGER,reason TEXT)")
             try execute("CREATE UNIQUE INDEX IF NOT EXISTS return_recovery_active ON return_recoveries(event) WHERE state IN('preparing','registered','awaitingAuthentication')")
             try execute("CREATE TRIGGER IF NOT EXISTS return_recovery_immutable BEFORE UPDATE OF id,event,payload ON return_recoveries BEGIN SELECT RAISE(ABORT,'immutable recovery'); END")
-            try execute("PRAGMA user_version=3")
+            try execute("CREATE TABLE IF NOT EXISTS return_reconciliations(id TEXT PRIMARY KEY,event TEXT NOT NULL REFERENCES events(id),payload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('preparing','registered','awaitingAuthentication','blocked','accepted')),session TEXT,task INTEGER,reason TEXT,acknowledgment TEXT)")
+            try execute("CREATE UNIQUE INDEX IF NOT EXISTS return_reconciliation_active ON return_reconciliations(event) WHERE state IN('preparing','registered','awaitingAuthentication')")
+            try execute("CREATE TRIGGER IF NOT EXISTS return_reconciliation_immutable BEFORE UPDATE OF id,event,payload ON return_reconciliations BEGIN SELECT RAISE(ABORT,'immutable reconciliation'); END")
+            // Enforce cross-table exclusion even across separate App Intent processes.
+            for (table, other) in [("return_reconciliations", "return_recoveries"), ("return_recoveries", "return_reconciliations")] {
+                for action in ["INSERT", "UPDATE"] {
+                    try execute("CREATE TRIGGER IF NOT EXISTS \(table)_exclusive_\(action) BEFORE \(action) ON \(table) WHEN NEW.state IN('preparing','registered','awaitingAuthentication') AND EXISTS(SELECT 1 FROM \(other) WHERE event=NEW.event AND state IN('preparing','registered','awaitingAuthentication','accepted')) BEGIN SELECT RAISE(ABORT,'active resolution'); END")
+                }
+            }
+            try execute("PRAGMA user_version=4")
         }
         #if os(iOS)
         try fm.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: path)

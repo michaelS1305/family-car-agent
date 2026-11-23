@@ -17,7 +17,7 @@ from uuid import UUID
 from deletion_gate import IdentityUnavailable, require_auth
 from identity import CurrentUser
 from vehicle_reconciliation import (
-    AcceptedEvent, CheckpointSeed, CheckpointSession, ReconciliationError,
+    CurrentStateResolution, AcceptedEvent, CheckpointSeed, CheckpointSession, ReconciliationError,
     SessionKey, TakeAssociation, reconcile,
 )
 from vehicle_work import (Budget, PolicyExceeded, SESSION_COLUMNS, rolling_checkpoint,
@@ -83,6 +83,24 @@ def _cause(conn, event, budget):
     if not session:
         raise ReconciliationError('Accepted TAKE lacks retained session anchor')
     return cause, session
+
+
+def _latest_resolution(conn, family_id, boundary, budget):
+    # Indexed, one-row frontier lookup; a fast admission must not pay the replay budget.
+    return budget.one(conn,
+        'SELECT effective_at FROM vehicle_return_reconciliations '
+        'WHERE family_id=%s AND effective_at>%s '
+        'AND NOT EXISTS (SELECT 1 FROM vehicle_driver_sessions s '
+        'WHERE s.session_ref=vehicle_return_reconciliations.session_ref AND s.ended_at<=%s) '
+        'ORDER BY effective_at DESC,operation_id DESC LIMIT 1', (family_id,boundary,boundary))
+
+
+def _resolutions(conn, family_id, boundary, budget):
+    return [CurrentStateResolution(*row) for row in budget.rows(conn,
+        'SELECT operation_id,family_id,vehicle_id,user_id,session_ref,anchor,effective_at '
+        'FROM vehicle_return_reconciliations WHERE family_id=%s AND effective_at>%s '
+        'AND NOT EXISTS (SELECT 1 FROM vehicle_driver_sessions s WHERE s.session_ref=vehicle_return_reconciliations.session_ref AND s.ended_at<=%s) '
+        'ORDER BY effective_at,operation_id', (family_id, boundary, boundary), 'events')]
 
 
 def _load_replay(conn, family_id, generation, boundary, candidate, budget):
@@ -202,22 +220,22 @@ def _materialize(conn, family_id, plan):
                      (family_id, deletes))
     # Close existing sessions before opening replacements (immediate active indexes).
     writes = sorted(writes, key=lambda item: item[1] is None) if incremental else writes
-    columns = 'family_id,vehicle_id,user_id,started_at,start_event_id,ended_at,end_event_id,end_reason,checkpoint_generation'
+    columns = 'family_id,vehicle_id,user_id,started_at,start_event_id,ended_at,end_event_id,end_reason,checkpoint_generation,end_reconciliation_id'
     for session, previous in writes:
         if incremental and previous:
             conn.execute('UPDATE vehicle_driver_sessions SET ended_at=%s,end_event_id=%s,end_reason=%s '
-                         'WHERE family_id=%s AND id=%s',
-                         (session.ended_at, session.end_event_id, session.end_reason, family_id, previous[0]))
+                         ' ,end_reconciliation_id=%s WHERE family_id=%s AND id=%s',
+                         (session.ended_at, session.end_event_id, session.end_reason, session.end_reconciliation_id, family_id, previous[0]))
             continue
         values = (family_id, session.vehicle_id, session.user_id, session.started_at, session.start_event_id,
-                  session.ended_at, session.end_event_id, session.end_reason, session.checkpoint_generation)
+                  session.ended_at, session.end_event_id, session.end_reason, session.checkpoint_generation, session.end_reconciliation_id)
         if previous:
             conn.execute(f'INSERT INTO vehicle_driver_sessions (id,session_ref,created_at,{columns}) '
-                         'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                         'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
                          (previous[0], previous[1], previous[9], *values))
         else:
             conn.execute(f'INSERT INTO vehicle_driver_sessions ({columns}) '
-                         'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)', values)
+                         'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', values)
     for event_id, anchor in effects:
         conn.execute("UPDATE vehicle_events SET projection_take_event_id=%s WHERE family_id=%s "
                      "AND event_id=%s AND admission_outcome='accepted' "
@@ -411,19 +429,24 @@ def _admit(conn, current_user, event, *, shortcut=False):
                     latest = budget.one(conn, "SELECT occurred_at FROM vehicle_events WHERE family_id=%s "
                                         "AND admission_outcome='accepted' ORDER BY occurred_at DESC,event_id DESC LIMIT 1",
                                         (family_id,))
-                    fast = not latest or event.occurred_at > latest[0]
+                    latest_resolution = _latest_resolution(conn, family_id, boundary, budget)
+                    # Current materialized state includes the operations. Only
+                    # strictly later evidence can use the unchanged fast path.
+                    frontier = max(([latest[0]] if latest else []) + ([latest_resolution[0]] if latest_resolution else []), default=None)
+                    fast = frontier is None or event.occurred_at > frontier
                     if fast:
                         if event.event_type == 'return':
                             budget.charge('causes', 1)
                         cause = _cause(conn, accepted, budget) if event.event_type == 'return' else None
                         if event.event_type == 'return' and not cause:
                             raise _RejectedProjection('causal_conflict')
-                        projection, mutable, frozen_anchor = _incremental(conn, accepted, latest[0] if latest else None,
+                        projection, mutable, frozen_anchor = _incremental(conn, accepted, frontier,
                                                                           budget, cause)
                     else:
+                        operations = _resolutions(conn, family_id, boundary, budget)
                         events, seed, mutable, frozen = _load_replay(conn, family_id, generation, boundary, accepted, budget)
                         frozen_anchor = _frozen_return_anchor(accepted, frozen)
-                        projection = reconcile(family_id, events, seed)
+                        projection = reconcile(family_id, events, seed, resolutions=operations)
                     if projection and any(effect.outcome == 'missing_take' for effect in projection.effects):
                         raise ReconciliationError('Accepted replay lacks causal evidence')
                     plan = _plan_materialization(projection, mutable, budget, incremental=fast) if projection else None

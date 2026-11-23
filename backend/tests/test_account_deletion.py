@@ -159,6 +159,8 @@ class AccountDeletionPostgresTests(unittest.TestCase):
         source = (Path(__file__).resolve().parents[2] / 'supabase/manual_migrations/2026092001_vehicle_identity_foundation.sql').read_text()
         ddl = source.split('ALTER TABLE public.users ADD CONSTRAINT', 1)[1].split('-- Nullable-first UUID backfill', 1)[0]
         self.query(('ALTER TABLE public.users ADD CONSTRAINT' + ddl).replace('public.', self.schema + '.'))
+        from tests.return_reconciliation_schema import apply
+        apply(self.query, self.schema)
         self.creator = self.person()
         self.family = self.query("INSERT INTO families(name,family_code,created_by_user_id) VALUES('family','abc123',%s) RETURNING id", (self.creator[1],))[0][0]
         self.query('UPDATE users SET family_id=%s WHERE id=%s', (self.family, self.creator[1]))
