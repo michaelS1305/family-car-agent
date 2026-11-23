@@ -193,9 +193,9 @@ private actor SyncSessionExchange: AuthTransport {
             let after = try tables.map { try migrationRows(v2, "SELECT * FROM \($0) ORDER BY 1") }
             let version = try migrationRows(v2, "PRAGMA user_version")
             let recoveryRows = try migrationRows(v2, "SELECT * FROM return_recoveries")
-            precondition(after == before && version == [["3"]] && recoveryRows.isEmpty)
+            precondition(after == before && version == [["4"]] && recoveryRows.isEmpty)
         }
-        print("PASS: SQLite v2 to v3 preserves payloads, IDs, ordering, states, blocked RETURN and idempotent reopening")
+        print("PASS: SQLite v2 to v4 preserves payloads, IDs, ordering, states, blocked RETURN and idempotent reopening")
 
         let sharedFixture = try await fixture(), ctx = sharedFixture.context
         let vault = SyncSessionVault()
@@ -585,6 +585,15 @@ private actor SyncSessionExchange: AuthTransport {
         recovery.coordinator.fence()
         print("PASS: automatic cooldown retry, preserved event identity, logout fence and offline JWT refresh recovery")
 
+        try await recoveryChecks(root: root)
+        try await reconciliationHardening(root: root)
+    }
+    @MainActor private static func recoveryChecks(root: URL) async throws {
+        func fixture() async throws -> SyncFixture {
+            let f = try SyncFixture(root: root.appendingPathComponent(UUID().uuidString))
+            try await f.start(); return f
+        }
+        let accepted = #"{"kind":"accepted","admission_outcome":"accepted","transition":"redundant_take"}"#
         // RETURN recovery uses a separate durable request, never a replacement event.
         func rejectedReturn(code: String = "RETURN_OUTSIDE_HOME") async throws -> (SyncFixture, QueuedVehicleEvent) {
             let f = try await fixture()
@@ -644,7 +653,7 @@ private actor SyncSessionExchange: AuthTransport {
             await f.coordinator.receive(f.transport.finish(3, status: 409, body: "{\"detail\":{\"code\":\"\(code)\"}}"))
             await f.coordinator.wake() // Never creates fresh evidence on its own.
             precondition(f.transport.created.count == 3)
-            if ReturnRecoveryPolicy.renewable.contains(code) {
+            if ReturnRecoveryPolicy.renewable.contains(code) || code == "RETURN_RECOVERY_ORDER_CONFLICT" {
                 try await explicitReturn(f, e)
                 let next = try await f.queue.recovery(f.context, event: e.id)!
                 precondition(next.id != first.id && next.payload != first.payload)
@@ -663,6 +672,308 @@ private actor SyncSessionExchange: AuthTransport {
         let legacyAttempt = try await legacy.queue.recovery(legacy.context, event: legacyEvent.id)
         precondition(legacyAttempt == nil)
         legacy.coordinator.fence()
+        // Finalization is proven only by the server. ORDER_CONFLICT permits a
+        // separate explicit request, never changes original evidence locally.
+        let (cf, ce) = try await rejectedReturn()
+        try await explicitReturn(cf, ce)
+        await cf.coordinator.wake()
+        await cf.coordinator.receive(cf.transport.finish(3, status: 409, body: "{\"detail\":{\"code\":\"RETURN_RECOVERY_ORDER_CONFLICT\"}}"))
+        try await explicitReturn(cf, ce)
+        let cr = try await cf.queue.recovery(cf.context, event: ce.id)!
+        precondition(cr.reconciliation)
+        let nextTake = try await cf.queue.enqueueTake(cf.context, vehicle: ce.vehicle, occurredAt: cf.clock.addingTimeInterval(1))
+        let nextReturn = try await cf.queue.enqueueReturn(cf.context, vehicle: ce.vehicle, occurredAt: cf.clock.addingTimeInterval(2),
+            takeID: nextTake.id, location: .init(latitude: 32, longitude: 34, accuracy: 10, measuredAt: cf.clock.addingTimeInterval(2)))
+        try await explicitReturn(cf, ce)
+        let crAgain = try await cf.queue.recovery(cf.context, event: ce.id)!
+        precondition(cr.id == crAgain.id && cr.payload == crAgain.payload)
+        let restarted = try VehicleEventQueue(directory: cf.root.appendingPathComponent("db"))
+        let restored = try await restarted.recovery(cf.context, event: ce.id)!
+        precondition(restored.reconciliation && restored.payload == cr.payload)
+        await cf.coordinator.wake()
+        precondition(cf.transport.created.last!.request.url!.path.hasSuffix("/reconciliation"))
+        await cf.coordinator.receive(cf.transport.finish(4, status: nil, failed: true))
+        let uncertain = try await cf.queue.recovery(cf.context, event: ce.id)!
+        precondition(uncertain.id == cr.id && uncertain.payload == cr.payload)
+        cf.clock.addTimeInterval(180)
+        await cf.coordinator.wake()
+        let resolution = "{\"kind\":\"resolved_current_state\",\"event_id\":\"\(ce.id)\",\"reconciliation_id\":\"\(cr.id)\",\"operation_id\":\"\(UUID())\",\"device_sequence\":2,\"last_processed_sequence\":2,\"historical_receipt\":{\"kind\":\"terminal\",\"admission_outcome\":\"before_finalized_boundary\"},\"effective_at\":\"2026-11-23T14:06:00Z\",\"session_effect\":\"closed_linked_session\"}"
+        await cf.coordinator.receive(cf.transport.finish(5, body: resolution))
+        let resolvedRows = try await cf.queue.records(cf.context)
+        precondition(resolvedRows[1].event == ce && resolvedRows[1].state == .terminal)
+        precondition(resolvedRows[1].reason == "resolved_current_state")
+        precondition(resolvedRows.map { $0.event.sequence } == [1, 2, 3, 4])
+        precondition(resolvedRows[2].event == nextTake && resolvedRows[3].event == nextReturn)
+        precondition(cf.transport.created.count == 6) // Ordered next TAKE starts only after acknowledgment.
+        cf.coordinator.fence()
+        let acknowledgment = try migrationRows(cf.root.appendingPathComponent("db"), "SELECT acknowledgment FROM return_reconciliations")
+        precondition(acknowledgment.count == 1 && acknowledgment[0][0]?.contains("resolved_current_state") == true)
+        // A real v3 database with an existing blocked recovery upgrades without
+        // recreating event evidence or its in-flight immutable payload.
+        let (v3f, v3e) = try await rejectedReturn()
+        try await explicitReturn(v3f, v3e)
+        let v3attempt = try await v3f.queue.recovery(v3f.context, event: v3e.id)!
+        let v3dir = v3f.root.appendingPathComponent("db")
+        try rejectionSQL(v3dir, "DROP TRIGGER return_recoveries_exclusive_INSERT; DROP TRIGGER return_recoveries_exclusive_UPDATE; DROP TABLE return_reconciliations; PRAGMA user_version=3;")
+        let migratedV3 = try VehicleEventQueue(directory: v3dir)
+        let v3restored = try await migratedV3.recovery(v3f.context, event: v3e.id)!
+        precondition(v3restored.payload == v3attempt.payload && v3restored.id == v3attempt.id)
+        let v3rows = try await migratedV3.records(v3f.context)
+        precondition(v3rows[1].event == v3e && v3rows[1].state == .blocked)
+        _ = try VehicleEventQueue(directory: v3dir)
+        let upgradedVersion = try migrationRows(v3dir, "PRAGMA user_version")
+        precondition(upgradedVersion == [["4"]])
+        v3f.coordinator.fence()
+        // Expiry requires an explicit new invocation. It never rewrites a task.
+        let (ef, ee) = try await rejectedReturn()
+        try await explicitReturn(ef, ee)
+        await ef.coordinator.wake()
+        await ef.coordinator.receive(ef.transport.finish(3, status: 409, body: "{\"detail\":{\"code\":\"RETURN_RECOVERY_ORDER_CONFLICT\"}}"))
+        try await explicitReturn(ef, ee)
+        let beforeExpiry = try await ef.queue.recovery(ef.context, event: ee.id)!
+        await ef.coordinator.wake()
+        await ef.coordinator.receive(ef.transport.finish(4, status: 409, body: "{\"detail\":{\"code\":\"RETURN_RECONCILIATION_VERIFICATION_EXPIRED\"}}"))
+        await ef.coordinator.wake()
+        precondition(ef.transport.created.count == 4)
+        try await explicitReturn(ef, ee)
+        let afterExpiry = try await ef.queue.recovery(ef.context, event: ee.id)!
+        precondition(afterExpiry.reconciliation && afterExpiry.id != beforeExpiry.id)
+        ef.coordinator.fence()
+        print("PASS: current-state reconciliation immutable identity, restart, lost response and atomic terminal acknowledgment")
         print("PASS: RETURN recovery identity, restart, uncertain retry, expiry, refusal, legacy and queued TAKE")
     }
+
+
+    @MainActor private static func reconciliationHardening(root: URL) async throws {
+        let accepted = #"{"kind":"accepted","admission_outcome":"accepted","transition":"redundant_take"}"#
+        func explicit(_ f: SyncFixture, _ e: QueuedVehicleEvent) async throws {
+            f.clock.addTimeInterval(1)
+            let returned = try await f.queue.recordShortcut(f.context, vehicle: e.vehicle, kind: .returning,
+                time: f.clock, location: .init(latitude: 32, longitude: 34, accuracy: 10, measuredAt: f.clock))
+            precondition(returned == e)
+        }
+        func prepared(productionSequence: Bool = false) async throws -> (SyncFixture, QueuedVehicleEvent, VehicleRecoveryRecord) {
+            let f = try SyncFixture(root: root.appendingPathComponent(UUID().uuidString))
+            try await f.start()
+            let vehicle = UUID()
+            // Six accepted synthetic pairs precede the sanitized Production 13/14 fixture.
+            if productionSequence {
+                for _ in 0..<6 {
+                    let t = try await f.take(vehicle: vehicle)
+                    await f.coordinator.wake()
+                    await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier, body: accepted))
+                    _ = try await f.queue.enqueueReturn(f.context, vehicle: vehicle, occurredAt: f.clock, takeID: t.id,
+                        location: .init(latitude: 32, longitude: 34, accuracy: 10, measuredAt: f.clock))
+                    await f.coordinator.wake()
+                    await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier, body: accepted))
+                }
+            }
+            let verification = try await f.queue.beginVerification(f.context)
+            try await f.queue.completeVerification(f.context, generation: verification, vehicles: [vehicle])
+            let t = try await f.queue.enqueueTake(f.context,
+                id: UUID(uuidString: "37765bae-39c3-4cea-bd53-10e30f2c7913")!, vehicle: vehicle, occurredAt: f.clock)
+            await f.coordinator.wake()
+            await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier, body: accepted))
+            f.clock.addTimeInterval(10)
+            let e = try await f.queue.enqueueReturn(f.context,
+                id: UUID(uuidString: "07e91a49-bc53-4a33-8c41-f9c2b310fd28")!, vehicle: vehicle, occurredAt: f.clock, takeID: t.id,
+                location: .init(latitude: 32, longitude: 34, accuracy: 10, measuredAt: f.clock))
+            await f.coordinator.wake()
+            await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier, status: 409,
+                body: #"{"detail":{"code":"RETURN_OUTSIDE_HOME"}}"#))
+            try await explicit(f, e)
+            do {
+                try rejectionSQL(f.root.appendingPathComponent("db"), "INSERT INTO return_reconciliations(id,event,payload,state) VALUES('overlap','\(e.id.uuidString)','{}','preparing');")
+                preconditionFailure("Concurrent reconciliation allowed")
+            } catch VehicleQueueError.storage {}
+            await f.coordinator.wake()
+            await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier, status: 409,
+                body: #"{"detail":{"code":"RETURN_RECOVERY_ORDER_CONFLICT"}}"#))
+            try await explicit(f, e)
+            return (f, e, try await f.queue.recovery(f.context, event: e.id)!)
+        }
+        func response(_ e: QueuedVehicleEvent, _ r: VehicleRecoveryRecord, change: String? = nil) throws -> String {
+            var body: [String: Any] = ["kind": "resolved_current_state", "event_id": e.id.uuidString,
+                "reconciliation_id": r.id.uuidString, "operation_id": UUID().uuidString,
+                "device_sequence": e.sequence, "last_processed_sequence": e.sequence,
+                "historical_receipt": ["kind": "terminal", "admission_outcome": "before_finalized_boundary"],
+                "effective_at": "2026-11-23T14:06:00Z", "session_effect": "closed_linked_session"]
+            if change == "event_id" { body["event_id"] = UUID().uuidString }
+            if change == "device_sequence" || change == "last_processed_sequence" { body[change!] = e.sequence + 1 }
+            if change == "canonical" { body["reconciliation_id"] = UUID().uuidString }
+            return String(decoding: try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]), as: UTF8.self)
+        }
+        func unchanged(_ f: SyncFixture, _ e: QueuedVehicleEvent, _ r: VehicleRecoveryRecord) async throws {
+            let q = try VehicleEventQueue(directory: f.root.appendingPathComponent("db"))
+            let rows = try await q.records(f.context)
+            precondition(rows.first(where: { $0.event.id == e.id })?.state == .blocked)
+            precondition(rows.first(where: { $0.event.id == e.id })?.event == e)
+            let task = try await q.recovery(f.context, event: e.id)!
+            precondition(task.id == r.id && task.payload == r.payload && task.state != .accepted)
+            let ack = try migrationRows(f.root.appendingPathComponent("db"), "SELECT acknowledgment FROM return_reconciliations")
+            precondition(ack == [[nil]])
+        }
+        // Independent schema copied from the shipping v3 source, not obtained by downgrading v4.
+        let dir = root.appendingPathComponent("independent-v3")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try rejectionSQL(dir, """
+            CREATE TABLE IF NOT EXISTS devices(context TEXT PRIMARY KEY,environment TEXT NOT NULL,device TEXT NOT NULL,last_sequence INTEGER NOT NULL CHECK(last_sequence>=0),active INTEGER NOT NULL CHECK(active IN(0,1)),UNIQUE(environment,device));
+            CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,context TEXT NOT NULL REFERENCES devices(context),sequence INTEGER NOT NULL CHECK(sequence>0),vehicle TEXT NOT NULL,cause TEXT REFERENCES events(id),payload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('pending','preparing','registered','awaitingAuthentication','accepted','terminal','blocked')),attempt TEXT,session TEXT,task INTEGER,reason TEXT,UNIQUE(context,sequence),UNIQUE(context,cause));
+            CREATE TABLE IF NOT EXISTS authorization_scopes(context TEXT PRIMARY KEY REFERENCES devices(context),generation TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('verificationPending','verified','revoked')),namespace TEXT);
+            CREATE TABLE IF NOT EXISTS vehicle_authorizations(context TEXT NOT NULL REFERENCES authorization_scopes(context),vehicle TEXT NOT NULL,allowed INTEGER NOT NULL CHECK(allowed IN(0,1)),PRIMARY KEY(context,vehicle));
+            CREATE TABLE IF NOT EXISTS return_recoveries(id TEXT PRIMARY KEY,event TEXT NOT NULL REFERENCES events(id),payload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('preparing','registered','awaitingAuthentication','blocked','accepted')),session TEXT,task INTEGER,reason TEXT);
+            CREATE UNIQUE INDEX IF NOT EXISTS return_recovery_active ON return_recoveries(event) WHERE state IN('preparing','registered','awaitingAuthentication');
+            CREATE TRIGGER IF NOT EXISTS return_recovery_immutable BEFORE UPDATE OF id,event,payload ON return_recoveries BEGIN SELECT RAISE(ABORT,'immutable recovery'); END;
+            PRAGMA user_version=3;
+            INSERT INTO devices VALUES('fixture-context','fixture-environment','fixture-device',16,1);
+            INSERT INTO authorization_scopes VALUES('fixture-context','fixture-generation','verified','fixture-namespace');
+            INSERT INTO vehicle_authorizations VALUES('fixture-context','00000000-0000-4000-8000-000000000002',1);
+            INSERT INTO events VALUES('37765BAE-39C3-4CEA-BD53-10E30F2C7913','fixture-context',13,'00000000-0000-4000-8000-000000000002',NULL,'{"id":"37765BAE-39C3-4CEA-BD53-10E30F2C7913","vehicle":"00000000-0000-4000-8000-000000000002","sequence":13,"occurredAt":100,"kind":"take"}','accepted',NULL,NULL,NULL,'accepted');
+            INSERT INTO events VALUES('07E91A49-BC53-4A33-8C41-F9C2B310FD28','fixture-context',14,'00000000-0000-4000-8000-000000000002','37765BAE-39C3-4CEA-BD53-10E30F2C7913','{"id":"07E91A49-BC53-4A33-8C41-F9C2B310FD28","vehicle":"00000000-0000-4000-8000-000000000002","sequence":14,"occurredAt":110,"kind":"return","takeID":"37765BAE-39C3-4CEA-BD53-10E30F2C7913","location":{"latitude":32,"longitude":34,"accuracy":10,"measuredAt":110}}','blocked',NULL,NULL,NULL,'RETURN_OUTSIDE_HOME');
+            INSERT INTO events VALUES('00000000-0000-4000-8000-000000000015','fixture-context',15,'00000000-0000-4000-8000-000000000002',NULL,'{"id":"00000000-0000-4000-8000-000000000015","vehicle":"00000000-0000-4000-8000-000000000002","sequence":15,"occurredAt":120,"kind":"take"}','registered','00000000-0000-4000-8000-000000000043','background-session',42,NULL);
+            INSERT INTO events VALUES('00000000-0000-4000-8000-000000000016','fixture-context',16,'00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000015','{"id":"00000000-0000-4000-8000-000000000016","vehicle":"00000000-0000-4000-8000-000000000002","sequence":16,"occurredAt":130,"kind":"return","takeID":"00000000-0000-4000-8000-000000000015","location":{"latitude":32,"longitude":34,"accuracy":10,"measuredAt":130}}','pending',NULL,NULL,NULL,NULL);
+            INSERT INTO return_recoveries VALUES('00000000-0000-4000-8000-000000000041','07E91A49-BC53-4A33-8C41-F9C2B310FD28','{"recovery_id":"00000000-0000-4000-8000-000000000041","original_return":{"event_id":"07E91A49-BC53-4A33-8C41-F9C2B310FD28","vehicle_ref":"00000000-0000-4000-8000-000000000002","device_sequence":14,"occurred_at":"2001-01-01T00:01:50Z","take_event_id":"37765BAE-39C3-4CEA-BD53-10E30F2C7913","latitude":32,"longitude":34,"accuracy_m":10,"location_at":"2001-01-01T00:01:50Z"},"verification":{"invoked_at":"2001-01-01T00:02:00Z","location_at":"2001-01-01T00:02:00Z","latitude":32,"longitude":34,"accuracy_m":10}}','blocked',NULL,NULL,'RETURN_OUTSIDE_HOME');
+            INSERT INTO return_recoveries VALUES('00000000-0000-4000-8000-000000000042','07E91A49-BC53-4A33-8C41-F9C2B310FD28','{"recovery_id":"00000000-0000-4000-8000-000000000042","original_return":{"event_id":"07E91A49-BC53-4A33-8C41-F9C2B310FD28","vehicle_ref":"00000000-0000-4000-8000-000000000002","device_sequence":14,"occurred_at":"2001-01-01T00:01:50Z","take_event_id":"37765BAE-39C3-4CEA-BD53-10E30F2C7913","latitude":32,"longitude":34,"accuracy_m":10,"location_at":"2001-01-01T00:01:50Z"},"verification":{"invoked_at":"2001-01-01T00:02:00Z","location_at":"2001-01-01T00:02:00Z","latitude":32,"longitude":34,"accuracy_m":10}}','registered','background-session',43,NULL);
+            """)
+        let tables = ["devices", "events", "authorization_scopes", "vehicle_authorizations", "return_recoveries"]
+        let before = try tables.map { try migrationRows(dir, "SELECT * FROM \($0) ORDER BY 1") }
+        for _ in 0..<2 {
+            _ = try VehicleEventQueue(directory: dir)
+            let after = try tables.map { try migrationRows(dir, "SELECT * FROM \($0) ORDER BY 1") }
+            precondition(before == after)
+            let payloads = try migrationRows(dir, "SELECT payload FROM events ORDER BY sequence")
+            let events = try payloads.map { try JSONDecoder().decode(QueuedVehicleEvent.self, from: Data($0[0]!.utf8)) }
+            precondition(events.map(\.sequence) == [13, 14, 15, 16])
+            precondition(events[1].takeID == events[0].id && events[3].takeID == events[2].id)
+            let version = try migrationRows(dir, "PRAGMA user_version")
+            let tasks = try migrationRows(dir, "SELECT * FROM return_reconciliations")
+            precondition(version == [["4"]] && tasks.isEmpty)
+        }
+        print("PASS: independent v3 schema, all rows/upload mappings preserved, v4 reopen/idempotency")
+
+        for fault in ["between-writes", "commit"] {
+            let (f, e, r) = try await prepared()
+            let db = f.root.appendingPathComponent("db")
+            if fault == "between-writes" {
+                try rejectionSQL(db, "CREATE TRIGGER fail_terminal BEFORE UPDATE OF state ON events WHEN NEW.state='terminal' BEGIN SELECT RAISE(ABORT,'test fault'); END;")
+            } else {
+                // The last write succeeds; deferred FK is checked only by COMMIT.
+                try rejectionSQL(db, "CREATE TABLE fault_parent(id INTEGER PRIMARY KEY); CREATE TABLE fault_child(id INTEGER REFERENCES fault_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_commit AFTER UPDATE OF state ON events WHEN NEW.state='terminal' BEGIN INSERT INTO fault_child VALUES(99); END;")
+            }
+            do {
+                try await f.queue.updateRecovery(f.context, event: e.id, id: r.id, state: .accepted, acknowledgment: response(e, r))
+                preconditionFailure("Injected transaction failure did not fail")
+            } catch VehicleQueueError.storage {}
+            try await unchanged(f, e, r)
+            let oldRows = try migrationRows(db, "SELECT state FROM return_reconciliations")
+            precondition(oldRows == [["preparing"]])
+            if fault == "commit" {
+                let rows = try migrationRows(db, "SELECT * FROM fault_child")
+                precondition(rows.isEmpty)
+            }
+            try rejectionSQL(db, "DROP TRIGGER \(fault == "commit" ? "fail_commit" : "fail_terminal");")
+            await f.coordinator.wake()
+            await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier, body: try response(e, r)))
+            let resolved = try await f.states(); precondition(resolved == [.accepted, .terminal])
+            f.coordinator.fence()
+        }
+        print("PASS: acknowledgment/terminal write rollback and deferred-constraint COMMIT rollback; retry succeeds")
+
+        for invalid in ["event_id", "device_sequence", "last_processed_sequence", "malformed", "stale"] {
+            let (f, e, r) = try await prepared()
+            await f.coordinator.wake()
+            let count = f.transport.created.count
+            if invalid == "stale" {
+                await f.coordinator.receive(f.transport.finish(3, body: try response(e, r)))
+            } else {
+                let body = invalid == "malformed" ? "not-json" : try response(e, r, change: invalid)
+                await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier, body: body))
+            }
+            try await unchanged(f, e, r)
+            precondition(f.transport.created.count == count)
+            f.coordinator.fence()
+        }
+        print("PASS: five invalid/stale response cases never acknowledge or release RETURN")
+
+        let (f, e, r) = try await prepared(productionSequence: true)
+        precondition(e.sequence == 14)
+        var following: [QueuedVehicleEvent] = []
+        for _ in 0..<3 {
+            f.clock.addTimeInterval(1)
+            let t = try await f.queue.enqueueTake(f.context, vehicle: e.vehicle, occurredAt: f.clock)
+            let ret = try await f.queue.enqueueReturn(f.context, vehicle: e.vehicle, occurredAt: f.clock,
+                takeID: t.id, location: .init(latitude: 32, longitude: 34, accuracy: 10, measuredAt: f.clock))
+            following.append(contentsOf: [t, ret])
+        }
+        await f.coordinator.wake()
+        let initialTask = f.transport.created.last!.task.identifier
+        let count = f.transport.created.count
+        try f.restoreCoordinator()
+        await f.coordinator.wake()
+        precondition(f.transport.created.count == count && f.transport.tasks.count == 1)
+        // SQL-level mutual exclusion, in both directions, not only an actor guard.
+        let db = f.root.appendingPathComponent("db")
+        do {
+            try rejectionSQL(db, "INSERT INTO return_recoveries(id,event,payload,state) VALUES('overlap','\(e.id.uuidString)','{}','preparing');")
+            preconditionFailure("Concurrent recovery allowed")
+        } catch VehicleQueueError.storage {}
+        await f.coordinator.receive(f.transport.finish(initialTask, status: 503,
+            body: #"{"detail":{"code":"RETURN_RECONCILIATION_DISABLED"}}"#))
+        try await unchanged(f, e, r)
+        try await explicit(f, e)
+        precondition(f.transport.created.count == count)
+        f.clock.addTimeInterval(180)
+        try f.restoreCoordinator()
+        await f.coordinator.wake()
+        precondition(f.transport.created.last!.bytes == r.payload)
+        // Simulate server commit followed by a lost acknowledgment, then restart with no OS task.
+        await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier, status: nil, failed: true))
+        f.clock.addTimeInterval(180)
+        try f.restoreCoordinator()
+        try await unchanged(f, e, r)
+        await f.coordinator.wake()
+        precondition(f.transport.created.last!.bytes == r.payload)
+        let canonical = try response(e, r, change: "canonical")
+        await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier, body: canonical))
+        let reopened = try VehicleEventQueue(directory: db)
+        var rows = try await reopened.records(f.context)
+        precondition(rows[13].event == e && rows[13].state == .terminal && rows[13].reason == "resolved_current_state")
+        precondition(Array(rows.suffix(6)).map(\.event) == following)
+        for event in following {
+            let sent = f.transport.created.last!
+            let expectedBytes = try VehicleEventWire.encode(event)
+            precondition(sent.bytes == expectedBytes)
+            await f.coordinator.receive(f.transport.finish(sent.task.identifier, body: accepted))
+        }
+        rows = try await reopened.records(f.context)
+        precondition(rows.map { $0.event.sequence } == Array(Int64(1)...20))
+        precondition(rows.enumerated().allSatisfy { $0.offset == 13 ? $0.element.state == .terminal : $0.element.state == .accepted })
+        precondition(Array(rows.suffix(6)).map(\.event) == following && f.transport.tasks.isEmpty)
+        let ack = try migrationRows(db, "SELECT acknowledgment FROM return_reconciliations")
+        precondition(ack == [[canonical]])
+        f.coordinator.fence()
+        print("PASS: Production 13/14 fixture, 15...20 ordered pairs, restored upload, disabled flag, lost response, canonical acknowledgment")
+
+        let (ef, ee, er) = try await prepared()
+        await ef.coordinator.wake()
+        await ef.coordinator.receive(ef.transport.finish(ef.transport.created.last!.task.identifier, status: 409,
+            body: #"{"detail":{"code":"RETURN_RECONCILIATION_VERIFICATION_EXPIRED"}}"#))
+        let expired = try await ef.queue.recovery(ef.context, event: ee.id)!
+        if case .locationExpired? = ReturnRecoveryPolicy.shortcutFailure(expired) {} else { preconditionFailure() }
+        let n = ef.transport.created.count
+        try ef.restoreCoordinator(); await ef.coordinator.wake()
+        precondition(ef.transport.created.count == n)
+        try await explicit(ef, ee)
+        let fresh = try await ef.queue.recovery(ef.context, event: ee.id)!
+        precondition(fresh.id != er.id && fresh.payload != er.payload)
+        ef.coordinator.fence()
+        for reason in ["RETURN_RECONCILIATION_SEQUENCE_CONFLICT", "authorizationRejected", "unrecognizedRecoveryRejection"] {
+            let blocked = VehicleRecoveryRecord(id: er.id, event: ee.id, payload: er.payload, state: .blocked, session: nil, task: nil, reason: reason, reconciliation: true)
+            if case .recoveryBlocked? = ReturnRecoveryPolicy.shortcutFailure(blocked) {} else { preconditionFailure() }
+        }
+        let stored = VehicleRecoveryRecord(id: er.id, event: ee.id, payload: er.payload, state: .preparing, session: nil, task: nil, reason: "deliveryUnknown", reconciliation: true)
+        if case .retryStored? = ReturnRecoveryPolicy.shortcutFailure(stored) {} else { preconditionFailure() }
+        print("PASS: expiry requires explicit fresh evidence; retryable/permanent Shortcut message classification")
+    }
+
 }

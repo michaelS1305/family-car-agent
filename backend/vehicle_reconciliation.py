@@ -34,6 +34,17 @@ class AcceptedEvent:
 
 
 @dataclass(frozen=True)
+class CurrentStateResolution:
+    operation_id: UUID
+    family_id: int
+    vehicle_id: int
+    user_id: int
+    session_ref: UUID
+    anchor: UUID
+    effective_at: datetime
+
+
+@dataclass(frozen=True)
 class SessionKey:
     # A projection key, NOT a newly generated public session_ref. The adapter
     # preserves/materializes public refs; tags separate event and seed UUIDs.
@@ -50,8 +61,9 @@ class SessionProjection:
     start_event_id: UUID | None
     ended_at: datetime | None = None
     end_event_id: UUID | None = None
-    end_reason: Literal["return", "handover", "vehicle_switch"] | None = None
+    end_reason: Literal["return", "handover", "vehicle_switch", "current_state_reconciliation"] | None = None
     checkpoint_generation: int | None = None
+    end_reconciliation_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -178,7 +190,7 @@ def _ordered(events, family_id, boundary, seed_aliases):
     return ordered
 
 
-def reconcile(family_id: int, events, seed: CheckpointSeed | None = None):
+def reconcile(family_id: int, events, seed: CheckpointSeed | None = None, *, resolutions=()):
     """Compute a desired suffix projection without mutating any input.
 
     Device gaps and policy limits are deliberately not checked here. Missing
@@ -243,7 +255,32 @@ def reconcile(family_id: int, events, seed: CheckpointSeed | None = None):
         del active_users[session.user_id]
         del active_vehicles[session.vehicle_id]
 
-    for event in ordered:
+    # Ordinary causal ordering stays unchanged. At equal times all ordinary
+    # events precede resolutions. Resolutions never acquire a device sequence.
+    seen = set()
+    for op in resolutions:
+        _require(isinstance(op, CurrentStateResolution) and op.family_id == family_id,
+                 "Invalid resolution family")
+        _require(isinstance(op.operation_id, UUID) and op.operation_id not in seen, "Duplicate resolution")
+        seen.add(op.operation_id)
+        _require(boundary is not None and _instant(op.effective_at) > boundary, "Resolution outside suffix")
+    timeline = [(e.occurred_at, 0, i, e) for i, e in enumerate(ordered)]
+    timeline += [(op.effective_at, 1, op.operation_id, op) for op in resolutions]
+    for _, category, _, event in sorted(timeline, key=lambda item: item[:3]):
+        if category == 1:
+            key = SessionKey("checkpoint", event.session_ref)
+            target = sessions.get(key)
+            _require(target is not None and
+                     (target.user_id, target.vehicle_id, target.start_event_id) ==
+                     (event.user_id, event.vehicle_id, event.anchor), "Resolution anchor mismatch")
+            if target.ended_at is None:
+                _require(active_users.get(event.user_id) == key and active_vehicles.get(event.vehicle_id) == key,
+                         "Resolution active identity mismatch")
+                sessions[key] = replace(target, ended_at=event.effective_at,
+                    end_reason="current_state_reconciliation", end_reconciliation_id=event.operation_id)
+                del active_users[event.user_id]
+                del active_vehicles[event.vehicle_id]
+            continue
         if event.event_type == "take":
             actor_key = active_users.get(event.user_id)
             target_key = active_vehicles.get(event.vehicle_id)

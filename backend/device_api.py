@@ -12,6 +12,9 @@ import vehicle_lifecycle as lifecycle
 import vehicle_bindings
 from native_push_outbox import commit_boundary
 import return_recovery
+import return_reconciliation
+from vehicle_work import PolicyExceeded
+import os
 from vehicle_identity import VehicleIdentityError
 
 router = APIRouter(prefix='/api/devices', tags=['devices'])
@@ -133,3 +136,28 @@ def recover_return(device_ref: UUID, event_id: UUID4, body: ReturnRecovery, resp
                         original.occurred_at, original.device_sequence, original.take_event_id)
     return run(pool, response, lambda c: return_recovery.recover(
         c, user, event, original, body.recovery_id, body.verification))
+
+
+class ReturnReconciliation(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    reconciliation_id: UUID4
+    original_return: Return
+    verification: ReturnVerification
+
+
+@router.post('/{device_ref}/events/return/{event_id}/reconciliation')
+def reconcile_return(device_ref: UUID, event_id: UUID4, body: ReturnReconciliation, response: Response,
+                     user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):
+    # Disabled rollout permits only authenticated exact-result retrieval.
+    original = body.original_return
+    if original.event_id != event_id:
+        raise HTTPException(409, detail={'code':'RETURN_RECONCILIATION_EVIDENCE_MISMATCH','message':'Return reconciliation could not be completed'})
+    event = NativeEvent(original.event_id,device_ref,original.vehicle_ref,'return',original.occurred_at,
+                        original.device_sequence,original.take_event_id)
+    try:
+        return run(pool,response,lambda c: return_reconciliation.reconcile_return(
+            c,user,event,original,body.reconciliation_id,body.verification,
+            allow_new=os.environ.get('RETURN_RECONCILIATION_ENABLED') == 'true'))
+    except PolicyExceeded as error:
+        raise HTTPException(503, detail={'code':'RETURN_RECONCILIATION_WORK_LIMIT','message':'Return reconciliation unavailable'},
+                            headers={'Retry-After':'60'}) from error
