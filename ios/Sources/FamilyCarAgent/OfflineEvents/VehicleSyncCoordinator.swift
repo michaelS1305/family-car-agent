@@ -96,6 +96,32 @@ struct VehicleUploadCompletion: Sendable {
     func cancel(_ task: Int64)
 }
 
+@MainActor protocol TakeMetadataTransport: AnyObject {
+    func fetch(_ request: TakeMetadataRequest, device: UUID, token: String) async throws -> TakeMetadataSnapshot
+}
+
+@MainActor final class HTTPMetadataTransport: TakeMetadataTransport {
+    private let environment: AppEnvironment
+    private let session: URLSession
+    init(environment: AppEnvironment) {
+        self.environment=environment
+        let config=URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest=15
+        config.timeoutIntervalForResource=20
+        session=URLSession(configuration:config)
+    }
+    func fetch(_ body: TakeMetadataRequest, device: UUID, token: String) async throws -> TakeMetadataSnapshot {
+        var request=URLRequest(url:environment.backendURL.appendingPathComponent("api/devices/\(device.uuidString)/take-session-metadata"))
+        request.httpMethod="POST"
+        request.setValue("Bearer " + token,forHTTPHeaderField:"Authorization")
+        request.setValue("application/json",forHTTPHeaderField:"Content-Type")
+        request.httpBody=try JSONEncoder().encode(body)
+        let (data,response)=try await session.data(for:request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 131_072 else { throw VehicleQueueError.invalidInput }
+        return try JSONDecoder().decode(TakeMetadataSnapshot.self,from:data)
+    }
+}
+
 /// All public operations enter one FIFO, including callbacks. MainActor alone is
 /// insufficient because queue/auth/getAllTasks calls suspend and allow reentrancy.
 @MainActor final class VehicleSyncCoordinator {
@@ -112,6 +138,10 @@ struct VehicleUploadCompletion: Sendable {
     private var retryTask: Task<Void, Never>?
     private var tail: Task<Void, Never>?
     private var stopped = false
+    private let metadataTransport: (any TakeMetadataTransport)?
+    private var metadataTask: Task<Void,Never>?
+    private var metadataAgain=false
+
 
     static func sessionIdentifier(environment: AppEnvironment, context: VehicleQueueContext) -> String {
         "\(environment.bundleIdentifier).vehicle-sync.v1.\(context.owner.uuidString).\(context.user).\(context.family).\(context.device.uuidString)"
@@ -119,7 +149,7 @@ struct VehicleUploadCompletion: Sendable {
 
     init(environment: AppEnvironment, context: VehicleQueueContext, queue: VehicleEventQueue,
          authentication: any VehicleUploadAuthentication, transport: any VehicleUploadTransport,
-         directory: URL, now: @escaping () -> Date = Date.init,
+         directory: URL, metadataTransport: (any TakeMetadataTransport)? = nil, now: @escaping () -> Date = Date.init,
          retryWait: @escaping @MainActor (TimeInterval) async throws -> Void = { seconds in
              try await Task.sleep(for: .seconds(min(seconds, 86_400)))
          }) throws {
@@ -127,6 +157,7 @@ struct VehicleUploadCompletion: Sendable {
               transport.identifier == Self.sessionIdentifier(environment: environment, context: context) else {
             throw VehicleQueueError.contextUnavailable
         }
+        self.metadataTransport=metadataTransport
         self.context = context; self.environment = environment; self.queue = queue
         auth = authentication; self.transport = transport; self.now = now
         self.retryWait = retryWait
@@ -143,7 +174,7 @@ struct VehicleUploadCompletion: Sendable {
     }
 
     /// Immediate scheduling fence; cancellation is not a server-side revocation.
-    func fence() { stopped = true; retryTask?.cancel(); retryTask = nil }
+    func fence() { stopped = true; metadataTask?.cancel(); metadataTask=nil; retryTask?.cancel(); retryTask = nil }
 
     func suspend() async {
         fence()
@@ -177,9 +208,37 @@ struct VehicleUploadCompletion: Sendable {
         guard !stopped, auth.permits(context) else { throw VehicleQueueError.contextUnavailable }
     }
 
+    // Fire-and-forget: neither queue admission nor wake waits for metadata/network.
+    private func requestMetadataRefresh() {
+        guard !stopped, let metadataTransport else { return }
+        if metadataTask != nil { metadataAgain=true; return }
+        metadataTask=Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                var visited = Set<UUID>()
+                for _ in 0..<4 { // At most 256 distinct references per pass; no network in eligibility.
+                    guard let batch=try await queue.metadataBatch(context, excluding:visited) else { break }
+                    visited.formUnion(batch.request.takes.map(\.event_id))
+                    let grant=try await auth.authorization(for:context,forceRefresh:false)
+                    guard !stopped, auth.isCurrent(grant), grant.context == context,
+                          batch.request.takes.allSatisfy({ auth.permitsVehicle($0.vehicle_ref,in:context) }) else { throw VehicleQueueError.contextUnavailable }
+                    let snapshot=try await metadataTransport.fetch(batch.request,device:context.device,token:grant.accessToken)
+                    try Task.checkCancellation()
+                    guard !stopped, auth.isCurrent(grant), auth.permits(context) else { throw VehicleQueueError.contextUnavailable }
+                    try await queue.applyMetadata(context,batch:batch,snapshot:snapshot)
+                }
+            } catch {
+                // Keep evidence and verified cache. Next lifecycle/connectivity wake retries.
+            }
+            metadataTask=nil
+            if metadataAgain && !stopped { metadataAgain=false; requestMetadataRefresh() }
+        }
+    }
+
     private func schedule() async throws {
         retryTask?.cancel(); retryTask = nil
         try await allowed()
+        requestMetadataRefresh()
         let tasks = await transport.allTasks()
         try await allowed()
         let rows = try await queue.records(context)
