@@ -16,9 +16,9 @@ struct VehicleConnectionPresentation {
         let identifier: String
         switch (method, action) {
         case (.carPlay, .take): identifier = "1edc051a0b3f4afeb14ae74965b10468"
-        case (.carPlay, .returning): identifier = "a19d6cb2360a4abea9725277df018933"
-        case (.bluetooth, .take): identifier = "a20e5d04b43e4c1c942d30d331478e3a"
-        case (.bluetooth, .returning): identifier = "d23eb9c427674a8f9b84ff8555027763"
+        case (.carPlay, .returning): identifier = "aa1aef09aaeb40b787c199cb9e32987b"
+        case (.bluetooth, .take): identifier = "e4828a7b74864fc3823fd7dd8056509a"
+        case (.bluetooth, .returning): identifier = "bbaddcab307d460db210d44a6c5e2d43"
         }
         return URL(string: "https://www.icloud.com/shortcuts/" + identifier)
     }
