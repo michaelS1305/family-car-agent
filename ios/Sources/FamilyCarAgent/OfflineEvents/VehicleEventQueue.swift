@@ -48,6 +48,41 @@ struct VehicleRecoveryRecord: Sendable {
     var reconciliation: Bool = false
 }
 
+struct TakeMetadataReference: Codable, Equatable, Sendable {
+    let event_id: UUID
+    let device_sequence: Int64
+    let vehicle_ref: UUID
+}
+struct TakeMetadataRequest: Codable, Sendable {
+    let request_id: UUID
+    let takes: [TakeMetadataReference]
+}
+struct TakeMetadataBatch: Sendable {
+    let request: TakeMetadataRequest
+    let authorization: String
+}
+struct TakeSessionMetadata: Codable, Equatable, Sendable {
+    let event_id: UUID
+    let device_sequence: Int64
+    let vehicle_ref: UUID
+    let status: String
+    let anchor_event_id: UUID?
+    let session_ref: UUID?
+    let session_state: String?
+    let closed_at: String?
+    let closure_kind: String?
+    let reconciliation_operation_id: UUID?
+    let finality: String?
+}
+struct TakeMetadataSnapshot: Codable, Sendable {
+    let request_id: UUID
+    let device_ref: UUID
+    let projection_revision: Int64
+    let last_processed_sequence: Int64
+    let observed_at: String
+    let items: [TakeSessionMetadata]
+}
+
 /// Local to one app process. Invalidation and the entire sequence-allocating
 /// transaction exclude each other. An old permit can never become valid again.
 final class VehicleRecordingPermit: @unchecked Sendable {
@@ -308,7 +343,28 @@ actor VehicleEventQueue {
                     return rejected.event // No sequence allocation or original evidence mutation.
                 }
                 let paired = Set(rows.compactMap { $0.event.takeID })
-                let open = rows.filter { $0.event.kind == .take && $0.state != .terminal && !paired.contains($0.event.id) }
+                let metadata = try currentTakeMetadata(context)
+                // A local RETURN after several accepted aliases pairs their one logical session.
+                // Never apply this to pending/uncertain TAKEs or aliases queued after that RETURN.
+                var returnedAnchors: [UUID:Int64] = [:]
+                for row in rows where row.event.kind == .returning && row.state != .terminal {
+                    if let cause = row.event.takeID, let anchor = metadata[cause]?.anchor_event_id {
+                        returnedAnchors[anchor] = max(returnedAnchors[anchor] ?? 0, row.event.sequence)
+                    }
+                }
+                var sessions = Set<UUID>()
+                let open = rows.filter { row in
+                    guard row.event.kind == .take, row.state != .terminal, !paired.contains(row.event.id) else { return false }
+                    // Only this exact accepted event may use an authoritative snapshot.
+                    if row.state == .accepted, let m = metadata[row.event.id] {
+                        if m.session_state == "closed" { return false }
+                        if let anchor = m.anchor_event_id {
+                            if let returned = returnedAnchors[anchor], returned > row.event.sequence { return false }
+                            return sessions.insert(anchor).inserted
+                        }
+                    }
+                    return true
+                }
                 if shortcut == .take {
                     guard open.isEmpty else { throw ShortcutQueueError.alreadyTaken }
                 } else {
@@ -518,6 +574,108 @@ actor VehicleEventQueue {
         }
     }
 
+    private static func metadataDate(_ value: String) -> Date? {
+        let formatter=ISO8601DateFormatter()
+        formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
+        if let date=formatter.date(from:value) { return date }
+        formatter.formatOptions=[.withInternetDateTime]
+        return formatter.date(from:value)
+    }
+
+    /// Bounded rotating backfill. Snapshot I/O is never part of Shortcut eligibility.
+    func metadataBatch(_ context: VehicleQueueContext, excluding: Set<UUID> = []) throws -> TakeMetadataBatch? {
+        try require(context)
+        guard let scope = try db.rows("SELECT generation FROM authorization_scopes WHERE context=? AND state='verified'", [context.key]).first?[0] else { return nil }
+        let allowed = try db.authorizedVehicles(context)
+        let records = try records(context)
+        let paired = Set(records.compactMap { $0.event.takeID })
+        let metadata = try currentTakeMetadata(context)
+        let all = records.filter { $0.state == .accepted && $0.event.kind == .take && allowed.contains($0.event.vehicle) && !excluding.contains($0.event.id) }
+        func blocks(_ row: VehicleQueueRecord) -> Bool {
+            !paired.contains(row.event.id) && metadata[row.event.id]?.session_state != "closed"
+        }
+        let refreshed = try db.rows("SELECT event,refresh_order FROM take_session_metadata WHERE context=?", [context.key])
+        let order = Dictionary(uniqueKeysWithValues: refreshed.compactMap { r -> (UUID, Int64)? in
+            guard let id = r[0].flatMap(UUID.init(uuidString:)), let n = r[1].flatMap(Int64.init) else { return nil }; return (id,n)
+        })
+        let selected = all.sorted { a,b in
+            if blocks(a) != blocks(b) { return blocks(a) }
+            let x=order[a.event.id] ?? -1, y=order[b.event.id] ?? -1
+            return x == y ? a.event.sequence < b.event.sequence : x < y
+        }.prefix(64)
+        guard !selected.isEmpty else { return nil }
+        return .init(request: .init(request_id: UUID(), takes: selected.map { .init(event_id:$0.event.id,device_sequence:$0.event.sequence,vehicle_ref:$0.event.vehicle) }), authorization: scope)
+    }
+
+    func applyMetadata(_ context: VehicleQueueContext, batch: TakeMetadataBatch, snapshot: TakeMetadataSnapshot) throws {
+        try db.transaction {
+            try require(context)
+            guard let scope = try db.rows("SELECT generation FROM authorization_scopes WHERE context=? AND state='verified'", [context.key]).first?[0], scope == batch.authorization,
+                  snapshot.request_id == batch.request.request_id, snapshot.device_ref == context.device,
+                  snapshot.projection_revision >= 0, snapshot.last_processed_sequence >= 0,
+                  snapshot.items.count == batch.request.takes.count, (1...64).contains(snapshot.items.count),
+                  Set(snapshot.items.map(\.event_id)).count == snapshot.items.count,
+                  Self.metadataDate(snapshot.observed_at) != nil else { throw VehicleQueueError.invalidInput }
+            let prior = try db.rows("SELECT revision,refresh_order,observed_at FROM session_metadata_sync WHERE context=?", [context.key]).first
+            let revision = prior?[0].flatMap(Int64.init) ?? -1
+            guard snapshot.projection_revision >= revision else { throw VehicleQueueError.conflict }
+            // Server observation time, never the phone clock. BEGIN IMMEDIATE serializes
+            // this comparison and all writes across app/Shortcut SQLite connections.
+            if snapshot.projection_revision == revision, let previous = prior?[2],
+               let oldTime = Self.metadataDate(previous), let newTime = Self.metadataDate(snapshot.observed_at) {
+                guard newTime >= oldTime else { throw VehicleQueueError.conflict }
+                if newTime == oldTime {
+                    for item in snapshot.items {
+                        guard let bytes = try db.rows("SELECT payload FROM take_session_metadata WHERE context=? AND event=?", [context.key,item.event_id.uuidString]).first?[0],
+                              try JSONDecoder().decode(TakeSessionMetadata.self,from:Data(bytes.utf8)) == item else { throw VehicleQueueError.conflict }
+                    }
+                    return // Exact duplicate only; ambiguous ties never change evidence/cache.
+                }
+            }
+            let serial = (prior?[1].flatMap(Int64.init) ?? 0)
+            guard serial < Int64.max else { throw VehicleQueueError.storage }
+            let allowed = try db.authorizedVehicles(context)
+            for item in snapshot.items {
+                guard let ref = batch.request.takes.first(where: { $0.event_id == item.event_id }),
+                      ref.device_sequence == item.device_sequence, ref.vehicle_ref == item.vehicle_ref,
+                      allowed.contains(item.vehicle_ref) else { throw VehicleQueueError.invalidInput }
+                let row = try record(context,item.event_id)
+                guard row.state == .accepted, row.event.kind == .take,
+                      row.event.sequence == item.device_sequence, row.event.vehicle == item.vehicle_ref,
+                      snapshot.last_processed_sequence >= item.device_sequence else { throw VehicleQueueError.invalidInput }
+                if item.status == "accepted" {
+                    guard item.anchor_event_id != nil, item.session_ref != nil,
+                          ["open","closed"].contains(item.session_state), ["provisional","finalized"].contains(item.finality) else { throw VehicleQueueError.invalidInput }
+                    if item.session_state == "closed" {
+                        guard let date = item.closed_at, Self.metadataDate(date) != nil,
+                              ["return","handover","vehicle_switch","account_deletion","current_state_reconciliation"].contains(item.closure_kind),
+                              item.closure_kind != "current_state_reconciliation" || item.reconciliation_operation_id != nil else { throw VehicleQueueError.invalidInput }
+                    } else {
+                        guard item.closed_at == nil, item.closure_kind == nil, item.reconciliation_operation_id == nil, item.finality == "provisional" else { throw VehicleQueueError.invalidInput }
+                    }
+                } else {
+                    guard item.status == "unavailable", item.anchor_event_id == nil, item.session_ref == nil,
+                          item.session_state == nil, item.closed_at == nil, item.closure_kind == nil,
+                          item.reconciliation_operation_id == nil, item.finality == nil else { throw VehicleQueueError.invalidInput }
+                }
+                let payload=String(decoding: try JSONEncoder().encode(item),as:UTF8.self)
+                try db.execute("INSERT INTO take_session_metadata(context,event,authorization,revision,payload,refresh_order) VALUES(?,?,?,?,?,?) ON CONFLICT(context,event) DO UPDATE SET authorization=excluded.authorization,revision=excluded.revision,payload=excluded.payload,refresh_order=excluded.refresh_order",
+                    [context.key,item.event_id.uuidString,scope,String(snapshot.projection_revision),payload,String(serial+1)])
+            }
+            try db.execute("INSERT INTO session_metadata_sync(context,revision,refresh_order,observed_at) VALUES(?,?,?,?) ON CONFLICT(context) DO UPDATE SET revision=excluded.revision,refresh_order=excluded.refresh_order,observed_at=excluded.observed_at", [context.key,String(snapshot.projection_revision),String(serial+1),snapshot.observed_at])
+        }
+    }
+
+    private func currentTakeMetadata(_ context: VehicleQueueContext) throws -> [UUID:TakeSessionMetadata] {
+        let rows = try db.rows("SELECT m.payload,m.revision,s.revision FROM take_session_metadata m JOIN session_metadata_sync s ON s.context=m.context JOIN authorization_scopes a ON a.context=m.context AND a.generation=m.authorization AND a.state='verified' WHERE m.context=?",[context.key])
+        var result: [UUID:TakeSessionMetadata] = [:]
+        for row in rows {
+            guard let payload=row[0], let item=try? JSONDecoder().decode(TakeSessionMetadata.self,from:Data(payload.utf8)), item.status == "accepted" else { continue }
+            if row[1] == row[2] || item.finality == "finalized" { result[item.event_id]=item }
+        }
+        return result
+    }
+
     private func require(_ context: VehicleQueueContext, active: Bool = true) throws {
         guard let row = try db.rows("SELECT active FROM devices WHERE context=?", [context.key]).first,
               !active || row[0] == "1" else { throw VehicleQueueError.contextUnavailable }
@@ -558,7 +716,7 @@ private final class VehicleQueueDatabase: @unchecked Sendable {
         try execute("PRAGMA journal_mode=DELETE")
         try execute("PRAGMA synchronous=FULL")
         try transaction {
-            guard let version = try rows("PRAGMA user_version").first?[0], ["0", "1", "2", "3", "4"].contains(version) else {
+            guard let version = try rows("PRAGMA user_version").first?[0], ["0", "1", "2", "3", "4", "5"].contains(version) else {
                 throw VehicleQueueError.unsupportedSchema
             }
             try execute("CREATE TABLE IF NOT EXISTS devices(context TEXT PRIMARY KEY,environment TEXT NOT NULL,device TEXT NOT NULL,last_sequence INTEGER NOT NULL CHECK(last_sequence>=0),active INTEGER NOT NULL CHECK(active IN(0,1)),UNIQUE(environment,device))")
@@ -577,7 +735,15 @@ private final class VehicleQueueDatabase: @unchecked Sendable {
                     try execute("CREATE TRIGGER IF NOT EXISTS \(table)_exclusive_\(action) BEFORE \(action) ON \(table) WHEN NEW.state IN('preparing','registered','awaitingAuthentication') AND EXISTS(SELECT 1 FROM \(other) WHERE event=NEW.event AND state IN('preparing','registered','awaitingAuthentication','accepted')) BEGIN SELECT RAISE(ABORT,'active resolution'); END")
                 }
             }
-            try execute("PRAGMA user_version=4")
+            try execute("CREATE TABLE IF NOT EXISTS session_metadata_sync(context TEXT PRIMARY KEY REFERENCES devices(context),revision INTEGER NOT NULL CHECK(revision>=0),refresh_order INTEGER NOT NULL CHECK(refresh_order>=0))")
+            try execute("CREATE TABLE IF NOT EXISTS take_session_metadata(context TEXT NOT NULL REFERENCES devices(context),event TEXT NOT NULL REFERENCES events(id),authorization TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>=0),payload TEXT NOT NULL,refresh_order INTEGER NOT NULL,PRIMARY KEY(context,event))")
+            // Also tolerate the unreleased early-v5 cache; original event/task tables are untouched.
+            if try !rows("PRAGMA table_info(session_metadata_sync)").contains(where: { $0[1] == "observed_at" }) {
+                try execute("ALTER TABLE session_metadata_sync ADD COLUMN observed_at TEXT")
+                try execute("DELETE FROM take_session_metadata")
+                try execute("DELETE FROM session_metadata_sync")
+            }
+            try execute("PRAGMA user_version=5")
         }
         #if os(iOS)
         try fm.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: path)

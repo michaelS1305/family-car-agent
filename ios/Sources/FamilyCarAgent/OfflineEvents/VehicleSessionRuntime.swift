@@ -293,7 +293,8 @@ import Network
         let t = try VehicleBackgroundUploadTransport(identifier: id)
         do {
             let sync = try VehicleSyncCoordinator(environment: environment, context: c, queue: queue,
-                authentication: authentication, transport: t, directory: VehicleEventQueue.applicationDirectory())
+                authentication: authentication, transport: t, directory: VehicleEventQueue.applicationDirectory(),
+                metadataTransport: HTTPMetadataTransport(environment: environment))
             t.onCompletion = { [weak sync] in await sync?.receive($0) }
             transport = t; coordinator = sync
             return t

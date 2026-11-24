@@ -161,3 +161,12 @@ def reconcile_return(device_ref: UUID, event_id: UUID4, body: ReturnReconciliati
     except PolicyExceeded as error:
         raise HTTPException(503, detail={'code':'RETURN_RECONCILIATION_WORK_LIMIT','message':'Return reconciliation unavailable'},
                             headers={'Retry-After':'60'}) from error
+
+
+# Separate read-only contract: admission acknowledgments remain unchanged.
+from take_session_metadata import MetadataRequest, snapshot as take_metadata_snapshot
+
+@router.post('/{device_ref}/take-session-metadata')
+def take_session_metadata(device_ref: UUID, body: MetadataRequest, response: Response,
+                          user: CurrentUser = Depends(get_current_user), pool=Depends(vehicle_pool)):
+    return run(pool,response,lambda c: take_metadata_snapshot(c,user,device_ref,body))
