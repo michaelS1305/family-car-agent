@@ -150,10 +150,7 @@ jobs:
       - name: Environment configuration guards
         run: bash ./gradlew :app:testEnvironmentConfiguration
       - name: Prepare verified Robolectric SDK runtimes
-        run: |
-          export FCA_ROBOLECTRIC_RUNTIME_DIR="$RUNNER_TEMP/fca-robolectric-runtime"
-          echo "FCA_ROBOLECTRIC_RUNTIME_DIR=$FCA_ROBOLECTRIC_RUNTIME_DIR" >> "$GITHUB_ENV"
-          python3 ../.github/prepare_robolectric_runtime.py "$FCA_ROBOLECTRIC_RUNTIME_DIR"
+        uses: ./.github/actions/prepare-robolectric
       - name: Dev unit tests, lint and debug assembly
         if: env.PRODUCTION != 'true'
         run: python3 ../.github/android_gradle_retry.py --info --init-script ../.github/robolectric-offline.init.gradle :app:testDevDebugUnitTest :app:lintDevDebug :app:assembleDevDebug

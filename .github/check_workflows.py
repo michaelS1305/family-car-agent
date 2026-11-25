@@ -285,6 +285,68 @@ class WorkflowChecks(unittest.TestCase):
                                      'required':{'result':'success'}})
             self.assertFalse(evaluate(self.workflows['ios']['jobs']['testflight']['if'],context))
 
+    def test_verified_cache_restore_verify_save_order_and_key(self):
+        action=yaml.load((ROOT/'actions/prepare-robolectric/action.yml').read_text(),Loader=yaml.BaseLoader)
+        steps=action['runs']['steps']
+        self.assertEqual(action['runs']['using'],'composite')
+        self.assertEqual([s.get('uses') for s in steps], [None,'actions/cache/restore@v4',None,'actions/cache/save@v4'])
+        self.assertNotIn('if',steps[2])  # Cache hit MUST NOT skip digest verification.
+        self.assertIn('prepare_robolectric_runtime.py',steps[2]['run'])
+        self.assertEqual(steps[3]['if'], "steps.verified.outcome == 'success' && steps.cache.outputs.cache-hit != 'true'")
+        self.assertEqual(steps[1]['with']['path'],steps[3]['with']['path'])
+        self.assertNotIn('restore-keys',steps[1]['with'])
+        self.assertEqual(steps[3]['with']['key'],'${{ steps.cache.outputs.cache-primary-key }}')
+        key=steps[1]['with']['key']
+        paths=re.findall(r"'([^']+)'",key)
+        self.assertEqual(paths,['.github/robolectric_runtime.json','.github/prepare_robolectric_runtime.py',
+                                '.github/robolectric-offline.init.gradle','.github/actions/prepare-robolectric/action.yml'])
+        self.assertIn('runner.os',key);self.assertIn('runner.arch',key)
+        # hashFiles fingerprints content, not the branch: manifest/config changes invalidate keys.
+        import hashlib
+        contents=[(ROOT.parent/path).read_bytes() for path in paths]
+        before=hashlib.sha256(b''.join(contents)).hexdigest()
+        for index in range(len(contents)):
+            changed=contents.copy();changed[index]+=b'changed'
+            self.assertNotEqual(before,hashlib.sha256(b''.join(changed)).hexdigest())
+        config=steps[0]['run']
+        self.assertIn('runtime.load_manifest()',config)
+        self.assertIn('runtime.filename(a)',config)
+        self.assertNotIn('glob(',config)  # Never save extra files/checksums/partial downloads.
+
+    def test_cache_config_exports_only_manifest_jars(self):
+        import tempfile
+        import json
+        action=yaml.load((ROOT/'actions/prepare-robolectric/action.yml').read_text(),Loader=yaml.BaseLoader)
+        with tempfile.TemporaryDirectory() as directory:
+            env_path=Path(directory)/'env';output_path=Path(directory)/'output'
+            env=dict(os.environ,RUNNER_TEMP=directory,GITHUB_ENV=str(env_path),GITHUB_OUTPUT=str(output_path))
+            result=subprocess.run(['bash','-e','-c',action['runs']['steps'][0]['run']],
+                                  cwd=ROOT.parent,env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            runtime_dir=Path(directory)/'fca-robolectric-runtime'
+            self.assertEqual(env_path.read_text(),f'FCA_ROBOLECTRIC_RUNTIME_DIR={runtime_dir}\n')
+            artifacts=json.loads((ROOT/'robolectric_runtime.json').read_text())['artifacts']
+            expected=[str(runtime_dir/('android-all-instrumented-'+a['version']+'.jar')) for a in artifacts]
+            self.assertEqual(output_path.read_text().splitlines(),['files<<RUNTIME_FILES',*expected,'RUNTIME_FILES'])
+            key=action['runs']['steps'][1]['with']['key']
+            self.assertNotIn('github.ref',key)  # Same key can restore default-main cache across branches.
+            self.assertNotIn('github.sha',key)
+
+    def test_cache_warming_only_trusted_main_without_build_or_signing(self):
+        workflow=yaml.load((ROOT/'workflows/robolectric-cache.yml').read_text(),Loader=yaml.BaseLoader)
+        self.assertEqual(set(workflow['on']),{'workflow_dispatch'})
+        self.assertEqual(workflow['permissions'],{'contents':'read'})
+        job=workflow['jobs']['warm-cache']
+        for branch in ('main','develop','pull/91/merge'):
+            for repo in ('michaelS1305/family-car-agent','fork/repo'):
+                self.assertEqual(evaluate(job['if'],{'github':{'repository':repo,'ref':'refs/heads/'+branch}}),
+                                 branch=='main' and repo=='michaelS1305/family-car-agent')
+        self.assertEqual(len(job['steps']),2)
+        self.assertEqual(job['steps'][0]['with'],{'ref':'${{ github.sha }}','persist-credentials':'false'})
+        self.assertEqual(job['steps'][1]['uses'],'./.github/actions/prepare-robolectric')
+        for forbidden in ('secrets.', 'gradlew', 'environment:', 'workflow_call', 'production_release'):
+            self.assertNotIn(forbidden,str(workflow))
+
     def test_verified_runtime_precedes_tests_and_reports_survive_failure(self):
         steps=self.workflows['android']['jobs']['android']['steps']
         prepare=next(i for i,s in enumerate(steps) if s.get('name')=='Prepare verified Robolectric SDK runtimes')
@@ -295,8 +357,7 @@ class WorkflowChecks(unittest.TestCase):
                 self.assertIn('--info',step['run'])
                 self.assertNotIn('continue-on-error',step)
         self.assertNotIn('runner.temp', str(self.workflows['android']['jobs']['android'].get('env', {})))
-        self.assertIn('$RUNNER_TEMP/fca-robolectric-runtime', steps[prepare]['run'])
-        self.assertIn('$GITHUB_ENV', steps[prepare]['run'])
+        self.assertEqual(steps[prepare]['uses'], './.github/actions/prepare-robolectric')
         reports=next(s for s in steps if s.get('name')=='Preserve Android test reports')
         self.assertEqual(reports['if'],'always()')
         self.assertIn('test-results/**/TEST-*.xml',reports['with']['path'])

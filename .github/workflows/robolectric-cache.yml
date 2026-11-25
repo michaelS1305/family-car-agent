@@ -1,0 +1,24 @@
+name: Warm verified Robolectric runtime cache
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: robolectric-runtime-cache-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  warm-cache:
+    if: github.repository == 'michaelS1305/family-car-agent' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Prepare verified Robolectric SDK runtimes
+        uses: ./.github/actions/prepare-robolectric
