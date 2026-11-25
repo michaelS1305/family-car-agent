@@ -138,6 +138,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_runtime_preparation_only_affects_android_validation(self):
         self.assert_scope(['.github/'+name for name in ('prepare_robolectric_runtime.py','test_robolectric_runtime.py',
-                          'robolectric_runtime.json','robolectric-offline.init.gradle')],['android'],[])
+                          'robolectric_runtime.json','robolectric-offline.init.gradle',
+                          'actions/prepare-robolectric/action.yml','workflows/robolectric-cache.yml')],['android'],[])
 
 if __name__=='__main__': unittest.main()

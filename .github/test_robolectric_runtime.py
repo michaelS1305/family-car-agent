@@ -38,6 +38,29 @@ class RuntimeChecks(unittest.TestCase):
         self.assertFalse(list(self.directory.glob('*.partial')))
         self.assertIn('verified_existing',self.logs.getvalue())
 
+    def test_complete_warm_cache_never_contacts_network(self):
+        artifacts=[dict(a, sha512=self.artifact['sha512']) for a in runtime.load_manifest()['artifacts']]
+        for a in artifacts: (self.directory/runtime.filename(a)).write_bytes(b'valid jar')
+        network=Mock(side_effect=AssertionError('Network forbidden on warm cache'))
+        for a in artifacts: runtime.prepare(a,self.directory,network,self.sleep)
+        network.assert_not_called(); self.sleep.assert_not_called()
+
+    def test_partial_cache_downloads_only_missing_sdk(self):
+        artifacts=[dict(a, sha512=self.artifact['sha512']) for a in runtime.load_manifest()['artifacts']]
+        (self.directory/runtime.filename(artifacts[0])).write_bytes(b'valid jar')
+        network=Mock(return_value=Response())
+        for a in artifacts: runtime.prepare(a,self.directory,network,self.sleep)
+        network.assert_called_once_with(runtime.source(artifacts[1]))
+        self.assertEqual(len(list(self.directory.glob('*.jar'))),2)
+
+    def test_cache_cannot_supply_its_own_checksum(self):
+        target=self.directory/runtime.filename(self.artifact)
+        target.write_bytes(b'corrupt')
+        target.with_suffix('.jar.sha512').write_text(hashlib.sha512(b'corrupt').hexdigest())
+        network=Mock()
+        with self.assertRaisesRegex(runtime.PreparationError,'existing_integrity_failed'): self.prepare(network)
+        network.assert_not_called()
+
     def test_checksum_mismatch_fails_closed(self):
         opener=Mock(return_value=Response(b'corrupt'))
         with self.assertRaisesRegex(runtime.PreparationError,'checksum_mismatch'): self.prepare(opener)
