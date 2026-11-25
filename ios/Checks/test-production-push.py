@@ -180,8 +180,9 @@ class ProductionChecks(unittest.TestCase):
 
     def test_production_signing_waits_for_validation_and_offline_recovery_checks(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/ios.yml').read_text()
-        production = workflow.split('  signed_production_ipa:', 1)[1]
-        self.assertIn('    needs: ios\n', production)
+        production = workflow.split('  signed_production_ipa:', 1)[1].split('\n  required:', 1)[0]
+        # Both scope classification and successful iOS validation must precede signing.
+        self.assertIn('    needs: [scope, ios]\n', production)
         validation = workflow.split('  signed_dev_ipa:', 1)[0]
         for script in ('run-vehicle-queue-checks.sh', 'run-vehicle-sync-checks.sh', 'run-native-device-setup-checks.sh'):
             self.assertIn('bash Checks/' + script, validation)
