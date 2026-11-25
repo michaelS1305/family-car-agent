@@ -56,7 +56,6 @@ jobs:
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
       (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/develop')
     env:
-      FCA_ROBOLECTRIC_RUNTIME_DIR: ${{ runner.temp }}/fca-robolectric-runtime
       PRODUCTION: ${{ (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.production_release == true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -151,7 +150,10 @@ jobs:
       - name: Environment configuration guards
         run: bash ./gradlew :app:testEnvironmentConfiguration
       - name: Prepare verified Robolectric SDK runtimes
-        run: python3 ../.github/prepare_robolectric_runtime.py "$FCA_ROBOLECTRIC_RUNTIME_DIR"
+        run: |
+          export FCA_ROBOLECTRIC_RUNTIME_DIR="$RUNNER_TEMP/fca-robolectric-runtime"
+          echo "FCA_ROBOLECTRIC_RUNTIME_DIR=$FCA_ROBOLECTRIC_RUNTIME_DIR" >> "$GITHUB_ENV"
+          python3 ../.github/prepare_robolectric_runtime.py "$FCA_ROBOLECTRIC_RUNTIME_DIR"
       - name: Dev unit tests, lint and debug assembly
         if: env.PRODUCTION != 'true'
         run: python3 ../.github/android_gradle_retry.py --info --init-script ../.github/robolectric-offline.init.gradle :app:testDevDebugUnitTest :app:lintDevDebug :app:assembleDevDebug
