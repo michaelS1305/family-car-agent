@@ -105,7 +105,7 @@ unknown/shared tooling and intentionally require all components during rollout.
 ## Android dependency reliability
 
 Gradle dependency/wrapper caching and bounded Gradle HTTP 429 retries remain
-unchanged, including signing-job caching. No Robolectric JAR cache is restored.
+unchanged, including signing-job caching. Only the dedicated integrity-verified Robolectric runtime cache is restored.
 Before unit tests, prepare_robolectric_runtime.py downloads the SDK 35/36 jars
 pinned in robolectric_runtime.json into a runner-temporary directory. SHA-512
 sidecars were read from official Maven Central on 2026-11-25 and independently
@@ -239,3 +239,46 @@ real credential/profile compatibility, artifact generation and protection behavi
 References: [GitHub secure use](https://docs.github.com/en/actions/reference/security/secure-use),
 [environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments),
 [variable availability](https://docs.github.com/en/actions/reference/workflows-and-actions/variables).
+
+
+### Integrity-verified runtime cache
+
+Android validation invokes `.github/actions/prepare-robolectric` before tests.
+The cache key includes OS, architecture, the pinned manifest, preparation script,
+offline Gradle init configuration and composite action. No broad restore keys.
+Restore is followed unconditionally by SHA-512 verification against the checked-out
+manifest, never a checksum supplied by the cache. Valid existing files need no network;
+missing files use the same bounded downloader. Corrupt files fail closed, without
+replacement, tests or cache saving. Only manifest-listed JAR paths are saved after
+BOTH artifacts verify, before tests. No temporary files or checksum sidecars are saved.
+The existing Test JVM integrity check remains as defense in depth.
+Cache service misses/eviction fall back to verified preparation; cache availability
+is an optimization, not a trust boundary. Exact-key caches are immutable: a corrupt
+or partial exact entry cannot be overwritten. A partial entry can be completed for
+this run; repairing the persistent entry requires separately authorized cache deletion
+or a reviewed cache-key generation bump. Never disable verification to repair it.
+
+GitHub cache visibility (default branch confirmed as `main`):
+- main runs can restore main caches, not develop or PR merge-ref caches.
+- develop runs can restore develop and default-main caches.
+- PR runs can restore their merge-ref and allowed base/default-branch caches.
+- PR-created caches stay scoped to that PR merge ref; they do not populate main.
+Therefore the same key is intentionally branch-independent, but visibility is still
+controlled by GitHub. Cross-branch availability cannot be proven by a local mock.
+Reference: https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching
+
+After review/merge, a separately authorized maintainer may seed the main cache with:
+`gh workflow run robolectric-cache.yml --repo michaelS1305/family-car-agent --ref main`
+This manual-only, main-only workflow checks out its exact trusted SHA and runs only
+the shared restore/verify/save action. No Gradle, Android SDK, tests, signing, secrets,
+release or deployment. It does not replace or satisfy Android required checks.
+The workflow must first exist on main. If Maven returns 429, the existing three
+attempts remain bounded; warming does not bypass network failure. No workflow was
+triggered during local implementation. Once seeded, later compatible develop/PR/main
+runs can use that main entry without requesting SDK jars from Maven Central.
+
+Activation verification (not performed locally): warm main, inspect saved cache ref/key,
+then inspect cache restoration and `verified_existing` for both SDKs in authorized
+main/develop/PR runs. Confirm no `verified_download`/network calls on a warm hit.
+Pinned digest checks remain mandatory even for PR-supplied cached content. Repository
+review protections, not the classifier itself, protect trusted manifest/script changes.

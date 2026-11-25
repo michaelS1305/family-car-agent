@@ -1,0 +1,39 @@
+name: Prepare integrity-verified Robolectric runtimes
+description: Restore untrusted cached jars, verify pinned hashes, then save only verified jars.
+runs:
+  using: composite
+  steps:
+    - name: Define runtime cache files
+      id: config
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        python3 - <<'PY'
+        import os, sys
+        from pathlib import Path
+        sys.path.insert(0, '.github')
+        import prepare_robolectric_runtime as runtime
+        directory = Path(os.environ['RUNNER_TEMP']) / 'fca-robolectric-runtime'
+        files = [str(directory / runtime.filename(a)) for a in runtime.load_manifest()['artifacts']]
+        with open(os.environ['GITHUB_ENV'], 'a') as out:
+            out.write(f'FCA_ROBOLECTRIC_RUNTIME_DIR={directory}\n')
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+            out.write('files<<RUNTIME_FILES\n' + '\n'.join(files) + '\nRUNTIME_FILES\n')
+        PY
+    - name: Restore runtime cache
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.config.outputs.files }}
+        key: robolectric-verified-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/robolectric_runtime.json', '.github/prepare_robolectric_runtime.py', '.github/robolectric-offline.init.gradle', '.github/actions/prepare-robolectric/action.yml') }}
+    - name: Verify all runtimes regardless of cache hit
+      id: verified
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: python3 .github/prepare_robolectric_runtime.py "$FCA_ROBOLECTRIC_RUNTIME_DIR"
+    - name: Save fully verified runtime files
+      if: steps.verified.outcome == 'success' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.config.outputs.files }}
+        key: ${{ steps.cache.outputs.cache-primary-key }}

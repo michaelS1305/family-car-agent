@@ -40,7 +40,8 @@ def classify(paths, complete=True):
             mark([Path(path).stem], 'component_workflow', True)
         elif path in ('.github/android_gradle_retry.py', '.github/test_android_gradle_retry.py',
                       '.github/prepare_robolectric_runtime.py', '.github/test_robolectric_runtime.py',
-                      '.github/robolectric_runtime.json', '.github/robolectric-offline.init.gradle'):
+                      '.github/robolectric_runtime.json', '.github/robolectric-offline.init.gradle',
+                      '.github/actions/prepare-robolectric/action.yml', '.github/workflows/robolectric-cache.yml'):
             mark(['android'], 'android_validation_tooling')
         elif path.startswith('assets/'):
             mark(('android', 'ios', 'web'), 'shared_assets', True)
