@@ -2,12 +2,9 @@ name: Android CI
 
 on:
   push:
-    branches: [develop]
-    paths:
-      - .github/workflows/android.yml
-      - android/**
+    branches: [develop, main]
   pull_request:
-    branches: [main]
+    branches: [develop, main]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
@@ -24,12 +21,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      android_validation: ${{ steps.scope.outputs.android_validation }}
+      android_release: ${{ steps.scope.outputs.android_release }}
+      ios_validation: ${{ steps.scope.outputs.ios_validation }}
+      ios_release: ${{ steps.scope.outputs.ios_release }}
+      backend_validation: ${{ steps.scope.outputs.backend_validation }}
+      backend_release: ${{ steps.scope.outputs.backend_release }}
+      web_validation: ${{ steps.scope.outputs.web_validation }}
+      web_release: ${{ steps.scope.outputs.web_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Classify complete change set
+        id: scope
+        run: python3 .github/component_scope.py
+      - name: Check workflow policy and classifier
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 .github/test_component_scope.py
+          python3 .github/check_workflows.py
+          python3 .github/test_robolectric_runtime.py
+
   android:
+    needs: scope
     if: >-
+      needs.scope.outputs.android_validation == 'true' &&
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
       (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/develop')
     env:
-      PRODUCTION: ${{ github.event_name == 'pull_request' || inputs.production_release == true }}
+      PRODUCTION: ${{ (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.production_release == true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -122,12 +149,27 @@ jobs:
         run: bash ./gradlew --version
       - name: Environment configuration guards
         run: bash ./gradlew :app:testEnvironmentConfiguration
+      - name: Prepare verified Robolectric SDK runtimes
+        run: |
+          export FCA_ROBOLECTRIC_RUNTIME_DIR="$RUNNER_TEMP/fca-robolectric-runtime"
+          echo "FCA_ROBOLECTRIC_RUNTIME_DIR=$FCA_ROBOLECTRIC_RUNTIME_DIR" >> "$GITHUB_ENV"
+          python3 ../.github/prepare_robolectric_runtime.py "$FCA_ROBOLECTRIC_RUNTIME_DIR"
       - name: Dev unit tests, lint and debug assembly
         if: env.PRODUCTION != 'true'
-        run: python3 ../.github/android_gradle_retry.py :app:testDevDebugUnitTest :app:lintDevDebug :app:assembleDevDebug
+        run: python3 ../.github/android_gradle_retry.py --info --init-script ../.github/robolectric-offline.init.gradle :app:testDevDebugUnitTest :app:lintDevDebug :app:assembleDevDebug
       - name: Prod unit tests, lint and debug assembly
         if: env.PRODUCTION == 'true'
-        run: python3 ../.github/android_gradle_retry.py :app:testProdDebugUnitTest :app:lintProdDebug :app:assembleProdDebug
+        run: python3 ../.github/android_gradle_retry.py --info --init-script ../.github/robolectric-offline.init.gradle :app:testProdDebugUnitTest :app:lintProdDebug :app:assembleProdDebug
+      - name: Preserve Android test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports-${{ github.sha }}
+          path: |
+            android/app/build/test-results/**/TEST-*.xml
+            android/app/build/reports/tests/**
+          if-no-files-found: warn
+          retention-days: 7
       - name: Upload Development APK
         if: env.PRODUCTION != 'true'
         uses: actions/upload-artifact@v4
@@ -140,12 +182,14 @@ jobs:
   production-release:
     # Enable only AFTER the security prerequisites in .github/CI.md are configured.
     if: >-
+      needs.scope.outputs.android_release == 'true' &&
       vars.FCA_PROD_SIGN_ENABLED == 'true' &&
-      ((github.event_name == 'pull_request' && !github.event.pull_request.draft &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'michaelS1305/family-car-agent') ||
+       (github.event_name == 'pull_request' && !github.event.pull_request.draft &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         github.event.pull_request.head.ref == 'develop' && github.base_ref == 'main') ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop' && inputs.production_release))
-    needs: android
+    needs: [scope, android]
     runs-on: ubuntu-24.04
     environment: android-production
     timeout-minutes: 45
@@ -168,6 +212,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
+          cache: gradle
+          cache-dependency-path: |
+            android/**/*.gradle.kts
+            android/gradle.properties
+            android/gradle/gradle-daemon-jvm.properties
+            android/gradle/wrapper/gradle-wrapper.properties
       - uses: android-actions/setup-android@v4
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
       - name: Prepare runner-only Production inputs
@@ -217,16 +267,28 @@ jobs:
   required:
     name: Android required
     if: always()
-    needs: [android, production-release]
+    needs: [scope, android, production-release]
     runs-on: ubuntu-24.04
     steps:
       - name: Require successful validation and requested Production signing
         env:
+          VALIDATE: ${{ needs.scope.outputs.android_validation }}
+          RELEASE: ${{ needs.scope.outputs.android_release }}
+          SCOPE_RESULT: ${{ needs.scope.result }}
           VALIDATION: ${{ needs.android.result }}
           SIGNING: ${{ needs.production-release.result }}
-          PRODUCTION: ${{ github.event_name == 'pull_request' || inputs.production_release == true }}
+          PRODUCTION: ${{ (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.production_release == true }}
         run: |
-          test "$VALIDATION" = success || { echo 'Android validation did not succeed'; exit 1; }
-          if [ "$PRODUCTION" = true ]; then
-            test "$SIGNING" = success || { echo 'Production signing did not succeed. Check trusted develop PR, security setup and FCA_PROD_SIGN_ENABLED; skipped signing is not approval.'; exit 1; }
+          test "$SCOPE_RESULT" = success || { echo 'Scope evaluation failed'; exit 1; }
+          case "$SIGNING" in success|skipped) ;; *) echo 'Unexpected signing failure or cancellation'; exit 1 ;; esac
+          if [ "$RELEASE" = false ]; then test "$SIGNING" = skipped || exit 1; fi
+          case "$VALIDATE:$VALIDATION" in
+            false:skipped) test "$RELEASE" = false || exit 1
+              echo 'Unaffected component: no validation or release required; see scope summary'; exit 0 ;;
+            true:success) ;;
+            *) echo 'Missing, failed, cancelled or unexpectedly skipped validation'; exit 1 ;;
+          esac
+          case "$RELEASE" in true|false) ;; *) exit 1 ;; esac
+          if [ "$PRODUCTION" = true ] && [ "$RELEASE" = true ]; then
+            test "$SIGNING" = success || { echo 'Production signing did not succeed; skipped signing is not approval'; exit 1; }
           fi

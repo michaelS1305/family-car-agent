@@ -2,14 +2,10 @@ name: Backend CI
 
 on:
   push:
-    branches: [develop]
-    paths:
-      - .github/workflows/backend.yml
-      - backend/**
-      - supabase/**
+    branches: [develop, main]
   # Required checks must report on every main PR, including cross-component changes.
   pull_request:
-    branches: [main]
+    branches: [develop, main]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
@@ -21,8 +17,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  backend:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+  scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      android_validation: ${{ steps.scope.outputs.android_validation }}
+      android_release: ${{ steps.scope.outputs.android_release }}
+      ios_validation: ${{ steps.scope.outputs.ios_validation }}
+      ios_release: ${{ steps.scope.outputs.ios_release }}
+      backend_validation: ${{ steps.scope.outputs.backend_validation }}
+      backend_release: ${{ steps.scope.outputs.backend_release }}
+      web_validation: ${{ steps.scope.outputs.web_validation }}
+      web_release: ${{ steps.scope.outputs.web_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Classify complete change set
+        id: scope
+        run: python3 .github/component_scope.py
+      - name: Check workflow policy and classifier
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 .github/test_component_scope.py
+          python3 .github/check_workflows.py
+
+  backend_validation:
+    needs: scope
+    if: needs.scope.outputs.backend_validation == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -49,3 +73,21 @@ jobs:
       - name: Backend unit tests
         working-directory: backend
         run: python -m unittest discover -s tests -v
+
+  backend:
+    if: always()
+    needs: [scope, backend_validation]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require affected validation or explicit unaffected result
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          VALIDATE: ${{ needs.scope.outputs.backend_validation }}
+          VALIDATION: ${{ needs.backend_validation.result }}
+        run: |
+          test "$SCOPE_RESULT" = success || exit 1
+          case "$VALIDATE:$VALIDATION" in
+            true:success) echo 'Affected component validation passed' ;;
+            false:skipped) echo 'Unaffected component: no validation or release required; see scope summary' ;;
+            *) echo 'Missing, failed, cancelled or unexpectedly skipped validation'; exit 1 ;;
+          esac
