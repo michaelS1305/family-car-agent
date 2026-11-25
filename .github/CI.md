@@ -104,20 +104,39 @@ unknown/shared tooling and intentionally require all components during rollout.
 
 ## Android dependency reliability
 
-Validation and Production signing retain setup-java's Gradle dependency cache
-with identical Gradle/wrapper keys. The newly introduced separate Robolectric
-runtime JAR cache has been removed: Robolectric 4.16.1 accepts an existing local
-JAR without rechecking its checksum. No replacement checksum infrastructure or
-Maven mirror is introduced. Runtime SDK downloads therefore remain uncached across
-jobs by this policy; the Gradle dependency cache is unchanged.
+Gradle dependency/wrapper caching and bounded Gradle HTTP 429 retries remain
+unchanged, including signing-job caching. No Robolectric JAR cache is restored.
+Before unit tests, prepare_robolectric_runtime.py downloads the SDK 35/36 jars
+pinned in robolectric_runtime.json into a runner-temporary directory. SHA-512
+sidecars were read from official Maven Central on 2026-11-25 and independently
+checked against complete downloaded jars. These exact official sources are:
 
-Source: https://github.com/robolectric/robolectric/blob/robolectric-4.16.1/plugins/maven-dependency-resolver/src/main/java/org/robolectric/internal/dependency/MavenArtifactFetcher.java
+- https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/15-robolectric-13954326-i7/android-all-instrumented-15-robolectric-13954326-i7.jar.sha512
+- https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/16-robolectric-13921718-i7/android-all-instrumented-16-robolectric-13921718-i7.jar.sha512
 
-The nativeruntime-dist-compat download causing PR #91's 429 is a Gradle dependency.
-Existing strict retries remain unchanged: maximum three attempts, 60/120s waits,
-no retry for ordinary compilation/lint/test failures. Android tests and dependency
-versions are unchanged. Cold-cache HTTP 429 remains possible, and cache hits still
-require real Actions validation.
+Only the official HTTPS endpoint is used; redirects are rejected. Downloads use
+unique partial files, fsync, SHA-512 validation and atomic replacement. Existing
+jars are rehashed before reuse; mismatches fail closed. The CI-only Gradle init
+script rechecks the pinned hashes immediately before each Test task and supplies
+robolectric.dependency.dir and robolectric.offline=true to the forked test JVM.
+Missing jars fail explicitly. --info records the actual test-worker JVM arguments;
+it does not enable credentials or change the application's behavior.
+
+Preparation retries only HTTP 429/502/503/504, at most three attempts with 60/120s
+delays. Checksum, TLS, permanent HTTP, partial and unclassified failures do not
+retry. Logs contain artifact coordinates, attempt, HTTP status and fixed reason;
+no raw exception messages or response bodies. A failed preparation does not start
+the suite. Application test failures are never retried by this preparation step.
+Gradle dependency resolution retains its separate existing strict 429 retry logic.
+
+All available JUnit XML and HTML test reports are uploaded with always(), seven-day
+retention, without continue-on-error on validation. No test filters or version
+changes. Runtime and Gradle checks still depend on Maven Central availability;
+persistent HTTP failures fail the required check rather than bypass tests.
+
+Runtime versions/hashes must be reviewed together with Robolectric/SDK updates.
+The compatibility regression compares the pinned version, test SDK annotations
+and targetSdk. A different SDK cannot silently fall back to a network download.
 
 ## Security prerequisites — owner configuration, not performed here
 

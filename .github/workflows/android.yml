@@ -47,6 +47,7 @@ jobs:
           python3 -m pip install PyYAML==6.0.3
           python3 .github/test_component_scope.py
           python3 .github/check_workflows.py
+          python3 .github/test_robolectric_runtime.py
 
   android:
     needs: scope
@@ -55,6 +56,7 @@ jobs:
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
       (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/develop')
     env:
+      FCA_ROBOLECTRIC_RUNTIME_DIR: ${{ runner.temp }}/fca-robolectric-runtime
       PRODUCTION: ${{ (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.production_release == true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -148,12 +150,24 @@ jobs:
         run: bash ./gradlew --version
       - name: Environment configuration guards
         run: bash ./gradlew :app:testEnvironmentConfiguration
+      - name: Prepare verified Robolectric SDK runtimes
+        run: python3 ../.github/prepare_robolectric_runtime.py "$FCA_ROBOLECTRIC_RUNTIME_DIR"
       - name: Dev unit tests, lint and debug assembly
         if: env.PRODUCTION != 'true'
-        run: python3 ../.github/android_gradle_retry.py :app:testDevDebugUnitTest :app:lintDevDebug :app:assembleDevDebug
+        run: python3 ../.github/android_gradle_retry.py --info --init-script ../.github/robolectric-offline.init.gradle :app:testDevDebugUnitTest :app:lintDevDebug :app:assembleDevDebug
       - name: Prod unit tests, lint and debug assembly
         if: env.PRODUCTION == 'true'
-        run: python3 ../.github/android_gradle_retry.py :app:testProdDebugUnitTest :app:lintProdDebug :app:assembleProdDebug
+        run: python3 ../.github/android_gradle_retry.py --info --init-script ../.github/robolectric-offline.init.gradle :app:testProdDebugUnitTest :app:lintProdDebug :app:assembleProdDebug
+      - name: Preserve Android test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports-${{ github.sha }}
+          path: |
+            android/app/build/test-results/**/TEST-*.xml
+            android/app/build/reports/tests/**
+          if-no-files-found: warn
+          retention-days: 7
       - name: Upload Development APK
         if: env.PRODUCTION != 'true'
         uses: actions/upload-artifact@v4

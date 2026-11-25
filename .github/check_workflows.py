@@ -285,6 +285,20 @@ class WorkflowChecks(unittest.TestCase):
                                      'required':{'result':'success'}})
             self.assertFalse(evaluate(self.workflows['ios']['jobs']['testflight']['if'],context))
 
+    def test_verified_runtime_precedes_tests_and_reports_survive_failure(self):
+        steps=self.workflows['android']['jobs']['android']['steps']
+        prepare=next(i for i,s in enumerate(steps) if s.get('name')=='Prepare verified Robolectric SDK runtimes')
+        for i,step in enumerate(steps):
+            if 'android_gradle_retry.py' in step.get('run',''):
+                self.assertLess(prepare,i)
+                self.assertIn('--init-script ../.github/robolectric-offline.init.gradle',step['run'])
+                self.assertIn('--info',step['run'])
+                self.assertNotIn('continue-on-error',step)
+        reports=next(s for s in steps if s.get('name')=='Preserve Android test reports')
+        self.assertEqual(reports['if'],'always()')
+        self.assertIn('test-results/**/TEST-*.xml',reports['with']['path'])
+        self.assertIn('reports/tests/**',reports['with']['path'])
+
 
 if __name__ == '__main__':
     unittest.main()

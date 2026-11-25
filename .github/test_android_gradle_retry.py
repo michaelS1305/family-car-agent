@@ -112,7 +112,7 @@ class RetryChecks(unittest.TestCase):
             'android/**/*.gradle.kts', 'android/gradle.properties', 'android/gradle/gradle-daemon-jvm.properties', 'android/gradle/wrapper/gradle-wrapper.properties'])
         for flavor in ('Dev', 'Prod'):
             step = next(step for step in steps if step.get('name') == f'{flavor} unit tests, lint and debug assembly')
-            self.assertEqual(step['run'], f'python3 ../.github/android_gradle_retry.py :app:test{flavor}DebugUnitTest :app:lint{flavor}Debug :app:assemble{flavor}Debug')
+            self.assertEqual(step['run'], f'python3 ../.github/android_gradle_retry.py --info --init-script ../.github/robolectric-offline.init.gradle :app:test{flavor}DebugUnitTest :app:lint{flavor}Debug :app:assemble{flavor}Debug')
 
 
 if __name__ == '__main__':

@@ -38,7 +38,9 @@ def classify(paths, complete=True):
                 mark(clients, 'shared_backend_contract')
         elif path in tuple('.github/workflows/' + c + '.yml' for c in COMPONENTS):
             mark([Path(path).stem], 'component_workflow', True)
-        elif path in ('.github/android_gradle_retry.py', '.github/test_android_gradle_retry.py'):
+        elif path in ('.github/android_gradle_retry.py', '.github/test_android_gradle_retry.py',
+                      '.github/prepare_robolectric_runtime.py', '.github/test_robolectric_runtime.py',
+                      '.github/robolectric_runtime.json', '.github/robolectric-offline.init.gradle'):
             mark(['android'], 'android_validation_tooling')
         elif path.startswith('assets/'):
             mark(('android', 'ios', 'web'), 'shared_assets', True)

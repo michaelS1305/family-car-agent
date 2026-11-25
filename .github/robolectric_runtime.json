@@ -1,0 +1,4 @@
+{"robolectric_version":"4.16.1","artifacts":[
+ {"sdk":35,"version":"15-robolectric-13954326-i7","sha512":"5fc64ffccf4788154162686b3966ddd63abea8326542c465e2a7f0129fc92770d0e1e8ddcfabd7f1500e491ec02e3b4104b9e51b61fccd9cf08006c9dc02987c"},
+ {"sdk":36,"version":"16-robolectric-13921718-i7","sha512":"0576318b89abb0a1c9a760a61bb68ccd2d509b33164b8265d6b1fb587a4b7629e1e805b6c7f8fbefab94fc03c8db8100b1d4856a32728803c242d2677aa7ec76"}
+]}

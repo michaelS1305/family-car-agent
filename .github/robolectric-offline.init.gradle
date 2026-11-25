@@ -1,0 +1,32 @@
+// CI only. Applied with --init-script; does not change app or developer defaults.
+import groovy.json.JsonSlurper
+import java.security.MessageDigest
+import org.gradle.api.tasks.testing.Test
+
+gradle.beforeProject { project ->
+    project.tasks.withType(Test).configureEach { task ->
+        def directory = System.getenv('FCA_ROBOLECTRIC_RUNTIME_DIR')
+        if (!directory) throw new GradleException('Verified Robolectric runtime directory is required')
+        task.systemProperty('robolectric.dependency.dir', new File(directory).absolutePath)
+        task.systemProperty('robolectric.offline', 'true')
+        task.doFirst {
+            def manifest = new JsonSlurper().parse(new File(project.rootDir.parentFile, '.github/robolectric_runtime.json'))
+            manifest.artifacts.each { artifact ->
+                def jar = new File(directory, "android-all-instrumented-${artifact.version}.jar")
+                if (!jar.isFile() || java.nio.file.Files.isSymbolicLink(jar.toPath())) {
+                    throw new GradleException("Missing verified Robolectric SDK ${artifact.sdk}; network fallback disabled")
+                }
+                def digest = MessageDigest.getInstance('SHA-512')
+                jar.withInputStream { input ->
+                    byte[] buffer = new byte[1024 * 1024]
+                    int size
+                    while ((size = input.read(buffer)) != -1) digest.update(buffer, 0, size)
+                }
+                if (digest.digest().encodeHex().toString() != artifact.sha512) {
+                    throw new GradleException("Robolectric SDK ${artifact.sdk} integrity failed")
+                }
+            }
+            logger.lifecycle('ROBOLECTRIC_RUNTIME verified SDKs=35,36 offline=true')
+        }
+    }
+}
