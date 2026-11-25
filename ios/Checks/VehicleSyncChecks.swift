@@ -104,6 +104,7 @@ private actor SyncSessionExchange: AuthTransport {
     let queue: VehicleEventQueue
     let auth: SyncAuth
     let transport: SyncTransport
+    var metadataTransport: (any TakeMetadataTransport)?
     var namespace: UUID?
     var clock = Date(timeIntervalSince1970: 1_800_000_000)
     var coordinator: VehicleSyncCoordinator!
@@ -120,7 +121,7 @@ private actor SyncSessionExchange: AuthTransport {
     func restoreCoordinator() throws {
         coordinator?.fence()
         coordinator = try VehicleSyncCoordinator(environment: .development, context: context, queue: queue,
-            authentication: auth, transport: transport, directory: root.appendingPathComponent("uploads"), now: { [unowned self] in self.clock }, retryWait: retryWait)
+            authentication: auth, transport: transport, directory: root.appendingPathComponent("uploads"), metadataTransport: metadataTransport, now: { [unowned self] in self.clock }, retryWait: retryWait)
     }
     func start() async throws { try await queue.initializeFreshDevice(context) }
     func take(vehicle: UUID = UUID()) async throws -> QueuedVehicleEvent {
@@ -130,6 +131,26 @@ private actor SyncSessionExchange: AuthTransport {
         return try await queue.enqueueTake(context, vehicle: vehicle, occurredAt: clock)
     }
     func states() async throws -> [VehicleQueueState] { try await queue.records(context).map(\.state) }
+}
+
+@MainActor private final class MetadataUnavailableTransport: TakeMetadataTransport {
+    var requests: [TakeMetadataRequest] = []
+    func fetch(_ request:TakeMetadataRequest,device:UUID,token:String) async throws -> TakeMetadataSnapshot {
+        requests.append(request)
+        return .init(request_id:request.request_id,device_ref:device,projection_revision:1,last_processed_sequence:1000,
+            observed_at:String(format:"2026-11-24T00:00:%02dZ",requests.count),items:request.takes.map {
+                .init(event_id:$0.event_id,device_sequence:$0.device_sequence,vehicle_ref:$0.vehicle_ref,status:"unavailable",anchor_event_id:nil,session_ref:nil,session_state:nil,closed_at:nil,closure_kind:nil,reconciliation_operation_id:nil,finality:nil)
+            })
+    }
+}
+
+@MainActor private final class MetadataProbe: TakeMetadataTransport {
+    var requests: [TakeMetadataRequest] = []
+    var completion: CheckedContinuation<TakeMetadataSnapshot, any Error>?
+    func fetch(_ request: TakeMetadataRequest, device: UUID, token: String) async throws -> TakeMetadataSnapshot {
+        requests.append(request)
+        return try await withCheckedThrowingContinuation { completion=$0 }
+    }
 }
 
 @main struct VehicleSyncChecks {
@@ -193,9 +214,9 @@ private actor SyncSessionExchange: AuthTransport {
             let after = try tables.map { try migrationRows(v2, "SELECT * FROM \($0) ORDER BY 1") }
             let version = try migrationRows(v2, "PRAGMA user_version")
             let recoveryRows = try migrationRows(v2, "SELECT * FROM return_recoveries")
-            precondition(after == before && version == [["4"]] && recoveryRows.isEmpty)
+            precondition(after == before && version == [["5"]] && recoveryRows.isEmpty)
         }
-        print("PASS: SQLite v2 to v4 preserves payloads, IDs, ordering, states, blocked RETURN and idempotent reopening")
+        print("PASS: SQLite v2 to v5 preserves payloads, IDs, ordering, states, blocked RETURN and idempotent reopening")
 
         let sharedFixture = try await fixture(), ctx = sharedFixture.context
         let vault = SyncSessionVault()
@@ -587,6 +608,7 @@ private actor SyncSessionExchange: AuthTransport {
 
         try await recoveryChecks(root: root)
         try await reconciliationHardening(root: root)
+        try await metadataChecks(root: root)
     }
     @MainActor private static func recoveryChecks(root: URL) async throws {
         func fixture() async throws -> SyncFixture {
@@ -722,7 +744,7 @@ private actor SyncSessionExchange: AuthTransport {
         precondition(v3rows[1].event == v3e && v3rows[1].state == .blocked)
         _ = try VehicleEventQueue(directory: v3dir)
         let upgradedVersion = try migrationRows(v3dir, "PRAGMA user_version")
-        precondition(upgradedVersion == [["4"]])
+        precondition(upgradedVersion == [["5"]])
         v3f.coordinator.fence()
         // Expiry requires an explicit new invocation. It never rewrites a task.
         let (ef, ee) = try await rejectedReturn()
@@ -847,9 +869,9 @@ private actor SyncSessionExchange: AuthTransport {
             precondition(events[1].takeID == events[0].id && events[3].takeID == events[2].id)
             let version = try migrationRows(dir, "PRAGMA user_version")
             let tasks = try migrationRows(dir, "SELECT * FROM return_reconciliations")
-            precondition(version == [["4"]] && tasks.isEmpty)
+            precondition(version == [["5"]] && tasks.isEmpty)
         }
-        print("PASS: independent v3 schema, all rows/upload mappings preserved, v4 reopen/idempotency")
+        print("PASS: independent v3 schema, all rows/upload mappings preserved, v5 reopen/idempotency")
 
         for fault in ["between-writes", "commit"] {
             let (f, e, r) = try await prepared()
@@ -974,6 +996,232 @@ private actor SyncSessionExchange: AuthTransport {
         let stored = VehicleRecoveryRecord(id: er.id, event: ee.id, payload: er.payload, state: .preparing, session: nil, task: nil, reason: "deliveryUnknown", reconciliation: true)
         if case .retryStored? = ReturnRecoveryPolicy.shortcutFailure(stored) {} else { preconditionFailure() }
         print("PASS: expiry requires explicit fresh evidence; retryable/permanent Shortcut message classification")
+    }
+
+
+    @MainActor private static func metadataChecks(root: URL) async throws {
+        let f=try SyncFixture(root:root.appendingPathComponent("session-metadata")); try await f.start()
+        let vehicle=UUID()
+        let accepted = #"{"kind":"accepted","admission_outcome":"accepted"}"#
+        func finish() async {
+            await f.coordinator.wake()
+            await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier,body:accepted))
+        }
+        func shortcut(_ kind: QueuedVehicleEvent.Kind) async throws -> QueuedVehicleEvent {
+            f.clock.addTimeInterval(1)
+            return try await f.queue.recordShortcut(f.context,vehicle:vehicle,kind:kind,time:f.clock,
+                location:kind == .returning ? .init(latitude:32,longitude:34,accuracy:10,measuredAt:f.clock) : nil)
+        }
+        for _ in 0..<6 {
+            _=try await f.take(vehicle:vehicle); await finish()
+            _=try await shortcut(.returning); await finish()
+        }
+        let take13=try await shortcut(.take); await finish()
+        precondition(take13.sequence == 13)
+        let ret14=try await shortcut(.returning)
+        await f.coordinator.wake()
+        await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier,status:409,body:#"{"detail":{"code":"RETURN_OUTSIDE_HOME"}}"#))
+        let take15=try await shortcut(.take)
+        precondition(take15.sequence == 15)
+        _=try await shortcut(.returning); await f.coordinator.wake()
+        await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier,status:409,body:#"{"detail":{"code":"RETURN_RECOVERY_ORDER_CONFLICT"}}"#))
+        _=try await shortcut(.returning); await f.coordinator.wake()
+        let r=try await f.queue.recovery(f.context,event:ret14.id)!
+        let ack="{\"kind\":\"resolved_current_state\",\"event_id\":\"\(ret14.id)\",\"reconciliation_id\":\"\(r.id)\",\"operation_id\":\"\(UUID())\",\"device_sequence\":14,\"last_processed_sequence\":14,\"historical_receipt\":{\"kind\":\"terminal\",\"admission_outcome\":\"before_finalized_boundary\"},\"effective_at\":\"2026-11-24T00:00:00Z\",\"session_effect\":\"closed_linked_session\"}"
+        await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier,body:ack))
+        await f.coordinator.receive(f.transport.finish(f.transport.created.last!.task.identifier,body:#"{"kind":"accepted","admission_outcome":"accepted","transition":"redundant_take"}"#))
+        do { _=try await shortcut(.take); preconditionFailure("Missing metadata cannot clear TAKE15") } catch ShortcutQueueError.alreadyTaken {}
+        let historyVehicle=UUID()
+        _=try await f.take(vehicle:historyVehicle); await finish()
+        _=try await f.queue.recordShortcut(f.context,vehicle:historyVehicle,kind:.returning,time:f.clock,location:.init(latitude:32,longitude:34,accuracy:10,measuredAt:f.clock)); await finish()
+        for _ in 0..<70 {
+            _=try await f.queue.recordShortcut(f.context,vehicle:historyVehicle,kind:.take,time:f.clock,location:nil); await finish()
+            _=try await f.queue.recordShortcut(f.context,vehicle:historyVehicle,kind:.returning,time:f.clock,location:.init(latitude:32,longitude:34,accuracy:10,measuredAt:f.clock)); await finish()
+        }
+        let original=try await f.queue.records(f.context).map(\.event)
+        let batch=try await f.queue.metadataBatch(f.context)!
+        precondition(batch.request.takes.count == 64 && batch.request.takes.first?.event_id == take15.id)
+        let continuationBatch=try await f.queue.metadataBatch(f.context,excluding:Set(batch.request.takes.map(\.event_id)))!
+        precondition(Set(continuationBatch.request.takes.map(\.event_id)).isDisjoint(with:Set(batch.request.takes.map(\.event_id))))
+        let session=UUID(), operation=UUID()
+        func response(_ batch: TakeMetadataBatch, revision:Int64, closed:Bool=true, finalized:Bool=false) -> TakeMetadataSnapshot {
+            .init(request_id:batch.request.request_id,device_ref:f.context.device,projection_revision:revision,last_processed_sequence:1000,
+                observed_at:"2026-11-24T00:00:00.123456Z",items:batch.request.takes.map { ref in
+                    .init(event_id:ref.event_id,device_sequence:ref.device_sequence,vehicle_ref:ref.vehicle_ref,status:"accepted",
+                        anchor_event_id:take13.id,session_ref:session,session_state:closed ? "closed":"open",
+                        closed_at:closed ? "2026-11-24T00:00:00.123456Z":nil,closure_kind:closed ? "current_state_reconciliation":nil,
+                        reconciliation_operation_id:closed ? operation:nil,finality:finalized ? "finalized":"provisional")
+                })
+        }
+        let db=f.root.appendingPathComponent("db")
+        // Trigger abort after metadata row writes proves the entire snapshot rolls back.
+        try rejectionSQL(db,"CREATE TRIGGER metadata_fault BEFORE INSERT ON session_metadata_sync BEGIN SELECT RAISE(ABORT,'test'); END;")
+        do { try await f.queue.applyMetadata(f.context,batch:batch,snapshot:response(batch,revision:1)); preconditionFailure() } catch VehicleQueueError.storage {}
+        let empty=try migrationRows(db,"SELECT * FROM take_session_metadata"); precondition(empty.isEmpty)
+        try rejectionSQL(db,"DROP TRIGGER metadata_fault;")
+        try await f.queue.applyMetadata(f.context,batch:batch,snapshot:response(batch,revision:1))
+        let reopened=try VehicleEventQueue(directory:db)
+        let unchanged=try await reopened.records(f.context).map(\.event); precondition(original == unchanged)
+        // No network/transport exists on this queue: persisted provisional closure is enough.
+        let newTake=try await reopened.recordShortcut(f.context,vehicle:vehicle,kind:.take,time:f.clock.addingTimeInterval(1),location:nil)
+        precondition(newTake.sequence == original.last!.sequence+1)
+        // A reply requested before the new offline TAKE must never suppress it.
+        try await reopened.applyMetadata(f.context,batch:batch,snapshot:response(batch,revision:1))
+        do { _=try await shortcut(.take); preconditionFailure("Pending TAKE suppressed") } catch ShortcutQueueError.alreadyTaken {}
+        let ret=try await shortcut(.returning); precondition(ret.takeID == newTake.id)
+        await finish(); await finish()
+        for _ in 0..<2 { _=try await shortcut(.take); await finish(); _=try await shortcut(.returning); await finish() }
+        print("PASS: metadata 13/14/15 backfill, real Shortcut offline TAKE after 13/14/15 and >64 history, immutable evidence, pending protection and subsequent pairs")
+
+        // A newer partial snapshot invalidates other provisional entries.
+        let partial=TakeMetadataBatch(request:.init(request_id:UUID(),takes:batch.request.takes.filter{$0.event_id == take13.id}),authorization:batch.authorization)
+        try await reopened.applyMetadata(f.context,batch:partial,snapshot:response(partial,revision:2))
+        do { _=try await shortcut(.take); preconditionFailure("Known stale provisional closure used") } catch ShortcutQueueError.alreadyTaken {}
+        do { try await reopened.applyMetadata(f.context,batch:batch,snapshot:response(batch,revision:1)); preconditionFailure() } catch VehicleQueueError.conflict {}
+        // A replay can reopen/remap an alias. An open snapshot must protect it.
+        try await reopened.applyMetadata(f.context,batch:batch,snapshot:response(batch,revision:3,closed:false))
+        do { _=try await shortcut(.take); preconditionFailure() } catch ShortcutQueueError.alreadyTaken {}
+        // Alias13 already has RETURN14; group semantics avoid a phantom session.
+        // New aliases without pairings group to one logical anchor, permitting one RETURN.
+        let otherVehicle=UUID(); let other=try await f.take(vehicle:otherVehicle); await finish()
+        let alias=try await f.queue.enqueueTake(f.context,vehicle:otherVehicle,occurredAt:f.clock); await finish()
+        let aliases=try await f.queue.metadataBatch(f.context)!
+        let aliasBatch=TakeMetadataBatch(request:.init(request_id:UUID(),takes:aliases.request.takes.filter{$0.vehicle_ref == otherVehicle}),authorization:aliases.authorization)
+        let items=aliasBatch.request.takes.map { ref in TakeSessionMetadata(event_id:ref.event_id,device_sequence:ref.device_sequence,vehicle_ref:ref.vehicle_ref,status:"accepted",anchor_event_id:other.id,session_ref:UUID(uuidString:"00000000-0000-4000-8000-000000000001")!,session_state:"open",closed_at:nil,closure_kind:nil,reconciliation_operation_id:nil,finality:"provisional") }
+        let openSnapshot=TakeMetadataSnapshot(request_id:aliasBatch.request.request_id,device_ref:f.context.device,projection_revision:4,last_processed_sequence:alias.sequence,observed_at:"2026-11-24T00:00:00Z",items:items)
+        try await f.queue.applyMetadata(f.context,batch:aliasBatch,snapshot:openSnapshot)
+        do { _=try await f.queue.recordShortcut(f.context,vehicle:otherVehicle,kind:.take,time:f.clock,location:nil); preconditionFailure() } catch ShortcutQueueError.alreadyTaken {}
+        let linked=try await f.queue.recordShortcut(f.context,vehicle:otherVehicle,kind:.returning,time:f.clock,location:.init(latitude:32,longitude:34,accuracy:10,measuredAt:f.clock))
+        precondition([other.id,alias.id].contains(linked.takeID!))
+        let afterAliases=try await f.queue.recordShortcut(f.context,vehicle:otherVehicle,kind:.take,time:f.clock,location:nil)
+        precondition(afterAliases.sequence == linked.sequence+1)
+        do { _=try await f.queue.recordShortcut(f.context,vehicle:otherVehicle,kind:.take,time:f.clock,location:nil); preconditionFailure() } catch ShortcutQueueError.alreadyTaken {}
+        print("PASS: stale/out-of-order revisions, replay reopen, multiple vehicles and open aliases grouped for actual RETURN")
+
+        let latest=try await f.queue.metadataBatch(f.context)!
+        let good=response(latest,revision:5,finalized:true)
+        for bad in [TakeMetadataSnapshot(request_id:UUID(),device_ref:good.device_ref,projection_revision:5,last_processed_sequence:100,observed_at:good.observed_at,items:good.items),TakeMetadataSnapshot(request_id:good.request_id,device_ref:UUID(),projection_revision:5,last_processed_sequence:100,observed_at:good.observed_at,items:good.items)] {
+            do { try await f.queue.applyMetadata(f.context,batch:latest,snapshot:bad); preconditionFailure() } catch VehicleQueueError.invalidInput {}
+        }
+        try await f.queue.applyMetadata(f.context,batch:latest,snapshot:good)
+        // Failed/no response cannot reveal an unknown revision while offline.
+        let offline=try await f.queue.recordShortcut(f.context,vehicle:vehicle,kind:.take,time:f.clock,location:nil)
+        precondition(offline.kind == .take)
+        let verify=try await f.queue.beginVerification(f.context)
+        try await f.queue.completeVerification(f.context,generation:verify,vehicles:[vehicle,otherVehicle])
+        do { try await f.queue.applyMetadata(f.context,batch:latest,snapshot:good); preconditionFailure() } catch VehicleQueueError.invalidInput {}
+        f.coordinator.fence()
+        print("PASS: snapshot rollback, wrong request/device, authorization generation fence; offline cannot discover unknown server revisions")
+
+        let bounded=try SyncFixture(root:root.appendingPathComponent("metadata-bounded")); try await bounded.start()
+        let bt=try await bounded.take()
+        for _ in 0..<259 { _=try await bounded.queue.enqueueTake(bounded.context,vehicle:bt.vehicle,occurredAt:bounded.clock) }
+        try rejectionSQL(bounded.root.appendingPathComponent("db"),"UPDATE events SET state='accepted';")
+        let automatic=MetadataUnavailableTransport(); bounded.metadataTransport=automatic; try bounded.restoreCoordinator()
+        await bounded.coordinator.wake()
+        for _ in 0..<100000 { if automatic.requests.count == 4 { break }; await Task.yield() }
+        precondition(automatic.requests.count == 4 && automatic.requests.allSatisfy{$0.takes.count == 64})
+        let visited=automatic.requests.flatMap{$0.takes.map(\.event_id)}
+        precondition(Set(visited).count == 256)
+        for _ in 0..<100 { await Task.yield() }
+        precondition(automatic.requests.count == 4)
+        bounded.coordinator.fence()
+        print("PASS: actual coordinator bounded backfill, four distinct 64-item batches, no unbounded continuation")
+
+        let ordered=try SyncFixture(root:root.appendingPathComponent("metadata-order")); try await ordered.start()
+        let ot=try await ordered.take(); await ordered.coordinator.wake()
+        await ordered.coordinator.receive(ordered.transport.finish(1,body:accepted))
+        let ob=try await ordered.queue.metadataBatch(ordered.context)!
+        let closedItem=TakeSessionMetadata(event_id:ot.id,device_sequence:ot.sequence,vehicle_ref:ot.vehicle,status:"accepted",anchor_event_id:ot.id,session_ref:UUID(),session_state:"closed",closed_at:"2026-11-24T00:00:00Z",closure_kind:"return",reconciliation_operation_id:nil,finality:"provisional")
+        let missingItem=TakeSessionMetadata(event_id:ot.id,device_sequence:ot.sequence,vehicle_ref:ot.vehicle,status:"unavailable",anchor_event_id:nil,session_ref:nil,session_state:nil,closed_at:nil,closure_kind:nil,reconciliation_operation_id:nil,finality:nil)
+        func orderedResponse(_ item: TakeSessionMetadata, _ time:String) -> TakeMetadataSnapshot {
+            .init(request_id:ob.request.request_id,device_ref:ordered.context.device,projection_revision:8,last_processed_sequence:ot.sequence,observed_at:time,items:[item])
+        }
+        let oc=orderedResponse(closedItem,"2026-11-24T00:00:01Z")
+        let ou=orderedResponse(missingItem,"2026-11-24T00:00:02Z")
+        try await ordered.queue.applyMetadata(ordered.context,batch:ob,snapshot:oc)
+        let second=try VehicleEventQueue(directory:ordered.root.appendingPathComponent("db"))
+        // Independent SQLite connections race exactly as app and Shortcut processes do.
+        func write(_ q:VehicleEventQueue,_ snapshot:TakeMetadataSnapshot) async throws {
+            do { try await q.applyMetadata(ordered.context,batch:ob,snapshot:snapshot) }
+            catch VehicleQueueError.conflict {} // The delayed older writer may lose the race.
+        }
+        async let older:Void=write(ordered.queue,oc)
+        async let newer:Void=write(second,ou)
+        _=try await (older,newer)
+        let restarted=try VehicleEventQueue(directory:ordered.root.appendingPathComponent("db"))
+        do { try await restarted.applyMetadata(ordered.context,batch:ob,snapshot:oc); preconditionFailure() } catch VehicleQueueError.conflict {}
+        do { try await restarted.applyMetadata(ordered.context,batch:ob,snapshot:orderedResponse(closedItem,ou.observed_at)); preconditionFailure() } catch VehicleQueueError.conflict {}
+        try await restarted.applyMetadata(ordered.context,batch:ob,snapshot:ou) // Exact retry is harmless.
+        do { _=try await restarted.recordShortcut(ordered.context,vehicle:ot.vehicle,kind:.take,time:ordered.clock,location:nil); preconditionFailure("Unavailable overwritten by old closed") } catch ShortcutQueueError.alreadyTaken {}
+        ordered.coordinator.fence()
+        print("PASS: equal revision ordering, unavailable survives concurrent SQLite writers/restart, ties fail closed")
+
+        // Literal shipping v4 DDL, independent of the new application initializer.
+        let v4dir=root.appendingPathComponent("independent-v4")
+        try FileManager.default.createDirectory(at:v4dir,withIntermediateDirectories:true)
+        try rejectionSQL(v4dir, """
+            CREATE TABLE IF NOT EXISTS devices(context TEXT PRIMARY KEY,environment TEXT NOT NULL,device TEXT NOT NULL,last_sequence INTEGER NOT NULL CHECK(last_sequence>=0),active INTEGER NOT NULL CHECK(active IN(0,1)),UNIQUE(environment,device));
+            CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,context TEXT NOT NULL REFERENCES devices(context),sequence INTEGER NOT NULL CHECK(sequence>0),vehicle TEXT NOT NULL,cause TEXT REFERENCES events(id),payload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('pending','preparing','registered','awaitingAuthentication','accepted','terminal','blocked')),attempt TEXT,session TEXT,task INTEGER,reason TEXT,UNIQUE(context,sequence),UNIQUE(context,cause));
+            CREATE TABLE IF NOT EXISTS authorization_scopes(context TEXT PRIMARY KEY REFERENCES devices(context),generation TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('verificationPending','verified','revoked')),namespace TEXT);
+            CREATE TABLE IF NOT EXISTS vehicle_authorizations(context TEXT NOT NULL REFERENCES authorization_scopes(context),vehicle TEXT NOT NULL,allowed INTEGER NOT NULL CHECK(allowed IN(0,1)),PRIMARY KEY(context,vehicle));
+            CREATE TABLE IF NOT EXISTS return_recoveries(id TEXT PRIMARY KEY,event TEXT NOT NULL REFERENCES events(id),payload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('preparing','registered','awaitingAuthentication','blocked','accepted')),session TEXT,task INTEGER,reason TEXT);
+            CREATE UNIQUE INDEX IF NOT EXISTS return_recovery_active ON return_recoveries(event) WHERE state IN('preparing','registered','awaitingAuthentication');
+            CREATE TRIGGER IF NOT EXISTS return_recovery_immutable BEFORE UPDATE OF id,event,payload ON return_recoveries BEGIN SELECT RAISE(ABORT,'immutable recovery'); END;
+            CREATE TABLE IF NOT EXISTS return_reconciliations(id TEXT PRIMARY KEY,event TEXT NOT NULL REFERENCES events(id),payload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('preparing','registered','awaitingAuthentication','blocked','accepted')),session TEXT,task INTEGER,reason TEXT,acknowledgment TEXT);
+            CREATE UNIQUE INDEX IF NOT EXISTS return_reconciliation_active ON return_reconciliations(event) WHERE state IN('preparing','registered','awaitingAuthentication');
+            CREATE TRIGGER IF NOT EXISTS return_reconciliation_immutable BEFORE UPDATE OF id,event,payload ON return_reconciliations BEGIN SELECT RAISE(ABORT,'immutable reconciliation'); END;
+            CREATE TRIGGER IF NOT EXISTS return_reconciliations_exclusive_INSERT BEFORE INSERT ON return_reconciliations WHEN NEW.state IN('preparing','registered','awaitingAuthentication') AND EXISTS(SELECT 1 FROM return_recoveries WHERE event=NEW.event AND state IN('preparing','registered','awaitingAuthentication','accepted')) BEGIN SELECT RAISE(ABORT,'active resolution'); END;
+            CREATE TRIGGER IF NOT EXISTS return_reconciliations_exclusive_UPDATE BEFORE UPDATE ON return_reconciliations WHEN NEW.state IN('preparing','registered','awaitingAuthentication') AND EXISTS(SELECT 1 FROM return_recoveries WHERE event=NEW.event AND state IN('preparing','registered','awaitingAuthentication','accepted')) BEGIN SELECT RAISE(ABORT,'active resolution'); END;
+            CREATE TRIGGER IF NOT EXISTS return_recoveries_exclusive_INSERT BEFORE INSERT ON return_recoveries WHEN NEW.state IN('preparing','registered','awaitingAuthentication') AND EXISTS(SELECT 1 FROM return_reconciliations WHERE event=NEW.event AND state IN('preparing','registered','awaitingAuthentication','accepted')) BEGIN SELECT RAISE(ABORT,'active resolution'); END;
+            CREATE TRIGGER IF NOT EXISTS return_recoveries_exclusive_UPDATE BEFORE UPDATE ON return_recoveries WHEN NEW.state IN('preparing','registered','awaitingAuthentication') AND EXISTS(SELECT 1 FROM return_reconciliations WHERE event=NEW.event AND state IN('preparing','registered','awaitingAuthentication','accepted')) BEGIN SELECT RAISE(ABORT,'active resolution'); END;
+            INSERT INTO devices VALUES('fixture-context','fixture-environment','fixture-device',16,1);
+            INSERT INTO authorization_scopes VALUES('fixture-context','fixture-generation','verified','fixture-namespace');
+            INSERT INTO vehicle_authorizations VALUES('fixture-context','00000000-0000-4000-8000-000000000002',1);
+            INSERT INTO events VALUES('37765BAE-39C3-4CEA-BD53-10E30F2C7913','fixture-context',13,'00000000-0000-4000-8000-000000000002',NULL,'{"id":"37765BAE-39C3-4CEA-BD53-10E30F2C7913","vehicle":"00000000-0000-4000-8000-000000000002","sequence":13,"occurredAt":100,"kind":"take"}','accepted',NULL,NULL,NULL,'accepted');
+            INSERT INTO events VALUES('07E91A49-BC53-4A33-8C41-F9C2B310FD28','fixture-context',14,'00000000-0000-4000-8000-000000000002','37765BAE-39C3-4CEA-BD53-10E30F2C7913','{"id":"07E91A49-BC53-4A33-8C41-F9C2B310FD28","vehicle":"00000000-0000-4000-8000-000000000002","sequence":14,"occurredAt":110,"kind":"return","takeID":"37765BAE-39C3-4CEA-BD53-10E30F2C7913","location":{"latitude":32,"longitude":34,"accuracy":10,"measuredAt":110}}','blocked',NULL,NULL,NULL,'RETURN_OUTSIDE_HOME');
+            INSERT INTO events VALUES('00000000-0000-4000-8000-000000000015','fixture-context',15,'00000000-0000-4000-8000-000000000002',NULL,'{"id":"00000000-0000-4000-8000-000000000015","vehicle":"00000000-0000-4000-8000-000000000002","sequence":15,"occurredAt":120,"kind":"take"}','registered','00000000-0000-4000-8000-000000000043','background-session',42,NULL);
+            INSERT INTO events VALUES('00000000-0000-4000-8000-000000000016','fixture-context',16,'00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000015','{"id":"00000000-0000-4000-8000-000000000016","vehicle":"00000000-0000-4000-8000-000000000002","sequence":16,"occurredAt":130,"kind":"return","takeID":"00000000-0000-4000-8000-000000000015","location":{"latitude":32,"longitude":34,"accuracy":10,"measuredAt":130}}','pending',NULL,NULL,NULL,NULL);
+            INSERT INTO return_recoveries VALUES('00000000-0000-4000-8000-000000000041','07E91A49-BC53-4A33-8C41-F9C2B310FD28','{"recovery_id":"00000000-0000-4000-8000-000000000041","original_return":{"event_id":"07E91A49-BC53-4A33-8C41-F9C2B310FD28","vehicle_ref":"00000000-0000-4000-8000-000000000002","device_sequence":14,"occurred_at":"2001-01-01T00:01:50Z","take_event_id":"37765BAE-39C3-4CEA-BD53-10E30F2C7913","latitude":32,"longitude":34,"accuracy_m":10,"location_at":"2001-01-01T00:01:50Z"},"verification":{"invoked_at":"2001-01-01T00:02:00Z","location_at":"2001-01-01T00:02:00Z","latitude":32,"longitude":34,"accuracy_m":10}}','blocked',NULL,NULL,'RETURN_OUTSIDE_HOME');
+            INSERT INTO return_recoveries VALUES('00000000-0000-4000-8000-000000000042','07E91A49-BC53-4A33-8C41-F9C2B310FD28','{"recovery_id":"00000000-0000-4000-8000-000000000042","original_return":{"event_id":"07E91A49-BC53-4A33-8C41-F9C2B310FD28","vehicle_ref":"00000000-0000-4000-8000-000000000002","device_sequence":14,"occurred_at":"2001-01-01T00:01:50Z","take_event_id":"37765BAE-39C3-4CEA-BD53-10E30F2C7913","latitude":32,"longitude":34,"accuracy_m":10,"location_at":"2001-01-01T00:01:50Z"},"verification":{"invoked_at":"2001-01-01T00:02:00Z","location_at":"2001-01-01T00:02:00Z","latitude":32,"longitude":34,"accuracy_m":10}}','registered','background-session',43,NULL);
+
+            UPDATE return_recoveries SET state='blocked',reason='RETURN_RECOVERY_ORDER_CONFLICT' WHERE state='registered';
+            INSERT INTO return_reconciliations VALUES('00000000-0000-4000-8000-000000000051','07E91A49-BC53-4A33-8C41-F9C2B310FD28','{"reconciliation_id":"00000000-0000-4000-8000-000000000051","original_return":{"event_id":"07E91A49-BC53-4A33-8C41-F9C2B310FD28","device_sequence":14}}','registered','reconciliation-upload-session',51,NULL,NULL);
+            INSERT INTO events SELECT '00000000-0000-4000-8000-000000000017',context,17,vehicle,NULL,replace(replace(payload,'37765BAE-39C3-4CEA-BD53-10E30F2C7913','00000000-0000-4000-8000-000000000017'),'"sequence":13','"sequence":17'),'accepted',NULL,NULL,NULL,'accepted' FROM events WHERE sequence=13;
+            INSERT INTO events SELECT '00000000-0000-4000-8000-000000000018',context,18,vehicle,'00000000-0000-4000-8000-000000000017',replace(replace(replace(payload,'07E91A49-BC53-4A33-8C41-F9C2B310FD28','00000000-0000-4000-8000-000000000018'),'37765BAE-39C3-4CEA-BD53-10E30F2C7913','00000000-0000-4000-8000-000000000017'),'"sequence":14','"sequence":18'),'terminal',NULL,NULL,NULL,'resolved_current_state' FROM events WHERE sequence=14;
+            INSERT INTO return_reconciliations VALUES('00000000-0000-4000-8000-000000000052','00000000-0000-4000-8000-000000000018','{"reconciliation_id":"00000000-0000-4000-8000-000000000052"}','accepted',NULL,NULL,NULL,'{"kind":"resolved_current_state","event_id":"00000000-0000-4000-8000-000000000018","device_sequence":18,"last_processed_sequence":18}');
+            UPDATE devices SET last_sequence=18;
+            PRAGMA user_version=4;
+            """)
+        let tables=["devices","events","authorization_scopes","vehicle_authorizations","return_recoveries","return_reconciliations"]
+        let before=try tables.map {try migrationRows(v4dir,"SELECT * FROM \($0) ORDER BY 1")}
+        for _ in 0..<2 {
+            _=try VehicleEventQueue(directory:v4dir)
+            let after=try tables.map {try migrationRows(v4dir,"SELECT * FROM \($0) ORDER BY 1")}
+            precondition(before == after)
+        }
+        print("PASS: independent SQLite v4-v5 fixture, events, recovery/reconciliation payloads, mappings and acknowledgments preserved")
+        let network=try SyncFixture(root:root.appendingPathComponent("metadata-network")); try await network.start()
+        let nt=try await network.take(); await network.coordinator.wake()
+        await network.coordinator.receive(network.transport.finish(1,body:accepted))
+        let probe=MetadataProbe(); network.metadataTransport=probe; try network.restoreCoordinator()
+        await network.coordinator.wake() // Returns while the metadata response is suspended.
+        for _ in 0..<10000 { if probe.completion != nil { break }; await Task.yield() }
+        precondition(probe.requests.count == 1 && probe.completion != nil)
+        let nr=try await network.queue.recordShortcut(network.context,vehicle:nt.vehicle,kind:.returning,time:network.clock,
+            location:.init(latitude:32,longitude:34,accuracy:10,measuredAt:network.clock))
+        precondition(nr.takeID == nt.id)
+        let continuation=probe.completion; probe.completion=nil
+        continuation?.resume(throwing:AuthFailure.network)
+        for _ in 0..<100 { await Task.yield() }
+        let saved=try await network.queue.records(network.context)
+        precondition(saved.map(\.event) == [nt,nr])
+        await network.coordinator.wake()
+        for _ in 0..<10000 { if probe.completion != nil { break }; await Task.yield() }
+        precondition(probe.requests.count == 2)
+        network.coordinator.fence()
+        probe.completion?.resume(throwing:CancellationError()); probe.completion=nil
+        print("PASS: actual sync wake never waits for metadata; failed refresh preserves evidence and lifecycle wake retries")
     }
 
 }

@@ -7,6 +7,7 @@ import subprocess
 import unittest
 
 import yaml
+from component_scope import classify
 
 
 ROOT = Path(__file__).resolve().parent
@@ -37,8 +38,8 @@ class WorkflowChecks(unittest.TestCase):
         for name, workflow in self.workflows.items():
             with self.subTest(workflow=name):
                 self.assertEqual(set(workflow['on']), {'push', 'pull_request', 'workflow_dispatch'})
-                self.assertEqual(workflow['on']['push']['branches'], ['develop', 'main'] if name == 'ios' else ['develop'])
-                self.assertEqual(workflow['on']['pull_request']['branches'], ['main'])
+                self.assertEqual(workflow['on']['push']['branches'], ['develop', 'main'])
+                self.assertEqual(workflow['on']['pull_request']['branches'], ['develop', 'main'])
                 self.assertNotIn('paths', workflow['on']['pull_request'])
                 self.assertNotIn('closed', workflow['on']['pull_request']['types'])
                 self.assertEqual(workflow['permissions'], {'contents': 'read'})
@@ -73,9 +74,10 @@ class WorkflowChecks(unittest.TestCase):
                 context = {'github': {'event_name': event, 'ref': 'refs/heads/' + branch,
                                      'repository': 'michaelS1305/family-car-agent', 'base_ref': base,
                                      'event': {'pull_request': {'draft': draft, 'head': {'repo': {'full_name': 'michaelS1305/family-car-agent' if source == 'repo' else source}, 'ref': head}}}},
+                           'needs': {'scope': {'outputs': {'android_release': 'true', 'ios_release': 'true'}}},
                            'vars': {'FCA_PROD_SIGN_ENABLED': 'true' if enabled else ''}, 'inputs': {flag: manual}}
                 with self.subTest(workflow=name, event=event, head=head, enabled=enabled, source=source, draft=draft):
-                    self.assertEqual(evaluate(expression, context), expected or (name == 'ios' and event == 'push' and branch == 'main' and enabled))
+                    self.assertEqual(evaluate(expression, context), expected or (event == 'push' and branch == 'main' and enabled))
 
     def test_testflight_only_uploads_successful_main_artifact(self):
         jobs = self.workflows['ios']['jobs']
@@ -105,7 +107,7 @@ class WorkflowChecks(unittest.TestCase):
             ('ios', 'ios', 'signed_production_ipa', 'ios-production-signing'),
         ]:
             jobs = self.workflows[name]['jobs']
-            self.assertEqual(jobs[signing]['needs'], validation)
+            self.assertEqual(jobs[signing]['needs'], ['scope', validation])
             self.assertEqual(jobs[signing]['environment'], environment)
             gate = jobs['required']
             self.assertEqual(gate['if'], 'always()')
@@ -155,10 +157,10 @@ class WorkflowChecks(unittest.TestCase):
                                           ('ios', 'VALIDATION', 'PRODUCTION_SIGNING')]:
             script = self.workflows[name]['jobs']['required']['steps'][0]['run']
             for result in ('success', 'skipped', 'failure', 'cancelled'):
-                env = dict(os.environ, PRODUCTION='true', SCOPE_RESULT='success', RUN_IOS='true', **{validation: 'success', signing: result})
+                env = dict(os.environ, PRODUCTION='true', SCOPE_RESULT='success', VALIDATE='true', RELEASE='true', DEVELOPMENT_SIGNING='skipped', **{validation: 'success', signing: result})
                 code = subprocess.run(['bash', '-c', script], env=env, capture_output=True).returncode
                 self.assertEqual(code == 0, result == 'success')
-            env = dict(os.environ, PRODUCTION='true', SCOPE_RESULT='success', RUN_IOS='true', **{validation: 'failure', signing: 'success'})
+            env = dict(os.environ, PRODUCTION='true', SCOPE_RESULT='success', VALIDATE='true', RELEASE='true', DEVELOPMENT_SIGNING='skipped', **{validation: 'failure', signing: 'success'})
             self.assertNotEqual(subprocess.run(['bash', '-c', script], env=env, capture_output=True).returncode, 0)
 
     def test_dev_signing_is_automatic_but_never_on_pr(self):
@@ -171,10 +173,134 @@ class WorkflowChecks(unittest.TestCase):
             ('workflow_dispatch', 'refs/heads/develop', True, True, False, True),
             ('workflow_dispatch', 'refs/heads/develop', True, True, True, False),
         ]:
-            context = {'github': {'ref': ref, 'event_name': event},
+            context = {'needs': {'scope': {'outputs': {'ios_release': 'true'}}},
+                       'github': {'ref': ref, 'event_name': event},
                        'vars': {'FCA_DEV_SIGN_ENABLED': 'true' if enabled else ''},
                        'inputs': {'build_signed_ipa': requested, 'build_production_ipa': production}}
             self.assertEqual(evaluate(expression, context), expected)
+
+    def test_scope_job_complete_diff_and_policy_checks(self):
+        for name, workflow in self.workflows.items():
+            self.assertNotIn('paths', workflow['on']['push'])
+            scope = workflow['jobs']['scope']
+            self.assertEqual(scope['steps'][0]['with']['fetch-depth'], '0')
+            self.assertIn('python3 .github/component_scope.py', str(scope))
+            self.assertIn('python3 .github/test_component_scope.py', str(scope))
+            self.assertIn('python3 .github/check_workflows.py', str(scope))
+            self.assertIn(name + '_validation', scope['outputs'])
+            self.assertIn(name + '_release', scope['outputs'])
+
+    def test_required_scope_states(self):
+        for name in ('android', 'ios', 'backend', 'web'):
+            job = self.workflows[name]['jobs']['required' if name in ('android', 'ios') else name]
+            script = job['steps'][0]['run']
+            for scope, validate, validation, release, signing, expected in [
+                ('success', 'false', 'skipped', 'false', 'skipped', True),
+                ('success', 'true', 'success', 'false', 'skipped', True),
+                ('success', 'true', 'failure', 'false', 'skipped', False),
+                ('success', 'true', 'cancelled', 'false', 'skipped', False),
+                ('success', 'true', 'skipped', 'false', 'skipped', False),
+                ('failure', 'false', 'skipped', 'false', 'skipped', False),
+                ('cancelled', 'false', 'skipped', 'false', 'skipped', False),
+                ('success', '', 'skipped', 'false', 'skipped', False),
+                ('success', 'false', 'failure', 'false', 'skipped', False),
+            ]:
+                env = dict(os.environ, SCOPE_RESULT=scope, VALIDATE=validate, VALIDATION=validation,
+                           RELEASE=release, PRODUCTION='true', SIGNING=signing, PRODUCTION_SIGNING=signing, DEVELOPMENT_SIGNING='skipped')
+                self.assertEqual(subprocess.run(['bash', '-c', script], env=env, capture_output=True).returncode == 0, expected)
+
+    def test_unaffected_signing_never_runs(self):
+        for name, signing in [('android', 'production-release'), ('ios', 'signed_production_ipa')]:
+            context = {'needs': {'scope': {'outputs': {name + '_release': 'false'}}},
+                       'vars': {'FCA_PROD_SIGN_ENABLED': 'true'},
+                       'github': {'event_name': 'push', 'ref': 'refs/heads/main',
+                                  'repository': 'michaelS1305/family-car-agent'}}
+            self.assertFalse(evaluate(self.workflows[name]['jobs'][signing]['if'], context))
+
+    def test_dependency_caches_and_retries(self):
+        jobs = self.workflows['android']['jobs']
+        for name in ('android', 'production-release'):
+            java = next(s for s in jobs[name]['steps'] if s.get('uses') == 'actions/setup-java@v5')
+            self.assertEqual(java['with']['cache'], 'gradle')
+            self.assertIn('android/gradle/wrapper/gradle-wrapper.properties', java['with']['cache-dependency-path'])
+        for job in jobs.values():
+            for step in job['steps']:
+                self.assertNotIn('.m2', str(step.get('with', {}).get('path', '')))
+                self.assertFalse(step.get('uses', '').startswith('actions/cache@'))
+        self.assertEqual(str(jobs['android']).count('android_gradle_retry.py'), 2)
+
+    def test_manual_upload_workflow_syntax(self):
+        # Upload-only changes still receive local syntax validation, never an upload/build.
+        workflow = yaml.load((ROOT / 'workflows/ios-testflight-manual.yml').read_text(), Loader=yaml.BaseLoader)
+        self.assertEqual(set(workflow['on']), {'workflow_dispatch'})
+        for job in workflow['jobs'].values():
+            for step in job.get('steps', []):
+                if 'run' in step:
+                    subprocess.run(['bash', '-n'], input=step['run'], text=True, check=True, capture_output=True)
+
+    def test_main_signing_rejects_other_repository(self):
+        for name, signing in [('android','production-release'), ('ios','signed_production_ipa')]:
+            context={'github': {'event_name':'push','ref':'refs/heads/main','repository':'untrusted/fork'},
+                     'vars': {'FCA_PROD_SIGN_ENABLED':'true'},
+                     'needs': {'scope': {'outputs': {name+'_release':'true'}}}}
+            self.assertFalse(evaluate(self.workflows[name]['jobs'][signing]['if'],context))
+
+    def test_unexpected_signing_failure_never_passes_noop(self):
+        for name, variable in [('android','SIGNING'),('ios','PRODUCTION_SIGNING'),('ios','DEVELOPMENT_SIGNING')]:
+            script=self.workflows[name]['jobs']['required']['steps'][0]['run']
+            for result in ('failure','cancelled',''):
+                env=dict(os.environ,SCOPE_RESULT='success',VALIDATE='false',VALIDATION='skipped',RELEASE='false',
+                         PRODUCTION='true',SIGNING='skipped',PRODUCTION_SIGNING='skipped',DEVELOPMENT_SIGNING='skipped')
+                env[variable]=result
+                self.assertNotEqual(subprocess.run(['bash','-c',script],env=env,capture_output=True).returncode,0)
+
+    def test_upload_only_scope_to_required_checks_and_no_upload(self):
+        scope=classify(['.github/workflows/ios-testflight-manual.yml'])
+        outputs={f'{c}_{field}':str(state[field]).lower() for c,state in scope.items()
+                 for field in ('validation','release')}
+        for event, ref, base in [('push','refs/heads/main',''), ('push','refs/heads/develop',''),
+                                 ('pull_request','refs/pull/1/merge','main'),
+                                 ('pull_request','refs/pull/1/merge','develop')]:
+            context={'github': {'event_name':event,'ref':ref,'base_ref':base,
+                               'repository':'michaelS1305/family-car-agent',
+                               'event':{'pull_request':{'draft':False,'head':{'ref':'develop',
+                                        'repo':{'full_name':'michaelS1305/family-car-agent'}}}}},
+                     'vars':{'FCA_PROD_SIGN_ENABLED':'true','FCA_DEV_SIGN_ENABLED':'true',
+                             'FCA_TESTFLIGHT_UPLOAD_ENABLED':'true'},
+                     'needs':{'scope':{'result':'success','outputs':outputs}}}
+            for c in ('android','ios','backend','web'):
+                jobs=self.workflows[c]['jobs']
+                validation=c if c in ('android','ios') else c+'_validation'
+                self.assertFalse(evaluate(jobs[validation]['if'],context))
+                for signing in ({'android':['production-release'],
+                                  'ios':['signed_dev_ipa','signed_production_ipa']}.get(c,[])):
+                    self.assertFalse(evaluate(jobs[signing]['if'],context))
+                gate=jobs['required' if c in ('android','ios') else c]['steps'][0]['run']
+                env=dict(os.environ,SCOPE_RESULT='success',VALIDATE=outputs[c+'_validation'],
+                         RELEASE=outputs[c+'_release'],VALIDATION='skipped',SIGNING='skipped',
+                         PRODUCTION_SIGNING='skipped',DEVELOPMENT_SIGNING='skipped',
+                         PRODUCTION=str(base=='main' or ref=='refs/heads/main').lower())
+                self.assertEqual(subprocess.run(['bash','-c',gate],env=env,capture_output=True).returncode,0)
+            context['needs'].update({'ios':{'result':'skipped'},'signed_production_ipa':{'result':'skipped'},
+                                     'required':{'result':'success'}})
+            self.assertFalse(evaluate(self.workflows['ios']['jobs']['testflight']['if'],context))
+
+    def test_verified_runtime_precedes_tests_and_reports_survive_failure(self):
+        steps=self.workflows['android']['jobs']['android']['steps']
+        prepare=next(i for i,s in enumerate(steps) if s.get('name')=='Prepare verified Robolectric SDK runtimes')
+        for i,step in enumerate(steps):
+            if 'android_gradle_retry.py' in step.get('run',''):
+                self.assertLess(prepare,i)
+                self.assertIn('--init-script ../.github/robolectric-offline.init.gradle',step['run'])
+                self.assertIn('--info',step['run'])
+                self.assertNotIn('continue-on-error',step)
+        self.assertNotIn('runner.temp', str(self.workflows['android']['jobs']['android'].get('env', {})))
+        self.assertIn('$RUNNER_TEMP/fca-robolectric-runtime', steps[prepare]['run'])
+        self.assertIn('$GITHUB_ENV', steps[prepare]['run'])
+        reports=next(s for s in steps if s.get('name')=='Preserve Android test reports')
+        self.assertEqual(reports['if'],'always()')
+        self.assertIn('test-results/**/TEST-*.xml',reports['with']['path'])
+        self.assertIn('reports/tests/**',reports['with']['path'])
 
 
 if __name__ == '__main__':

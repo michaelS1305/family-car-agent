@@ -190,11 +190,20 @@ private struct VehicleDetailsEditor: View {
                     }
                     if sheet == .maintenance, let id = model.maintenanceID {
                         if model.maintenance.contains(where: { $0.id == id && !$0.completed }) {
-                            Button("סימון הטיפול כבוצע", action: model.complete).disabled(!model.canWrite)
+                            Button(action: model.complete) {
+                                Label("סימון הטיפול כבוצע", systemImage: "checkmark.circle")
+                            }.buttonStyle(MaintenanceActionStyle()).disabled(!model.canWrite)
                         } else { Text("הטיפול בוצע") }
-                        Button("מחיקת טיפול", role: .destructive) { model.requestDelete(); showDelete = model.deleteConfirmation }.disabled(!model.canWrite)
+                        Button(role: .destructive) { model.requestDelete(); showDelete = model.deleteConfirmation } label: {
+                            Label("מחיקת טיפול", systemImage: "trash")
+                        }.buttonStyle(MaintenanceActionStyle(destructive: true)).disabled(!model.canWrite)
                     }
-                    Button(sheet == .connection ? "סגירה" : "ביטול", action: model.close).disabled(model.busy).frame(maxWidth: .infinity, minHeight: 44)
+                    if sheet == .maintenance, model.maintenanceID != nil {
+                        Button("ביטול", action: model.close)
+                            .buttonStyle(MaintenanceActionStyle(neutral: true)).disabled(model.busy)
+                    } else {
+                        Button(sheet == .connection ? "סגירה" : "ביטול", action: model.close).disabled(model.busy).frame(maxWidth: .infinity, minHeight: 44)
+                    }
                 }.padding(20)
             }
         }.scrollDismissesKeyboard(.interactively).modifier(VehiclesAppearance())
@@ -258,5 +267,26 @@ private struct VehicleDetailsEditor: View {
             }
             field("דגם", value: binding(\.model), focus: .model); field("מספר רכב", value: binding(\.plate), focus: .plate)
         }
+    }
+}
+
+/// Scoped to the maintenance editor; shared colors and the existing Save corner radius.
+private struct MaintenanceActionStyle: ButtonStyle {
+    var destructive = false
+    var neutral = false
+    @Environment(\.isEnabled) private var enabled
+    private var foreground: Color {
+        FCAColors.color(neutral ? .text : destructive ? .error : .secondaryAction)
+    }
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(.body).multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 50)
+            .foregroundStyle(foreground)
+            .background(neutral ? FCAColors.color(.elevated) : .clear, in: RoundedRectangle(cornerRadius: 20))
+            .overlay(RoundedRectangle(cornerRadius: 20).stroke(neutral ? .clear : foreground, lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 20))
+            .opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
     }
 }
