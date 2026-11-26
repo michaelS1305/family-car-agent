@@ -27,7 +27,7 @@ assert 'notificationsEnabled = settings.authorizationStatus == .authorized' in s
 assert '.authorizedWhenInUse' not in screen and '.provisional' not in screen and '.ephemeral' not in screen
 assert 'UIApplication.openSettingsURLString' in screen
 assert 'openURL(url) { accepted in settingsOpenFailed = !accepted }' in screen
-assert 'permissionRow("מיקום", icon: "location", enabled: nil)' in screen
+assert 'permissionRow("מיקום", icon: "location", enabled: locationPermission.ready)' in screen
 assert 'enabled: Bool?' in screen and 'permission: enabled' in screen
 assert 'if let permission {' in screen
 assert 'permissionRow("התראות", icon: "bell", enabled: notificationsEnabled)' in screen
@@ -82,3 +82,6 @@ assert '"/api/account/deletion", "/api/account/deletion/preview"' in api
 assert 'method: fields == nil ? "GET" : "POST"' in api
 assert 'forHTTPHeaderField: "Authorization"' in api
 print('PASS: existing Push preparation precedes durable fence and POST; existing authenticated transport reused')
+
+assert "Text(locationPermission.detail)" not in screen
+assert "locationPermission.refresh()" in screen
