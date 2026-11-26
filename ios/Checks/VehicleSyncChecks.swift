@@ -153,6 +153,16 @@ private actor SyncSessionExchange: AuthTransport {
     }
 }
 
+// Blocking semaphore waits belong to a dedicated OS thread, not Swift's async executor.
+private func awaitNativeTestSignal(_ signal: DispatchSemaphore) async {
+    await withCheckedContinuation { continuation in
+        Thread.detachNewThread {
+            signal.wait()
+            continuation.resume()
+        }
+    }
+}
+
 // A real independent SQLite connection holds the write lock on an OS thread.
 private final class HeldNativeWriteLock: @unchecked Sendable {
     private let release = DispatchSemaphore(value: 0)
@@ -1136,7 +1146,7 @@ private final class HeldNativeWriteLock: @unchecked Sendable {
                 started.signal()
                 return try await writer.commitReturn(p, location:.init(latitude:32,longitude:34,accuracy:10,measuredAt:measured), permit:VehicleRecordingPermit())
             }
-            started.wait()
+            await awaitNativeTestSignal(started)
             try await Task.sleep(for:.seconds(1.5))
             let released = Date(); lock.unlock()
             if expired {
@@ -1164,7 +1174,7 @@ private final class HeldNativeWriteLock: @unchecked Sendable {
             }
         }
         let first = contender(one), second = contender(two)
-        started.wait(); started.wait()
+        await awaitNativeTestSignal(started); await awaitNativeTestSignal(started)
         try await Task.sleep(for:.milliseconds(250)); lock.unlock()
         let wins = try await [first.value,second.value].filter { $0 }.count
         precondition(wins == 1)
