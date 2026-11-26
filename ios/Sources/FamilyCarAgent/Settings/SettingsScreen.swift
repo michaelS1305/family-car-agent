@@ -85,7 +85,6 @@ struct SettingsScreen: View {
                     }
                     SettingsCard(title: "הרשאות") {
                         permissionRow("מיקום", icon: "location", enabled: locationPermission.ready)
-                        Text(locationPermission.detail).font(.caption).foregroundStyle(SettingsPalette.secondary)
                         Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
                         permissionRow("התראות", icon: "bell", enabled: notificationsEnabled)
                         Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
