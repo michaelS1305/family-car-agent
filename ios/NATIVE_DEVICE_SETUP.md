@@ -63,8 +63,8 @@ permit. Refresh remains GET-only; activation is the only binding PUT path.
 3. Relaunch offline; verify both entities and previously saved selections resolve.
    Change the connection method and verify pending events remain intact.
 4. CarPlay: create user-owned Connects/Disconnects automations, Run Immediately.
-   Connects uses Take Vehicle. Disconnects uses Get Current Location then Return
-   Vehicle with that output, both selecting this exact vehicle.
+   Connects uses Take Vehicle. Disconnects uses Return Vehicle with only the
+   Vehicle selected; FCA acquires location itself.
 5. Bluetooth: select the actual paired car for the connection automation. Use a
    regular manually run shortcut for RETURN; no disconnect trigger is assumed.
 6. With an explicitly approved Dev test vehicle, queue TAKE offline, then RETURN

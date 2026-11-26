@@ -153,6 +153,38 @@ private actor SyncSessionExchange: AuthTransport {
     }
 }
 
+// Blocking semaphore waits belong to a dedicated OS thread, not Swift's async executor.
+private func awaitNativeTestSignal(_ signal: DispatchSemaphore) async {
+    await withCheckedContinuation { continuation in
+        Thread.detachNewThread {
+            signal.wait()
+            continuation.resume()
+        }
+    }
+}
+
+// A real independent SQLite connection holds the write lock on an OS thread.
+private final class HeldNativeWriteLock: @unchecked Sendable {
+    private let release = DispatchSemaphore(value: 0)
+    private let finished = DispatchSemaphore(value: 0)
+    init(_ directory: URL) {
+        let ready = DispatchSemaphore(value: 0)
+        let path = directory.appendingPathComponent("vehicle-events.sqlite").path
+        Thread.detachNewThread { [self] in
+            var db: OpaquePointer?
+            precondition(sqlite3_open(path, &db) == SQLITE_OK)
+            precondition(sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK)
+            ready.signal()
+            release.wait()
+            precondition(sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK)
+            sqlite3_close_v2(db)
+            finished.signal()
+        }
+        ready.wait()
+    }
+    func unlock() { release.signal(); finished.wait() }
+}
+
 @main struct VehicleSyncChecks {
     @MainActor static func main() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("fca-sync-check-" + UUID().uuidString)
@@ -161,6 +193,47 @@ private actor SyncSessionExchange: AuthTransport {
             let f = try SyncFixture(root: root.appendingPathComponent(UUID().uuidString))
             try await f.start(); return f
         }
+        try await nativeReturnSemanticChecks(root: root)
+        // Native acquisition wait is simulated between read-only preparation and atomic commit.
+        let native = try await fixture()
+        native.namespace = UUID()
+        let nativeTake = try await native.take()
+        let nativePermit = VehicleRecordingPermit()
+        let preparation = try await native.queue.prepareReturn(native.context, vehicle: nativeTake.vehicle, namespace: native.namespace!)
+        let beforeWait = try await native.queue.records(native.context)
+        precondition(beforeWait.map(\.event) == [nativeTake])
+        let decision = native.clock.addingTimeInterval(12)
+        let evidence = VehicleLocationEvidence(latitude: 32, longitude: 34, accuracy: 10, measuredAt: native.clock.addingTimeInterval(10))
+        let nativeReturn = try await native.queue.commitReturn(preparation, time: decision, location: evidence, permit: nativePermit)
+        precondition(nativeReturn.sequence == 2 && nativeReturn.takeID == nativeTake.id)
+        precondition(nativeReturn.occurredAt == decision && nativeReturn.location == evidence)
+        // A second process holding the same old snapshot cannot insert a duplicate.
+        let secondWriter = try VehicleEventQueue(directory: native.root.appendingPathComponent("db"))
+        do {
+            _ = try await secondWriter.commitReturn(preparation, time: decision, location: evidence, permit: nativePermit)
+            preconditionFailure("Concurrent RETURN must not allocate a sequence")
+        } catch { }
+        let nextTake = try await native.queue.recordShortcut(native.context, vehicle: nativeTake.vehicle, kind: .take, time: decision, location: nil)
+        precondition(nextTake.sequence == 3)
+        do {
+            _ = try await secondWriter.commitReturn(preparation, time: decision, location: evidence, permit: nativePermit)
+            preconditionFailure("Delayed RETURN must not close a different TAKE")
+        } catch { }
+        let nextPreparation = try await native.queue.prepareReturn(native.context, vehicle: nativeTake.vehicle, namespace: native.namespace!)
+        do {
+            _ = try await native.queue.commitReturn(nextPreparation, time: decision.addingTimeInterval(31), location: evidence, permit: nativePermit)
+            preconditionFailure("Evidence must be fresh at the final recording time")
+        } catch { }
+        let unchanged = try await native.queue.records(native.context)
+        precondition(unchanged.map(\.event) == [nativeTake,nativeReturn,nextTake])
+        try VehicleEventQueue.revokeAuthorization(directory: native.root.appendingPathComponent("db"), context: native.context)
+        do {
+            _ = try await native.queue.commitReturn(nextPreparation, time: decision, location: evidence, permit: nativePermit)
+            preconditionFailure("Revoked cross-process context must not record")
+        } catch { }
+        let afterRevocation = try await native.queue.records(native.context)
+        precondition(afterRevocation.map(\.event) == unchanged.map(\.event))
+        print("PASS: native RETURN preparation, final timestamps, concurrent writers, changed TAKE, freshness and revocation")
         let accepted = #"{"kind":"accepted","admission_outcome":"accepted","transition":"redundant_take"}"#
         let duplicate = #"{"kind":"retry","admission_outcome":"accepted"}"#
         let terminal = #"{"kind":"terminal","admission_outcome":"vehicle_retired"}"#
@@ -998,6 +1071,117 @@ private actor SyncSessionExchange: AuthTransport {
         print("PASS: expiry requires explicit fresh evidence; retryable/permanent Shortcut message classification")
     }
 
+
+    @MainActor private static func nativeReturnSemanticChecks(root: URL) async throws {
+        func fixture() async throws -> (SyncFixture, QueuedVehicleEvent) {
+            let f = try SyncFixture(root: root.appendingPathComponent(UUID().uuidString))
+            try await f.start(); f.namespace = UUID(); f.clock = Date().addingTimeInterval(-60)
+            return (f, try await f.take())
+        }
+        func prepare(_ f: SyncFixture, _ take: QueuedVehicleEvent) async throws -> VehicleReturnPreparation {
+            try await f.queue.prepareReturn(f.context, vehicle: take.vehicle, namespace: f.namespace!)
+        }
+        func commit(_ f: SyncFixture, _ p: VehicleReturnPreparation) async throws -> QueuedVehicleEvent {
+            try await f.queue.commitReturn(p, location: .init(latitude: 32, longitude: 34, accuracy: 10, measuredAt: Date()), permit: VehicleRecordingPermit())
+        }
+        func metadata(_ f: SyncFixture, _ take: QueuedVehicleEvent, anchor: UUID, session: UUID, closed: Bool = false, revision: Int64 = 1) async throws {
+            let all = try await f.queue.metadataBatch(f.context)!
+            let batch = TakeMetadataBatch(request: .init(request_id: UUID(), takes: all.request.takes.filter { $0.event_id == take.id }), authorization: all.authorization)
+            let item = TakeSessionMetadata(event_id: take.id, device_sequence: take.sequence, vehicle_ref: take.vehicle,
+                status: "accepted", anchor_event_id: anchor, session_ref: session, session_state: closed ? "closed" : "open",
+                closed_at: closed ? "2026-11-24T00:00:00Z" : nil, closure_kind: closed ? "return" : nil,
+                reconciliation_operation_id: nil, finality: "provisional")
+            try await f.queue.applyMetadata(f.context, batch: batch, snapshot: .init(request_id: batch.request.request_id,
+                device_ref: f.context.device, projection_revision: revision, last_processed_sequence: 100,
+                observed_at: "2026-11-24T00:00:0\(revision)Z", items: [item]))
+        }
+        let accepted = #"{"kind":"accepted","admission_outcome":"accepted"}"#
+        for finish in [false, true] {
+            let (f,t) = try await fixture(); let p = try await prepare(f,t)
+            await f.coordinator.wake()
+            if finish { await f.coordinator.receive(f.transport.finish(1,body:accepted)) }
+            let r = try await commit(f,p)
+            precondition(r.takeID == t.id && r.sequence == 2)
+            f.coordinator.fence()
+        }
+        // Unknown -> self-anchor is safe; unknown -> another logical anchor is not.
+        for same in [true,false] {
+            let (f,t) = try await fixture(); let p = try await prepare(f,t)
+            await f.coordinator.wake(); await f.coordinator.receive(f.transport.finish(1,body:accepted))
+            try await metadata(f,t,anchor:same ? t.id : UUID(),session:UUID())
+            if same { let r = try await commit(f,p); precondition(r.takeID == t.id) }
+            else { do { _ = try await commit(f,p); preconditionFailure() } catch ShortcutQueueError.contextChanged {} }
+            f.coordinator.fence()
+        }
+        for closed in [true,false] {
+            let (f,t) = try await fixture()
+            await f.coordinator.wake(); await f.coordinator.receive(f.transport.finish(1,body:accepted))
+            let session = UUID()
+            try await metadata(f,t,anchor:t.id,session:session)
+            let p = try await prepare(f,t)
+            try await metadata(f,t,anchor:closed ? t.id : UUID(),session:session,closed:closed,revision:2)
+            do { _ = try await commit(f,p); preconditionFailure() }
+            catch ShortcutQueueError.contextChanged {} catch ShortcutQueueError.noUniqueTake {}
+            f.coordinator.fence()
+        }
+        let (unrelated,t) = try await fixture()
+        let other = try await unrelated.take()
+        await unrelated.coordinator.wake(); await unrelated.coordinator.receive(unrelated.transport.finish(1,body:accepted))
+        await unrelated.coordinator.receive(unrelated.transport.finish(2,body:accepted))
+        let p = try await prepare(unrelated,t)
+        try await metadata(unrelated,other,anchor:other.id,session:UUID())
+        try rejectionSQL(unrelated.root.appendingPathComponent("db"), "UPDATE events SET reason='nonsemantic' WHERE id='\(other.id)'")
+        let r = try await commit(unrelated,p); precondition(r.takeID == t.id)
+        unrelated.coordinator.fence()
+        print("PASS: pending/registered/accepted transitions, unrelated metadata/state, self-anchor resolution, closure and remapping")
+
+        for expired in [false,true] {
+            let (f,t) = try await fixture(); let p = try await prepare(f,t)
+            let db = f.root.appendingPathComponent("db")
+            let writer = try VehicleEventQueue(directory:db)
+            let lock = HeldNativeWriteLock(db)
+            let started = DispatchSemaphore(value:0)
+            let measured = Date().addingTimeInterval(expired ? -29 : 0)
+            let task = Task.detached {
+                started.signal()
+                return try await writer.commitReturn(p, location:.init(latitude:32,longitude:34,accuracy:10,measuredAt:measured), permit:VehicleRecordingPermit())
+            }
+            await awaitNativeTestSignal(started)
+            try await Task.sleep(for:.seconds(1.5))
+            let released = Date(); lock.unlock()
+            if expired {
+                do { _ = try await task.value; preconditionFailure("Expired lock-wait evidence accepted") } catch ShortcutQueueError.location {}
+                let rows = try await f.queue.records(f.context); precondition(rows.map(\.event) == [t])
+                let retry = try await commit(f,p); precondition(retry.sequence == 2)
+            } else {
+                let result = try await task.value
+                precondition(result.occurredAt >= released && result.location?.measuredAt == measured)
+                precondition(result.sequence == 2)
+            }
+        }
+        let (race,take) = try await fixture(); let prepared = try await prepare(race,take)
+        let dir = race.root.appendingPathComponent("db")
+        let one = try VehicleEventQueue(directory:dir), two = try VehicleEventQueue(directory:dir)
+        let lock = HeldNativeWriteLock(dir)
+        let started = DispatchSemaphore(value:0)
+        let evidence = VehicleLocationEvidence(latitude:32,longitude:34,accuracy:10,measuredAt:Date())
+        func contender(_ queue:VehicleEventQueue) -> Task<Bool, Error> {
+            Task.detached {
+                started.signal()
+                do { _ = try await queue.commitReturn(prepared,location:evidence,permit:VehicleRecordingPermit()); return true }
+                catch ShortcutQueueError.noUniqueTake { return false }
+                catch ShortcutQueueError.contextChanged { return false }
+            }
+        }
+        let first = contender(one), second = contender(two)
+        await awaitNativeTestSignal(started); await awaitNativeTestSignal(started)
+        try await Task.sleep(for:.milliseconds(250)); lock.unlock()
+        let wins = try await [first.value,second.value].filter { $0 }.count
+        precondition(wins == 1)
+        let rows = try await race.queue.records(race.context)
+        precondition(rows.count == 2 && rows[1].event.takeID == take.id && rows.map { $0.event.sequence } == [1,2])
+        print("PASS: real SQLite write contention, production clock, expiry rollback and competing RETURN transactions")
+    }
 
     @MainActor private static func metadataChecks(root: URL) async throws {
         let f=try SyncFixture(root:root.appendingPathComponent("session-metadata")); try await f.start()

@@ -228,12 +228,12 @@ The queue pairs a shortcut RETURN with exactly one unmatched, non-terminal TAKE
 for the same vehicle in the same partition, inside the sequence-allocation
 transaction. A duplicate TAKE, ambiguous/missing cause, or unusable position
 does not allocate a sequence. Success in Shortcuts means persisted locally.
-The optional Current Location parameter is a CLPlacemark. A provenance-bearing
-CLLocation with its own accuracy and timestamp can supply evidence; otherwise
-FCA checks its already-authorized Core Location cached fix. Neither path requests
-permission in the background. A fix outside the existing 30-second/100-metre
-contract is unusable. Shortcuts retaining measurement metadata while locked
-requires physical verification.
+RETURN now has only a Vehicle parameter. FCA actively acquires a native fix with
+When In Use authorization, a 15-second monotonic deadline and immediate cleanup.
+The original 30-second/100-metre evidence rules remain unchanged. Permission is
+requested in foreground after notification authorization, never by the Intent.
+The intended local context/session is captured before acquisition and checked
+again inside the SQLite recording transaction. See NATIVE_RETURN_LOCATION.md.
 
 For device discovery, build the real app with the Xcode wrapper (generate and
 verify without --probe). The Linux xtool build compiles the actions but lacks
@@ -274,8 +274,8 @@ USBMUXD_SOCKET_ADDRESS=127.0.0.1:27015 /usr/bin/ideviceinstaller -i /mnt/c/Users
 ```
 
 Launch FCA Dev once. In Shortcuts create a new ordinary shortcut, search for
-each exact action title, and inspect the Vehicle picker. For RETURN, insert Get
-Current Location before the FCA action and pass its output to Current Location.
+each exact action title, and inspect the Vehicle picker. For RETURN, select only
+the Vehicle. Do not add a Current Location action or parameter.
 Remove the test shortcut afterward if desired. Without a verified device/binding
 setup the picker must be empty. Do not run bound actions against a live family
 until explicitly approved. Discovery, locked execution and real location evidence

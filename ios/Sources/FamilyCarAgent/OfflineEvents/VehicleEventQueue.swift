@@ -21,7 +21,7 @@ struct VehicleQueueContext: Equatable, Sendable {
     }
 }
 
-enum ShortcutQueueError: Error { case location, alreadyTaken, noUniqueTake, legacyReturn, recoveryBlocked, locationExpired, retryStored }
+enum ShortcutQueueError: Error { case contextChanged, location, alreadyTaken, noUniqueTake, legacyReturn, recoveryBlocked, locationExpired, retryStored }
 
 enum ReturnRecoveryPolicy {
     static func shortcutFailure(_ task: VehicleRecoveryRecord) -> ShortcutQueueError? {
@@ -125,6 +125,35 @@ struct QueuedVehicleEvent: Codable, Equatable, Sendable {
     let kind: Kind
     let takeID: UUID?
     let location: VehicleLocationEvidence?
+}
+
+struct VehicleReturnPreparation: Sendable, Equatable {
+    let context: VehicleQueueContext
+    let vehicle: UUID
+    let namespace: UUID
+    fileprivate let snapshot: VehicleReturnIdentity
+}
+
+fileprivate struct VehicleReturnIdentity: Sendable, Equatable {
+    let authorization: [String?]
+    let take: QueuedVehicleEvent
+    let anchor: UUID?
+    let session: UUID?
+    let rejectedReturn: QueuedVehicleEvent?
+    let rejection: String?
+    let recoveryEligibility: String
+
+    func permits(_ current: Self) -> Bool {
+        guard authorization == current.authorization, take == current.take,
+              rejectedReturn == current.rejectedReturn, rejection == current.rejection,
+              recoveryEligibility == current.recoveryEligibility else { return false }
+        if let anchor {
+            return current.anchor == anchor && current.session == session
+        }
+        // Newly resolved self-anchor proves the original TAKE remains the session's
+        // cause. Mapping an unknown TAKE to some older session is not that proof.
+        return current.anchor == nil || current.anchor == take.id
+    }
 }
 
 struct VehicleQueueRecord: Sendable {
@@ -304,17 +333,117 @@ actor VehicleEventQueue {
                            location: location, shortcut: kind)
     }
 
+    private func openShortcutTakes(_ context: VehicleQueueContext, vehicle: UUID) throws -> [VehicleQueueRecord] {
+        let rows = try records(context).filter { $0.event.vehicle == vehicle }
+        let paired = Set(rows.compactMap { $0.event.takeID })
+        let metadata = try currentTakeMetadata(context)
+        // A local RETURN after several accepted aliases pairs their one logical session.
+        // Never apply this to pending/uncertain TAKEs or aliases queued after that RETURN.
+        var returnedAnchors: [UUID:Int64] = [:]
+        for row in rows where row.event.kind == .returning && row.state != .terminal {
+            if let cause = row.event.takeID, let anchor = metadata[cause]?.anchor_event_id {
+                returnedAnchors[anchor] = max(returnedAnchors[anchor] ?? 0, row.event.sequence)
+            }
+        }
+        var sessions = Set<UUID>()
+        let open = rows.filter { row in
+            guard row.event.kind == .take, row.state != .terminal, !paired.contains(row.event.id) else { return false }
+            // Only this exact accepted event may use an authoritative snapshot.
+            if row.state == .accepted, let m = metadata[row.event.id] {
+                if m.session_state == "closed" { return false }
+                if let anchor = m.anchor_event_id {
+                    if let returned = returnedAnchors[anchor], returned > row.event.sequence { return false }
+                    return sessions.insert(anchor).inserted
+                }
+            }
+            return true
+        }
+        return open
+    }
+
+    private func returnSnapshot(_ context: VehicleQueueContext, vehicle: UUID, namespace: UUID) throws -> VehicleReturnIdentity {
+        try require(context)
+        try db.requireNamespace(context, namespace)
+        guard try db.authorizedVehicles(context).contains(vehicle),
+              let authorization = try db.rows("SELECT generation,state,namespace FROM authorization_scopes WHERE context=?", [context.key]).first
+        else { throw ShortcutQueueError.contextChanged }
+        let rows = try records(context).filter { $0.event.vehicle == vehicle }
+        let take: VehicleQueueRecord
+        var rejectedEvent: QueuedVehicleEvent?
+        var rejection: String?
+        var eligibility = "normal"
+        if let rejected = rows.first(where: { $0.event.kind == .returning && $0.state == .blocked }) {
+            guard rejected.reason != Failure.preAdmissionRejection.rawValue else { throw ShortcutQueueError.legacyReturn }
+            guard let reason = rejected.reason, ReturnRecoveryPolicy.homeCodes.contains(reason),
+                  try records(context).first(where: { $0.state != .accepted && $0.state != .terminal })?.event.id == rejected.event.id,
+                  let cause = rows.first(where: { $0.event.id == rejected.event.takeID && $0.event.kind == .take })
+            else { throw ShortcutQueueError.recoveryBlocked }
+            take = cause; rejectedEvent = rejected.event; rejection = reason
+            eligibility = "new_recovery"
+            if let previous = try recovery(context, event: rejected.event.id) {
+                if previous.state == .blocked {
+                    if previous.reason == "RETURN_RECOVERY_LEGACY_UNVERIFIED" { throw ShortcutQueueError.legacyReturn }
+                    let renewable = ReturnRecoveryPolicy.renewable.union(["RETURN_RECOVERY_ORDER_CONFLICT", "RETURN_RECONCILIATION_VERIFICATION_EXPIRED"])
+                    guard let reason = previous.reason, renewable.contains(reason) else { throw ShortcutQueueError.recoveryBlocked }
+                    eligibility = "renew|\(previous.id)|\(previous.reconciliation)|\(reason)"
+                } else {
+                    guard previous.state != .accepted else { throw ShortcutQueueError.contextChanged }
+                    // Transport mapping/retries do not change the immutable attempt being resumed.
+                    eligibility = "resume|\(previous.id)|\(previous.reconciliation)"
+                }
+            }
+        } else {
+            let open = try openShortcutTakes(context, vehicle: vehicle)
+            guard open.count == 1 else { throw ShortcutQueueError.noUniqueTake }
+            take = open[0]
+        }
+        guard take.state != .terminal, take.state != .blocked else { throw ShortcutQueueError.contextChanged }
+        let metadata = try currentTakeMetadata(context)
+        let m = take.state == .accepted ? metadata[take.event.id] : nil
+        guard m?.session_state != "closed" else { throw ShortcutQueueError.contextChanged }
+        return .init(authorization: authorization, take: take.event, anchor: m?.anchor_event_id,
+                     session: m?.session_ref, rejectedReturn: rejectedEvent, rejection: rejection,
+                     recoveryEligibility: eligibility)
+    }
+
+    func prepareReturn(_ context: VehicleQueueContext, vehicle: UUID, namespace: UUID) throws -> VehicleReturnPreparation {
+        try db.transaction {
+            .init(context: context, vehicle: vehicle, namespace: namespace,
+                  snapshot: try returnSnapshot(context, vehicle: vehicle, namespace: namespace))
+        }
+    }
+
+    func commitReturn(_ preparation: VehicleReturnPreparation, time: Date? = nil, location: VehicleLocationEvidence,
+                      permit: VehicleRecordingPermit) throws -> QueuedVehicleEvent {
+        try permit.record {
+            try Task.checkCancellation()
+            return try enqueue(preparation.context, id: UUID(), vehicle: preparation.vehicle, occurredAt: time ?? Date(),
+                        takeID: nil, location: location, shortcut: .returning, namespace: preparation.namespace,
+                        preparation: preparation, nativeRecordingTime: time == nil)
+        }
+    }
+
     private func enqueue(_ context: VehicleQueueContext, id: UUID, vehicle: UUID, occurredAt: Date,
-                         takeID: UUID?, location: VehicleLocationEvidence?, shortcut: QueuedVehicleEvent.Kind? = nil, namespace: UUID? = nil) throws -> QueuedVehicleEvent {
+                         takeID: UUID?, location: VehicleLocationEvidence?, shortcut: QueuedVehicleEvent.Kind? = nil, namespace: UUID? = nil, preparation: VehicleReturnPreparation? = nil, nativeRecordingTime: Bool = false) throws -> QueuedVehicleEvent {
         guard id.uuidString.split(separator: "-")[2].first == "4",
               occurredAt.timeIntervalSince1970.isFinite,
               (0...253402300799).contains(occurredAt.timeIntervalSince1970)
         else { throw VehicleQueueError.invalidInput }
-        try location?.validate(at: occurredAt)
+        do { try location?.validate(at: occurredAt) }
+        catch { if preparation != nil { throw ShortcutQueueError.location }; throw error }
         return try db.transaction {
+            // Read the final clock only after acquiring the cross-process SQLite write lock.
+            let occurredAt = nativeRecordingTime ? Date() : occurredAt
+            if preparation != nil { try Task.checkCancellation() }
+            do { try location?.validate(at: occurredAt) }
+            catch { if preparation != nil { throw ShortcutQueueError.location }; throw error }
             try require(context)
             guard try db.authorizedVehicles(context).contains(vehicle) else { throw VehicleQueueError.contextUnavailable }
             if let namespace { try db.requireNamespace(context, namespace) }
+            if let preparation {
+                guard try preparation.snapshot.permits(returnSnapshot(context, vehicle: vehicle, namespace: preparation.namespace))
+                else { throw ShortcutQueueError.contextChanged }
+            }
             var takeID = takeID
             if let shortcut {
                 let rows = try records(context).filter { $0.event.vehicle == vehicle }
@@ -342,29 +471,7 @@ actor VehicleEventQueue {
                                    [recoveryID.uuidString, rejected.event.id.uuidString, String(decoding: bytes, as: UTF8.self)])
                     return rejected.event // No sequence allocation or original evidence mutation.
                 }
-                let paired = Set(rows.compactMap { $0.event.takeID })
-                let metadata = try currentTakeMetadata(context)
-                // A local RETURN after several accepted aliases pairs their one logical session.
-                // Never apply this to pending/uncertain TAKEs or aliases queued after that RETURN.
-                var returnedAnchors: [UUID:Int64] = [:]
-                for row in rows where row.event.kind == .returning && row.state != .terminal {
-                    if let cause = row.event.takeID, let anchor = metadata[cause]?.anchor_event_id {
-                        returnedAnchors[anchor] = max(returnedAnchors[anchor] ?? 0, row.event.sequence)
-                    }
-                }
-                var sessions = Set<UUID>()
-                let open = rows.filter { row in
-                    guard row.event.kind == .take, row.state != .terminal, !paired.contains(row.event.id) else { return false }
-                    // Only this exact accepted event may use an authoritative snapshot.
-                    if row.state == .accepted, let m = metadata[row.event.id] {
-                        if m.session_state == "closed" { return false }
-                        if let anchor = m.anchor_event_id {
-                            if let returned = returnedAnchors[anchor], returned > row.event.sequence { return false }
-                            return sessions.insert(anchor).inserted
-                        }
-                    }
-                    return true
-                }
+                let open = try openShortcutTakes(context, vehicle: vehicle)
                 if shortcut == .take {
                     guard open.isEmpty else { throw ShortcutQueueError.alreadyTaken }
                 } else {

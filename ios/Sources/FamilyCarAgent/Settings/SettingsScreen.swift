@@ -13,6 +13,7 @@ struct SettingsScreen: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(AppAppearance.storageKey) private var appearancePreference = AppAppearance.system.rawValue
     private var appearance: AppAppearance { AppAppearance(storedValue: appearancePreference) }
+    @ObservedObject private var locationPermission = LocationPermissionService.shared
     @State private var notificationsEnabled = false
     @State private var showSupport = false
     @State private var publicLinkFailed = false
@@ -83,7 +84,8 @@ struct SettingsScreen: View {
                         .accessibilityLabel("תצוגה")
                     }
                     SettingsCard(title: "הרשאות") {
-                        permissionRow("מיקום", icon: "location", enabled: nil)
+                        permissionRow("מיקום", icon: "location", enabled: locationPermission.ready)
+                        Text(locationPermission.detail).font(.caption).foregroundStyle(SettingsPalette.secondary)
                         Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
                         permissionRow("התראות", icon: "bell", enabled: notificationsEnabled)
                         Divider().overlay(colorScheme == .dark ? FCAColors.color(.divider).opacity(0.65) : .clear)
@@ -146,6 +148,7 @@ struct SettingsScreen: View {
         .onChange(of: entry.chatIdentity) { _, _ in showDeleteAccount = false }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
+            locationPermission.refresh()
             let settings = await UNUserNotificationCenter.current().notificationSettings()
             guard !Task.isCancelled, scenePhase == .active else { return }
             notificationsEnabled = settings.authorizationStatus == .authorized
