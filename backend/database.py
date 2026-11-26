@@ -98,7 +98,9 @@ JOIN_SESSION_COLUMNS = """
     family_code_attempts,
     locked_until,
     created_at,
-    updated_at
+    updated_at,
+    verified_latitude, verified_longitude,
+    location_verified_at, location_verification_expires_at
 """
 
 def init_db():
@@ -1489,12 +1491,6 @@ def create_family_with_first_user(
                     if mapped_user:
                         raise AuthUserAlreadyMappedError()
 
-                if (
-                    home_latitude is not None and home_longitude is not None
-                    and _get_family_by_location(conn, home_latitude, home_longitude)
-                ):
-                    raise FamilyAlreadyExistsAtLocationError()
-
                 created_at = datetime.now().isoformat()
 
                 user_cursor = conn.execute(
@@ -1677,6 +1673,7 @@ def _get_family_by_name_and_location(
     latitude,
     longitude,
     radius_meters=50,
+    *, family_id=None,
 ):
     name_predicates = (
         ("LOWER(TRIM(name)) = LOWER(TRIM(%s))", (name,)),
@@ -1692,6 +1689,7 @@ def _get_family_by_name_and_location(
             SELECT id, name, home_address, home_latitude, home_longitude
             FROM families
             WHERE {name_predicate}
+              AND (%s::integer IS NULL OR id = %s)
               AND home_latitude IS NOT NULL
               AND home_longitude IS NOT NULL
               AND (
@@ -1712,6 +1710,7 @@ def _get_family_by_name_and_location(
             """.format(name_predicate=name_predicate),
             (
                 *name_parameters,
+                family_id, family_id,
                 latitude,
                 latitude,
                 longitude,
@@ -1833,8 +1832,6 @@ def update_family_address(
             )
             _require_address_creator(conn, auth_user_id, caller_user_id, family_id)
             home_address, home_latitude, home_longitude = payload
-            if _get_family_by_location(conn, home_latitude, home_longitude, exclude_family_id=family_id):
-                raise FamilyAlreadyExistsAtLocationError()
             updated = conn.execute(
                 """
                 UPDATE families
@@ -1874,8 +1871,45 @@ def _join_session_from_row(row, was_reset=False):
         "locked_until": row[9],
         "created_at": row[10],
         "updated_at": row[11],
+        "verified_latitude": row[12],
+        "verified_longitude": row[13],
+        "location_verified_at": row[14],
+        "location_verification_expires_at": row[15],
         "was_reset": was_reset,
     }
+
+
+def _join_location_is_current(conn, session):
+    # Separate statement after session lock acquisition, never transaction-start time.
+    if any(session.get(k) is None for k in (
+        "verified_latitude", "verified_longitude", "location_verified_at",
+        "location_verification_expires_at",
+    )):
+        return False
+    return conn.execute(
+        "SELECT %s <= clock_timestamp() AND %s > clock_timestamp()",
+        (session["location_verified_at"], session["location_verification_expires_at"]),
+    ).fetchone()[0]
+
+
+def _reset_join_address(conn, session):
+    row = conn.execute(f"""UPDATE pwa_join_sessions
+        SET step = 'address', family_id = NULL,
+            normalized_address = NULL, resolved_address = NULL,
+            verified_latitude = NULL, verified_longitude = NULL,
+            location_verified_at = NULL, location_verification_expires_at = NULL,
+            updated_at = clock_timestamp()
+        WHERE auth_user_id = %s RETURNING {JOIN_SESSION_COLUMNS}""",
+        (session["auth_user_id"],),
+    ).fetchone()
+    return _join_session_from_row(row)
+
+
+def _join_family_matches(conn, session, family_id):
+    return family_id is not None and _get_family_by_name_and_location(
+        conn, session["family_name"], session["verified_latitude"],
+        session["verified_longitude"], family_id=family_id,
+    ) is not None
 
 
 def _lock_pwa_join_session(conn, auth_user_id):
@@ -1908,6 +1942,8 @@ def _lock_pwa_join_session(conn, auth_user_id):
             family_id = NULL,
             normalized_address = NULL,
             resolved_address = NULL,
+            verified_latitude = NULL, verified_longitude = NULL,
+            location_verified_at = NULL, location_verification_expires_at = NULL,
             family_name_attempts = 0,
             address_attempts = 0,
             family_code_attempts = 0,
@@ -1944,13 +1980,40 @@ def _lock_pwa_join_session(conn, auth_user_id):
     session = _join_session_from_row(row)
     if session["step"] == "locked":
         raise JoinSessionLockedError(session["locked_until"])
+    if session["step"] in {"address_confirmed", "family_code", "user_name"}:
+        if not _join_location_is_current(conn, session):
+            # start commits this reset. Other endpoints reject their stale step;
+            # deployed clients then call start, which durably resets without
+            # changing counters. No exception is swallowed inside a transaction.
+            return _reset_join_address(conn, session)
     return session
 
 
 def start_pwa_join_session(auth_user_id):
     with pool.connection() as conn:
         with conn.transaction():
-            return _lock_pwa_join_session(conn, auth_user_id)
+            session = _lock_pwa_join_session(conn, auth_user_id)
+            if session["step"] == "user_name" and not _join_family_matches(conn, session, session["family_id"]):
+                session = _reset_join_address(conn, session)
+            conn.execute("""WITH expired AS (
+                SELECT auth_user_id FROM pwa_join_sessions
+                WHERE location_verification_expires_at <= clock_timestamp()
+                ORDER BY location_verification_expires_at LIMIT 100
+                FOR UPDATE SKIP LOCKED
+            ) UPDATE pwa_join_sessions j SET
+                step = CASE WHEN j.step IN ('address_confirmed','family_code','user_name')
+                            THEN 'address' ELSE j.step END,
+                family_id = NULL, normalized_address = NULL, resolved_address = NULL,
+                verified_latitude = NULL, verified_longitude = NULL,
+                location_verified_at = NULL, location_verification_expires_at = NULL,
+                updated_at = clock_timestamp()
+              FROM expired e WHERE j.auth_user_id = e.auth_user_id""")
+            # Cleanup may expire this session after its initial freshness check.
+            row = conn.execute(
+                f"SELECT {JOIN_SESSION_COLUMNS} FROM pwa_join_sessions WHERE auth_user_id = %s",
+                (auth_user_id,),
+            ).fetchone()
+            return _join_session_from_row(row, was_reset=session.get("was_reset", False))
 
 
 def _require_join_step(session, allowed_steps):
@@ -1976,6 +2039,8 @@ def _increment_join_failure_locked(conn, session, field):
                 family_id = NULL,
                 normalized_address = NULL,
                 resolved_address = NULL,
+                verified_latitude = NULL, verified_longitude = NULL,
+                location_verified_at = NULL, location_verification_expires_at = NULL,
                 {attempts_column} = 3,
                 locked_until = NOW() + INTERVAL '15 minutes',
                 updated_at = NOW()
@@ -2035,6 +2100,8 @@ def submit_pwa_join_family_name(auth_user_id, family_name):
                     family_id = NULL,
                     normalized_address = NULL,
                     resolved_address = NULL,
+                    verified_latitude = NULL, verified_longitude = NULL,
+                    location_verified_at = NULL, location_verification_expires_at = NULL,
                     updated_at = NOW()
                 WHERE auth_user_id = %s
                 RETURNING {JOIN_SESSION_COLUMNS}
@@ -2070,6 +2137,7 @@ def submit_pwa_join_address(
     resolved_address,
     latitude,
     longitude,
+    expected_session=None,
 ):
     with pool.connection() as conn:
         with conn.transaction():
@@ -2078,6 +2146,12 @@ def submit_pwa_join_address(
                 session,
                 {"address", "address_confirmed", "family_code"},
             )
+
+            if expected_session is not None and any(
+                session[key] != expected_session[key]
+                for key in ("step", "family_name", "created_at", "updated_at")
+            ):
+                raise InvalidJoinStepError()
 
             family = _get_family_by_name_and_location(
                 conn,
@@ -2092,19 +2166,21 @@ def submit_pwa_join_address(
                 f"""
                 UPDATE pwa_join_sessions
                 SET step = 'address_confirmed',
-                    family_name = %s,
-                    family_id = %s,
+                    family_id = NULL,
                     normalized_address = %s,
                     resolved_address = %s,
-                    updated_at = NOW()
+                    verified_latitude = %s, verified_longitude = %s,
+                    location_verified_at = proof.verified_at,
+                    location_verification_expires_at = proof.verified_at + INTERVAL '15 minutes',
+                    updated_at = clock_timestamp()
+                FROM (SELECT clock_timestamp() AS verified_at) proof
                 WHERE auth_user_id = %s
                 RETURNING {JOIN_SESSION_COLUMNS}
                 """,
                 (
-                    family[1],
-                    family[0],
                     normalized_address,
                     resolved_address,
+                    latitude, longitude,
                     auth_user_id,
                 ),
             ).fetchone()
@@ -2127,8 +2203,7 @@ def confirm_pwa_join_address(auth_user_id, confirmed):
                 next_step = "family_code"
                 family_id = session["family_id"]
             else:
-                next_step = "address"
-                family_id = None
+                return _reset_join_address(conn, session)
 
             row = conn.execute(
                 f"""
@@ -2152,19 +2227,13 @@ def verify_pwa_join_family_code(auth_user_id, family_code):
             session = _lock_pwa_join_session(conn, auth_user_id)
             _require_join_step(session, {"family_code", "user_name"})
 
-            if session["step"] == "user_name":
-                return {"success": True, "session": session}
-
-            family_matches = conn.execute(
-                """
-                SELECT 1
-                FROM families
-                WHERE id = %s
-                  AND family_code = %s
-                """,
-                (session["family_id"], family_code),
+            family = conn.execute(
+                "SELECT id FROM families WHERE family_code = %s FOR UPDATE",
+                (family_code,),
             ).fetchone()
-            if not family_matches:
+            if not _join_location_is_current(conn, session):
+                raise InvalidJoinStepError()
+            if not family or not _join_family_matches(conn, session, family[0]):
                 return _increment_join_failure_locked(
                     conn,
                     session,
@@ -2174,12 +2243,12 @@ def verify_pwa_join_family_code(auth_user_id, family_code):
             row = conn.execute(
                 f"""
                 UPDATE pwa_join_sessions
-                SET step = 'user_name',
-                    updated_at = NOW()
+                SET step = 'user_name', family_id = %s,
+                    updated_at = clock_timestamp()
                 WHERE auth_user_id = %s
                 RETURNING {JOIN_SESSION_COLUMNS}
                 """,
-                (auth_user_id,),
+                (family[0], auth_user_id),
             ).fetchone()
             return {"success": True, "session": _join_session_from_row(row)}
 
@@ -2200,10 +2269,11 @@ def complete_pwa_join(auth_user_id, user_name, *, legal_acceptance):
                 _require_join_step(session, {"user_name"})
 
                 family_exists = conn.execute(
-                    "SELECT id FROM families WHERE id = %s",
+                    "SELECT id FROM families WHERE id = %s FOR UPDATE",
                     (session["family_id"],),
                 ).fetchone()
-                if not family_exists:
+                if (not family_exists or not _join_location_is_current(conn, session)
+                        or not _join_family_matches(conn, session, session["family_id"])):
                     raise InvalidJoinStepError()
 
                 user_row = conn.execute(

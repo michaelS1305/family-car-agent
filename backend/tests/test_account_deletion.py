@@ -161,6 +161,8 @@ class AccountDeletionPostgresTests(unittest.TestCase):
         self.query(('ALTER TABLE public.users ADD CONSTRAINT' + ddl).replace('public.', self.schema + '.'))
         from tests.return_reconciliation_schema import apply
         apply(self.query, self.schema)
+        migration = (Path(__file__).resolve().parents[2] / 'supabase/manual_migrations/2026112601_join_location_verification.sql').read_text()
+        self.query(migration.replace('public.', self.schema + '.').replace('BEGIN;', '').replace('COMMIT;', ''))
         self.creator = self.person()
         self.family = self.query("INSERT INTO families(name,family_code,created_by_user_id) VALUES('family','abc123',%s) RETURNING id", (self.creator[1],))[0][0]
         self.query('UPDATE users SET family_id=%s WHERE id=%s', (self.family, self.creator[1]))
@@ -370,7 +372,8 @@ class AccountDeletionPostgresTests(unittest.TestCase):
     def test_join_completion_races_last_member_cleanup_without_orphans(self):
         joiner = str(uuid4())
         self.query('INSERT INTO auth_users VALUES(%s)', (joiner,))
-        self.query("INSERT INTO pwa_join_sessions(auth_user_id,family_id,step) VALUES(%s,%s,'user_name')", (joiner,self.family))
+        self.query('UPDATE families SET home_latitude=0,home_longitude=0 WHERE id=%s',(self.family,))
+        self.query("INSERT INTO pwa_join_sessions(auth_user_id,family_id,step,family_name,verified_latitude,verified_longitude,location_verified_at,location_verification_expires_at) VALUES(%s,%s,'user_name','family',0,0,statement_timestamp(),statement_timestamp()+INTERVAL '15 minutes')", (joiner,self.family))
         deletion.confirm(self.pool,self.creator[0])
         barrier = threading.Barrier(2)
         def join():

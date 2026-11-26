@@ -8,7 +8,6 @@ from database import (
     FamilyAlreadyExistsAtLocationError,
     FamilyCodeTakenError,
     create_family_with_first_user,
-    get_family_by_location,
     get_user_by_auth_user_id,
 )
 from geocoding_service import geocode_address
@@ -103,9 +102,6 @@ def _resolve_address(auth_user_id, home_address):
         latitude=location["latitude"],
         longitude=location["longitude"],
     )
-
-    if get_family_by_location(resolved.latitude, resolved.longitude):
-        raise FamilyCreationError("FAMILY_ALREADY_EXISTS_AT_ADDRESS", 409)
 
     return resolved
 

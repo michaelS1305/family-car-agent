@@ -283,7 +283,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         self.connection.execute.side_effect = [
             lock_cursor,
             mapped_cursor,
-            location_cursor,
             user_cursor,
             family_cursor,
             update_cursor,
@@ -332,32 +331,10 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         self.assertEqual(self.connection.execute.call_count, 2)
         self.assertTrue(self.transaction_context.rolled_back)
 
-    def test_pwa_duplicate_location_rolls_back_before_insert(self):
-        mapped_cursor = Mock(name="mapped_cursor")
-        mapped_cursor.fetchone.return_value = None
-        code_cursor = Mock(name="code_cursor")
-        code_cursor.fetchone.return_value = None
-        location_cursor = Mock(name="location_cursor")
-        location_cursor.fetchone.return_value = (9, "לוי")
-        self.connection.execute.side_effect = [
-            Mock(name="lock_cursor"),
-            mapped_cursor,
-            location_cursor,
-        ]
-
-        with self.assertRaises(database.FamilyAlreadyExistsAtLocationError):
-            database.create_family_with_first_user(
-                name="כהן",
-                home_address="תל אביב, דיזנגוף, 120",
-                user_name="מיכאל",
-                home_latitude=32.0809,
-                home_longitude=34.7806,
-                auth_user_id="auth-user-uuid",
-                legal_acceptance=LEGAL_ACCEPTANCE,
-            )
-
-        self.assertEqual(self.connection.execute.call_count, 3)
-        self.assertTrue(self.transaction_context.rolled_back)
+    def test_pwa_shared_location_does_not_query_other_families(self):
+        with patch.object(database, "_get_family_by_location", side_effect=AssertionError("geographic uniqueness lookup")) as lookup:
+            self.test_pwa_creation_serializes_checks_and_stores_auth_identity()
+        lookup.assert_not_called()
 
     def test_missing_auth_user_fk_is_structured_and_rolls_back_everything(self):
         mapped_cursor = Mock(name="mapped_cursor")
@@ -373,7 +350,6 @@ class AtomicFamilyCreationTests(unittest.TestCase):
         self.connection.execute.side_effect = [
             Mock(name="lock_cursor"),
             mapped_cursor,
-            location_cursor,
             foreign_key_error,
         ]
 
@@ -511,6 +487,11 @@ class FamilyProfileDatabaseTests(unittest.TestCase):
 
 class AtomicPwaJoinTests(unittest.TestCase):
     def setUp(self):
+        # SQL sequencing fixture; actual evidence/matching is exercised in PostgreSQL.
+        for name in ("_join_location_is_current", "_join_family_matches"):
+            helper = patch.object(database, name, return_value=True)
+            helper.start()
+            self.addCleanup(helper.stop)
         database.pool.connection.reset_mock()
         self.connection = Mock(name="connection")
         self.connection_context = RecordingContext(self.connection)
@@ -533,6 +514,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
             None,
             "created",
             "updated",
+            None, None, None, None,
         )
 
     @staticmethod
@@ -558,7 +540,7 @@ class AtomicPwaJoinTests(unittest.TestCase):
             failure.assert_called_once_with(self.connection, active, "family_code")
             sql, params = self.connection.execute.call_args.args
             self.assertIn("family_code = %s", sql)
-            self.assertEqual(params, (7, "wrong1"))
+            self.assertEqual(params, ("wrong1",))
 
     def test_complete_join_inserts_user_and_deletes_session_in_one_transaction(self):
         self.connection.execute.side_effect = [
@@ -750,6 +732,8 @@ class AtomicPwaJoinTests(unittest.TestCase):
             self.cursor(None),
             self.cursor(),
             self.cursor(tuple(reset_session)),
+            self.cursor(),  # bounded expired-evidence cleanup
+            self.cursor(tuple(reset_session)),  # reload after cleanup
         ]
 
         result = database.start_pwa_join_session("auth-user-uuid")

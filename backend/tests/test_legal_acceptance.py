@@ -62,6 +62,8 @@ class LegalAcceptanceTests(unittest.TestCase):
             with patch.object(db, "_lock_address_confirmation", return_value=(b"digest", ("address", 1, 2))), \
                  patch.object(db, "_get_family_by_location", return_value=None), \
                  patch.object(db, "_allocate_family_code", side_effect=lambda c, assign: ("abc123", assign("abc123"))), \
+                 patch.object(db, "_join_location_is_current", return_value=True), \
+                 patch.object(db, "_join_family_matches", return_value=True), \
                  patch.object(db, "_lock_pwa_join_session", return_value={"step": "user_name", "family_id": 1}):
                 with self.assertRaisesRegex(RuntimeError, "synthetic persistence"):
                     if creating:
