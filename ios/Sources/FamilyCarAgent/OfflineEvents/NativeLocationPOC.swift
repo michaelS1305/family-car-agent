@@ -28,7 +28,10 @@ import UIKit
     }
 }
 
-@MainActor final class NativeLocationPOCAcquisition: NSObject, CLLocationManagerDelegate {
+// Core Location delivers delegates on the creating thread run loop. Both managers are
+// created on MainActor; preconcurrency bridges the legacy nonisolated ObjC protocol
+// while retaining runtime actor-isolation checks. Never create these managers off-main.
+@MainActor final class NativeLocationPOCAcquisition: NSObject, @preconcurrency CLLocationManagerDelegate {
     private let manager = CLLocationManager()
     private let clock = ContinuousClock()
     private var began: ContinuousClock.Instant?
@@ -126,7 +129,7 @@ import UIKit
 }
 
 /// Foreground user action only. It never starts location updates or reads manager.location.
-@MainActor private final class NativeLocationPOCPermission: NSObject, ObservableObject, CLLocationManagerDelegate {
+@MainActor private final class NativeLocationPOCPermission: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
     private let manager = CLLocationManager()
     @Published var message = "ניסוי Development בלבד: הרשאת מיקום לבדיקה נקודתית."
     override init() { super.init(); manager.delegate = self }

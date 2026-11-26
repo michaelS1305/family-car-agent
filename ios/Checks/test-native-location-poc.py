@@ -31,6 +31,13 @@ class POCPolicy(unittest.TestCase):
             with patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_REF": "refs/heads/develop"}, clear=True):
                 sign.authorize_signing()
 
+    def test_delegate_isolation_bridge(self):
+        text = ADAPTER.read_text(encoding="utf-8")
+        self.assertEqual(text.count("@preconcurrency CLLocationManagerDelegate"), 2)
+        self.assertIn("@MainActor final class NativeLocationPOCAcquisition", text)
+        self.assertIn("@MainActor private final class NativeLocationPOCPermission", text)
+        self.assertNotIn("nonisolated(unsafe)", text)
+
     def test_development_configuration(self):
         info = plistlib.loads((ROOT / "Config/Info.Dev.plist").read_bytes())
         self.assertTrue(info["NSLocationWhenInUseUsageDescription"])
