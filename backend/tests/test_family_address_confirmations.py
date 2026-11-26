@@ -182,7 +182,7 @@ class FamilyAddressPostgresTests(unittest.TestCase):
         with self.assertRaises(database.AddressConfirmationInvalidError):
             self.update(identity, token)
 
-    def race(self, operations, expected_error=database.FamilyAlreadyExistsAtLocationError):
+    def race(self, operations, expected_error=database.FamilyAlreadyExistsAtLocationError, all_succeed=False):
         barrier = threading.Barrier(len(operations))
         def run(operation):
             barrier.wait(timeout=5)
@@ -193,26 +193,38 @@ class FamilyAddressPostgresTests(unittest.TestCase):
                 return "rejected"
         with ThreadPoolExecutor(max_workers=len(operations)) as executor:
             results = list(executor.map(run, operations))
-        self.assertEqual(sorted(results), ["rejected", "success"])
+        self.assertEqual(sorted(results), ["success"] * len(operations) if all_succeed else ["rejected", "success"])
 
     def test_create_create_race(self):
         a, b = self.auth(), self.auth()
         ta, tb = self.issue(a), self.issue(b)
-        self.race([lambda: self.create(a, ta), lambda: self.create(b, tb)])
-        self.assertEqual(self.query("SELECT count(*) FROM families"), [(1,)])
-        self.assertEqual(self.query("SELECT count(*) FROM family_code_history"), [(1,)])
+        self.race([lambda: self.create(a, ta), lambda: self.create(b, tb)], all_succeed=True)
+        self.assertEqual(self.query("SELECT count(*), count(DISTINCT id), count(DISTINCT family_code) FROM families"), [(2, 2, 2)])
+        self.assertEqual(self.query("SELECT count(*) FROM family_code_history"), [(2,)])
+        self.assertEqual(self.query("SELECT count(DISTINCT family_id) FROM users"), [(2,)])
 
     def test_create_update_race(self):
         identity = self.family()
         auth = self.auth()
         create_token = self.issue(auth)
         update_token = self.issue(identity[0], 0, 0, identity[1], identity[2])
-        self.race([lambda: self.create(auth, create_token), lambda: self.update(identity, update_token)])
+        self.race([lambda: self.create(auth, create_token), lambda: self.update(identity, update_token)], all_succeed=True)
 
     def test_update_update_race(self):
         a, b = self.family(10, 10), self.family(20, 20)
         ta, tb = self.issue(a[0], 0, 0, a[1], a[2]), self.issue(b[0], 0, 0, b[1], b[2])
-        self.race([lambda: self.update(a, ta), lambda: self.update(b, tb)])
+        self.race([lambda: self.update(a, ta), lambda: self.update(b, tb)], all_succeed=True)
+
+    def test_identical_names_addresses_and_nearby_coordinates_remain_independent(self):
+        a, b, c = self.family(0, 0), self.family(0, 0), self.family(0, math.degrees(25/6371000))
+        self.assertEqual(len({a[2], b[2], c[2]}), 3)
+        self.assertEqual(self.query("SELECT count(DISTINCT family_code), count(DISTINCT name), count(DISTINCT home_address) FROM families"), [(3, 1, 1)])
+        for auth, user, family in (a, b, c):
+            self.assertEqual(self.query("SELECT family_id FROM users WHERE auth_user_id=%s", (auth,)), [(family,)])
+        token = self.issue(a[0], 0, 0, a[1], a[2])
+        with self.assertRaises(database.AddressConfirmationInvalidError):
+            database.update_family_address(b[1], b[2], b[0], token)
+        self.update(a, token)
 
     def test_same_token_concurrent_consumption(self):
         auth = self.auth()
@@ -229,21 +241,21 @@ class FamilyAddressPostgresTests(unittest.TestCase):
         b = self.family(0, degrees(80))
         # Own home is closer (35m) but must not mask the other home (45m).
         token = self.issue(a[0], 0, degrees(35), a[1], a[2])
-        with self.assertRaises(database.FamilyAlreadyExistsAtLocationError):
-            self.update(a, token)
+        self.update(a, token)
+        self.assertEqual(self.query("SELECT home_longitude FROM families WHERE id=%s", (b[2],)), [(degrees(80),)])
         token = self.issue(a[0], 0, 0, a[1], a[2])
         self.update(a, token)
         self.query("UPDATE families SET home_latitude=NULL, home_longitude=NULL WHERE id=%s", (b[2],))
         token = self.issue(a[0], 0, degrees(80), a[1], a[2])
         self.update(a, token)
 
-    def test_stale_confirmation_rechecks_and_remains_retryable(self):
+    def test_confirmation_remains_valid_when_another_family_uses_location(self):
         a, b = self.auth(), self.auth()
         stale = self.issue(a)
         self.create(b, self.issue(b))
-        with self.assertRaises(database.FamilyAlreadyExistsAtLocationError):
-            self.create(a, stale)
-        self.assertEqual(self.query("SELECT count(*) FROM family_address_confirmations"), [(1,)])
+        self.create(a, stale)
+        self.assertEqual(self.query("SELECT count(*) FROM family_address_confirmations"), [(0,)])
+        self.assertEqual(self.query("SELECT count(DISTINCT family_id) FROM users"), [(2,)])
 
     def test_update_replacement_and_non_creator_issuance(self):
         identity = self.family()

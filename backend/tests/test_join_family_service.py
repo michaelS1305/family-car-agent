@@ -96,6 +96,21 @@ class JoinFamilyServiceTests(unittest.TestCase):
             lambda _auth_user_id, geocode, **kwargs: geocode(**kwargs)
         )
 
+    def test_persisted_verification_is_not_in_public_session(self):
+        private = session("family_code", verified_latitude=1.5, verified_longitude=2.5,
+                          location_verified_at="private", location_verification_expires_at="private", family_id=42)
+        response = service._public_session(private)
+        self.assertFalse(set(response) & {"auth_user_id", "family_id", "verified_latitude", "verified_longitude",
+                                        "location_verified_at", "location_verification_expires_at"})
+
+    def test_deployed_clients_resynchronize_existing_invalid_step_contract(self):
+        root = Path(__file__).resolve().parents[2]
+        ios = (root / "ios/Sources/FamilyCarAgent/Auth/EntryModel.swift").read_text(encoding="utf-8")
+        android = (root / "android/app/src/main/java/il/fca/companion/ui/OnboardingModel.kt").read_text(encoding="utf-8")
+        self.assertIn('catch AuthFailure.rejected(409, "INVALID_JOIN_STEP") {\n                    try await loadJoin()', ios)
+        self.assertIn('e.code == "INVALID_JOIN_STEP"', android)
+        self.assertIn('applyJoin(gateway.request(joinPath("start"), "POST"))', android)
+
     def test_diagnostics_require_explicit_flag_and_exact_dev_host(self):
         for flag, host, enabled in (
             ("true", "family-car-agent-dev.onrender.com", True),
@@ -355,6 +370,7 @@ class JoinFamilyServiceTests(unittest.TestCase):
             "120 Dizengoff Street, Tel Aviv",
             32.0809,
             34.7806,
+            database_stub.precheck_pwa_join_address.return_value,
         )
 
     def test_near_address_is_accepted_when_fifty_meter_match_succeeds(self):
@@ -386,6 +402,7 @@ class JoinFamilyServiceTests(unittest.TestCase):
             "הרצל 10, דימונה, ישראל",
             31.06903,
             35.03302,
+            database_stub.precheck_pwa_join_address.return_value,
         )
 
     def test_different_street_in_same_city_is_rejected_by_distance_match(self):

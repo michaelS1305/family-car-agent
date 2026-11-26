@@ -8,7 +8,6 @@ from database import (
     issue_family_address_confirmation,
     FamilyCodeTakenError,
     regenerate_family_code,
-    get_family_by_location,
     get_family_profile,
     update_family_address,
     update_family_member_role,
@@ -190,16 +189,6 @@ def resolve_family_address_for_current_user(current_user: CurrentUser, home_addr
 
     # Recheck creator/family authorization after the unlocked provider wait.
     _require_family_creator(current_user)
-
-    existing = get_family_by_location(
-        location["latitude"], location["longitude"], exclude_family_id=current_user.family_id,
-    )
-    if existing is not None:
-        raise FamilyProfileError(
-            "FAMILY_ALREADY_EXISTS_AT_ADDRESS",
-            "כבר קיימת משפחה אחרת בכתובת הזו.",
-            409,
-        )
 
     try:
         token = issue_family_address_confirmation(

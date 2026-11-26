@@ -197,9 +197,7 @@ class FamilyServiceTests(unittest.TestCase):
             resolved["resolution_token"],
         )
         self.assertEqual(updated["home_address"], "דימונה, המעפיל, 1210")
-        database_stub.get_family_by_location.assert_called_once_with(
-            31.072, 35.036, exclude_family_id=42,
-        )
+        database_stub.get_family_by_location.assert_not_called()
         database_stub.issue_family_address_confirmation.assert_called_once_with(
             self.current_user().auth_user_id, "דימונה, המעפיל, 1210",
             "המעפיל 1210, דימונה, ישראל", 31.072, 35.036,
@@ -238,7 +236,7 @@ class FamilyServiceTests(unittest.TestCase):
         admission.assert_not_called()
 
     @patch.object(service, "geocode_address")
-    def test_address_used_by_another_family_is_rejected_before_update(self, geocode):
+    def test_address_used_by_another_family_can_be_confirmed(self, geocode):
         geocode.return_value = {
             "address": "המעפיל 1210, דימונה, ישראל",
             "latitude": 31.072,
@@ -246,12 +244,11 @@ class FamilyServiceTests(unittest.TestCase):
         }
         database_stub.get_family_by_location.return_value = (99,)
 
-        with self.assertRaises(service.FamilyProfileError) as raised:
-            service.resolve_family_address_for_current_user(
-                self.current_user(), "דימונה, המעפיל, 1210",
-            )
-
-        self.assertEqual(raised.exception.code, "FAMILY_ALREADY_EXISTS_AT_ADDRESS")
+        resolved = service.resolve_family_address_for_current_user(
+            self.current_user(), "דימונה, המעפיל, 1210",
+        )
+        self.assertIsNotNone(resolved["resolution_token"])
+        database_stub.get_family_by_location.assert_not_called()
         database_stub.update_family_address.assert_not_called()
 
     @patch.object(service, "geocode_address")
