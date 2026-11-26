@@ -102,6 +102,7 @@ jobs:
           export SWIFT_BIN="$(xcrun --find swiftc)"
           bash Checks/run-vehicle-queue-checks.sh
           bash Checks/run-return-location-checks.sh
+          bash Checks/run-native-return-location-checks.sh
           bash Checks/run-vehicle-sync-checks.sh
           bash Checks/run-native-device-setup-checks.sh
       - name: Compile iOS Simulator package without signing

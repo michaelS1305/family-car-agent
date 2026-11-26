@@ -139,14 +139,18 @@ import Network
             let center = UNUserNotificationCenter.current()
             var settings = await center.notificationSettings()
             guard current(ticket) else { return }
-            if settings.authorizationStatus == .notDetermined {
-                do { _ = try await center.requestAuthorization(options: [.alert, .badge, .sound]) }
-                catch {
+            do {
+                // Complete exactly once on success, denial or error, before push registration work.
+                defer { if current(ticket) { LocationPermissionService.shared.notificationsFinished() } }
+                if settings.authorizationStatus == .notDetermined {
+                    do { _ = try await center.requestAuthorization(options: [.alert, .badge, .sound]) }
+                    catch {
+                        guard current(ticket) else { return }
+                        state.errorCategory = "notification_permission"; return
+                    }
+                    settings = await center.notificationSettings()
                     guard current(ticket) else { return }
-                    state.errorCategory = "notification_permission"; return
                 }
-                settings = await center.notificationSettings()
-                guard current(ticket) else { return }
             }
             switch settings.authorizationStatus {
             case .notDetermined: state.permission = .notDetermined

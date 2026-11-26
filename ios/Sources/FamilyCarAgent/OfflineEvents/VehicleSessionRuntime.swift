@@ -247,6 +247,48 @@ import Network
               sessions.session?.owner == session.owner, sessions.session?.vehicleScope == scope else { throw AuthFailure.stale }
     }
 
+    struct PreparedReturn {
+        let selection: String
+        let queue: VehicleEventQueue
+        let snapshot: VehicleReturnPreparation
+        let permit: VehicleRecordingPermit
+        let generation: Int
+        let epoch: Int
+    }
+
+    func prepareNativeReturn(selection: String) async throws -> PreparedReturn {
+        let permit = recordingPermit
+        guard let vehicle = try await shortcutVehicles()[selection], let session = sessions.session,
+              let namespace = session.shortcutNamespace else { throw AuthFailure.stale }
+        let queue = try VehicleEventQueue(directory: VehicleEventQueue.applicationDirectory())
+        let snapshot = try await queue.prepareReturn(context(session), vehicle: vehicle, namespace: namespace)
+        return .init(selection: selection, queue: queue, snapshot: snapshot, permit: permit,
+                     generation: sessions.generation, epoch: identityEpoch)
+    }
+
+    func recordNativeReturn(_ prepared: PreparedReturn, location: VehicleLocationEvidence, onCommit: () -> Void) async throws {
+        guard prepared.generation == sessions.generation, prepared.epoch == identityEpoch,
+              let vehicle = try await shortcutVehicles()[prepared.selection], vehicle == prepared.snapshot.vehicle,
+              let session = sessions.session, try context(session) == prepared.snapshot.context,
+              session.shortcutNamespace == prepared.snapshot.namespace else { throw ShortcutQueueError.contextChanged }
+        try Task.checkCancellation()
+        // Actual decision time, after acquisition and local installation revalidation.
+        // enqueue validates the unchanged measurement timestamp against this time again.
+        let event = try await prepared.queue.commitReturn(prepared.snapshot, location: location, permit: prepared.permit)
+        onCommit() // After SQLite COMMIT, before any scheduling or classified processing outcome.
+        do { _ = try attach(prepared.snapshot.context, queue: prepared.queue) }
+        catch { throw ShortcutQueueError.retryStored }
+        guard let sync = coordinator else { throw ShortcutQueueError.retryStored }
+        await sync.wake()
+        do {
+            if let recovery = try await prepared.queue.recovery(prepared.snapshot.context, event: event.id) {
+                if let failure = ReturnRecoveryPolicy.shortcutFailure(recovery) { throw failure }
+                if sync.diagnostic == .storageFailure || sync.diagnostic == .taskConflict { throw ShortcutQueueError.recoveryBlocked }
+            }
+        } catch let failure as ShortcutQueueError { throw failure }
+        catch { throw ShortcutQueueError.retryStored } // The event is already durably committed.
+    }
+
     func recordShortcut(selection: String, kind: QueuedVehicleEvent.Kind, time: Date, location: VehicleLocationEvidence?) async throws {
         let permit = recordingPermit
         guard let vehicle = try await shortcutVehicles()[selection], let session = sessions.session else { throw AuthFailure.stale }
