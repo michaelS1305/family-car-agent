@@ -62,6 +62,9 @@ def generate(ios: Path, output: Path, probe=False, firebase_config=None, product
             raise ValueError("Production public Supabase configuration required")
         config["bundleID"] = "com.familycaragent.app"
         info = plistlib.loads(info_path.read_bytes())
+        # Native location experiment is Development-only, including effective configuration.
+        info.pop("NSLocationWhenInUseUsageDescription", None)
+        info["UIBackgroundModes"] = [mode for mode in info.get("UIBackgroundModes", []) if mode != "location"]
         info.update(CFBundleDisplayName="Family Car Agent", FCAEnvironment="production", FCASupabasePublishableKey=key, CFBundleVersion=build_number)
         info["CFBundleURLTypes"] = [{"CFBundleURLName":"com.familycaragent.app.auth", "CFBundleURLSchemes":["com.familycaragent.app"]}]
         info_path = output / "Production-Info.plist"

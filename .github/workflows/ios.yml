@@ -60,7 +60,8 @@ jobs:
     if: >-
       needs.scope.outputs.ios_validation == 'true' &&
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/develop')
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/develop' ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/native-offline-location-poc' && github.repository == 'michaelS1305/family-car-agent' && inputs.build_signed_ipa && !inputs.build_production_ipa))
     name: iOS validation
     runs-on: macos-15
     timeout-minutes: 20
@@ -102,6 +103,8 @@ jobs:
           export SWIFT_BIN="$(xcrun --find swiftc)"
           bash Checks/run-vehicle-queue-checks.sh
           bash Checks/run-return-location-checks.sh
+          bash Checks/run-native-location-poc-checks.sh
+          python3 Checks/test-native-location-poc.py
           bash Checks/run-vehicle-sync-checks.sh
           bash Checks/run-native-device-setup-checks.sh
       - name: Compile iOS Simulator package without signing
@@ -122,9 +125,10 @@ jobs:
     needs: [scope, ios]
     if: >-
       needs.scope.outputs.ios_release == 'true' &&
-      github.ref == 'refs/heads/develop' && vars.FCA_DEV_SIGN_ENABLED == 'true' &&
-      (github.event_name == 'push' ||
-       (github.event_name == 'workflow_dispatch' && inputs.build_signed_ipa && !inputs.build_production_ipa))
+      vars.FCA_DEV_SIGN_ENABLED == 'true' &&
+      ((github.ref == 'refs/heads/develop' && (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.build_signed_ipa && !inputs.build_production_ipa))) ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/native-offline-location-poc' && github.repository == 'michaelS1305/family-car-agent' && inputs.build_signed_ipa && !inputs.build_production_ipa))
     runs-on: macos-26
     timeout-minutes: 30
 
@@ -359,7 +363,7 @@ jobs:
           PRODUCTION_SIGNING: ${{ needs.signed_production_ipa.result }}
           DEVELOPMENT_SIGNING: ${{ needs.signed_dev_ipa.result }}
           PRODUCTION: ${{ (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.build_production_ipa == true }}
-          DEV_EXPECTED: ${{ vars.FCA_DEV_SIGN_ENABLED == 'true' && github.ref == 'refs/heads/develop' && (github.event_name == 'push' || inputs.build_signed_ipa == true) }}
+          DEV_EXPECTED: ${{ vars.FCA_DEV_SIGN_ENABLED == 'true' && ((github.ref == 'refs/heads/develop' && (github.event_name == 'push' || inputs.build_signed_ipa == true)) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/native-offline-location-poc' && github.repository == 'michaelS1305/family-car-agent' && inputs.build_signed_ipa && !inputs.build_production_ipa)) }}
         run: |
           test "$SCOPE_RESULT" = success || { echo 'Scope evaluation failed'; exit 1; }
           case "$PRODUCTION_SIGNING" in success|skipped) ;; *) echo 'Unexpected signing failure or cancellation'; exit 1 ;; esac

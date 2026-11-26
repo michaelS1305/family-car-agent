@@ -179,6 +179,27 @@ class WorkflowChecks(unittest.TestCase):
                        'inputs': {'build_signed_ipa': requested, 'build_production_ipa': production}}
             self.assertEqual(evaluate(expression, context), expected)
 
+    def test_isolated_location_poc_manual_signing_only(self):
+        jobs = self.workflows['ios']['jobs']
+        for event in ('workflow_dispatch', 'push', 'pull_request', 'pull_request_target', 'schedule'):
+            for ref in ('refs/heads/codex/native-offline-location-poc', 'refs/heads/codex/other', 'refs/heads/main'):
+                for repo in ('michaelS1305/family-car-agent', 'fork/family-car-agent'):
+                    for requested, production in ((True, False), (False, False), (True, True)):
+                        c = {'needs': {'scope': {'outputs': {'ios_release': 'true', 'ios_validation': 'true'}}},
+                             'github': {'ref': ref, 'event_name': event, 'repository': repo},
+                             'vars': {'FCA_DEV_SIGN_ENABLED': 'true'},
+                             'inputs': {'build_signed_ipa': requested, 'build_production_ipa': production}}
+                        expected = (event == 'workflow_dispatch' and ref == 'refs/heads/codex/native-offline-location-poc'
+                                    and repo == 'michaelS1305/family-car-agent' and requested and not production)
+                        self.assertEqual(evaluate(jobs['signed_dev_ipa']['if'], c), expected)
+                        if event == 'workflow_dispatch':
+                            self.assertEqual(evaluate(jobs['ios']['if'], c), expected)
+                            expr = jobs['required']['steps'][0]['env']['DEV_EXPECTED'].removeprefix('${{').removesuffix('}}')
+                            self.assertEqual(evaluate(expr, c), expected)
+        steps = str(jobs['ios']['steps'])
+        self.assertIn('bash Checks/run-native-location-poc-checks.sh', steps)
+        self.assertIn('python3 Checks/test-native-location-poc.py', steps)
+
     def test_scope_job_complete_diff_and_policy_checks(self):
         for name, workflow in self.workflows.items():
             self.assertNotIn('paths', workflow['on']['push'])

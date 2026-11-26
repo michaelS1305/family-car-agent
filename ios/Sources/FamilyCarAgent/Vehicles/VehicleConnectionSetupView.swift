@@ -21,6 +21,9 @@ struct VehicleConnectionSetupView: View {
                 VStack(spacing: 22) {
                     Text("חיבור וזיהוי אוטומטי").font(.largeTitle.bold()).multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
+                    #if DEBUG && !FCA_PRODUCTION
+                    NativeLocationPOCPermissionView()
+                    #endif
                     if presentation.screen == .loading { ProgressView("בודקים את מצב החיבור…") }
                     else if presentation.screen == .selection { selection }
                     else { setup }
