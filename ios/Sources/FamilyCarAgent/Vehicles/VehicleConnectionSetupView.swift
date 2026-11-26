@@ -8,6 +8,7 @@ struct VehicleConnectionSetupView: View {
     let close: () -> Void
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
+    @ObservedObject private var locationPermission = LocationPermissionService.shared
     @State private var presentation = VehicleConnectionPresentation()
     @State private var busy = false
     @State private var message: String?
@@ -21,6 +22,15 @@ struct VehicleConnectionSetupView: View {
                 VStack(spacing: 22) {
                     Text("חיבור וזיהוי אוטומטי").font(.largeTitle.bold()).multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
+                    if !locationPermission.ready {
+                        VStack(spacing: 8) {
+                            Text(locationPermission.detail).font(.body)
+                            Text("החזרה אוטומטית דורשת מדידת מיקום קצרה ומדויקת. אפשרו מיקום בעת השימוש באפליקציה ומיקום מדויק בהגדרות האייפון.").font(.caption)
+                            Button("פתיחת הגדרות המיקום") {
+                                if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                            }.buttonStyle(.bordered).frame(minHeight: 44)
+                        }.multilineTextAlignment(.center)
+                    }
                     if presentation.screen == .loading { ProgressView("בודקים את מצב החיבור…") }
                     else if presentation.screen == .selection { selection }
                     else { setup }
@@ -30,6 +40,7 @@ struct VehicleConnectionSetupView: View {
         }.modifier(VehiclesAppearance())
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
+            locationPermission.refresh()
             // Local reads only: reflect background rejection/logout without starting server verification.
             while !Task.isCancelled {
                 if !busy { await restore() }

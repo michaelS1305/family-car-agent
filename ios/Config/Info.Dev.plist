@@ -6,7 +6,10 @@
     <key>FirebaseAppDelegateProxyEnabled</key><false/>
     <key>FirebaseMessagingAutoInitEnabled</key><false/>
     <key>FirebaseMessagingInstallationIdEnabled</key><false/>
-    <key>UIBackgroundModes</key><array><string>remote-notification</string></array>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Family Car Agent מבצע מדידת מיקום קצרה בעת החזרת רכב כדי לאמת את מקום ההחזרה, גם כשההחזרה מופעלת אוטומטית ברקע. המיקום אינו נמדד לאורך הנסיעה.</string>
+    <key>UIBackgroundModes</key><array><string>remote-notification</string>
+    <string>location</string></array>
     <!-- PUBLIC Dev publishable key only. No service-role / Apple private keys. -->
     <key>FCASupabasePublishableKey</key><string>sb_publishable_vIB_0P9H5WAnadTKRVr4mw_bd0u2K3h</string>
     <key>CFBundleURLTypes</key><array><dict>

@@ -211,9 +211,9 @@ class FamilyCreationServiceTests(unittest.TestCase):
 
     def test_duplicate_family_near_address(self):
         database_stub.get_family_by_location.return_value = (9, "לוי")
-        with self.assertRaises(service.FamilyCreationError) as raised:
-            self.resolve_address()
-        self.assertEqual(raised.exception.code, "FAMILY_ALREADY_EXISTS_AT_ADDRESS")
+        resolved = self.resolve_address()
+        self.assertIsNotNone(resolved.resolution_token)
+        database_stub.get_family_by_location.assert_not_called()
 
     def test_auth_user_already_mapped(self):
         database_stub.get_user_by_auth_user_id.return_value = (17, "מיכאל", 42)

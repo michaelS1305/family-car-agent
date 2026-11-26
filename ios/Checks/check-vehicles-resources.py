@@ -76,7 +76,10 @@ shortcut_wiring = "".join(setup.split())
 assert 'ifpresentation.showsShortcuts{shortcutCard(action:.take,' in shortcut_wiring
 assert 'shortcutCard(action:.returning,' in shortcut_wiring
 assert 'Button{ifleturl=presentation.shortcutURL(for:action){openURL(url)}}label:' in shortcut_wiring
-assert setup.count('openURL(url)') == 1  # Only the explicit button action, never appearance/restoration.
+# Both destinations must remain inside explicit user button actions; no lifecycle opens.
+assert 'Button("פתיחתהגדרותהמיקום"){ifleturl=URL(string:UIApplication.openSettingsURLString){openURL(url)}}' in shortcut_wiring
+assert setup.count('openURL(url)') == 2
+assert shortcut_wiring.count('openURL(') == 2
 assert '.disabled(presentation.shortcutURL(for:action)==nil)' in shortcut_wiring
 assert "הוספה מתוך האפליקציה עדיין אינה זמינה" not in setup
 assert 'case .authorized: "מחובר לשירות"' in setup

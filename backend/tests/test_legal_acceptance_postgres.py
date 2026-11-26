@@ -87,7 +87,9 @@ class LegalAcceptancePostgresTests(unittest.TestCase):
                     if fail:
                         raise RuntimeError("synthetic failure after insert")
                 with patch.object(database, "record_legal_acceptance", side_effect=write), \
-                     patch.object(database, "_lock_pwa_join_session", return_value={"step": "user_name", "family_id": family if not creating else 0}):
+                     patch.object(database, "_join_location_is_current", return_value=True), \
+                 patch.object(database, "_join_family_matches", return_value=True), \
+                 patch.object(database, "_lock_pwa_join_session", return_value={"step": "user_name", "family_id": family if not creating else 0}):
                     def complete():
                         if creating:
                             return database.create_family_with_first_user("Family", "address", "Name", auth_user_id=auth, legal_acceptance=ACCEPTANCE)

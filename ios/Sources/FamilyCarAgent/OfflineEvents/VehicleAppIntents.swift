@@ -54,75 +54,34 @@ struct FCABoundVehicleQuery: EntityQuery {
 }
 
 private enum VehicleShortcut {
-    private enum Stage: String {
-        case entered = "intent_entered"
-        case present = "shortcut_location_present"
-        case missing = "shortcut_location_missing"
-        case shortcutValid = "shortcut_validation_accepted"
-        case shortcutInvalid = "shortcut_validation_rejected"
-        case fallback = "fallback_attempted"
-        case fallbackValid = "fallback_validation_accepted"
-        case fallbackInvalid = "fallback_validation_rejected"
-        case accepted = "location_accepted"
-        case rejected = "location_rejected"
-        case record = "proceeding_to_record"
-    }
-    private static let logger = Logger(subsystem: "com.familycaragent.app", category: "return_location")
-    private static func diagnostic(_ stage: Stage, reason: ReturnLocationReason? = nil) {
-        // Public fields are closed enums only; never pass location or identity data.
-        if let reason {
-            logger.notice("FCA_RETURN_LOCATION stage=\(stage.rawValue, privacy: .public) reason=\(reason.rawValue, privacy: .public)")
-        } else {
-            logger.notice("FCA_RETURN_LOCATION stage=\(stage.rawValue, privacy: .public)")
-        }
-    }
-
-    @MainActor static func evidence(_ place: CLPlacemark?, at time: Date) -> VehicleLocationEvidence? {
-        func evidence(from fix: CLLocation?, shortcut: Bool) -> VehicleLocationEvidence? {
-            let source = fix?.sourceInformation
-            let reason = ReturnLocationValidation.rejection(present: fix != nil,
-                requiresSource: shortcut, hasSource: source != nil,
-                simulated: source?.isSimulatedBySoftware == true,
-                validCoordinates: fix.map { CLLocationCoordinate2DIsValid($0.coordinate) } ?? false,
-                accuracy: fix?.horizontalAccuracy ?? 0,
-                age: fix.map { time.timeIntervalSince($0.timestamp) } ?? 0)
-            if let reason {
-                diagnostic(shortcut ? .shortcutInvalid : .fallbackInvalid, reason: reason)
-                return nil
-            }
-            guard let fix else { return nil } // Guaranteed by the shared decision helper.
-            diagnostic(shortcut ? .shortcutValid : .fallbackValid)
-            return .init(latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude,
-                         accuracy: fix.horizontalAccuracy, measuredAt: fix.timestamp)
-        }
-        let supplied = place?.location
-        diagnostic(supplied == nil ? .missing : .present)
-        if let result = evidence(from: supplied, shortcut: true) {
-            diagnostic(.accepted)
-            return result
-        }
-        diagnostic(.fallback)
-        let manager = CLLocationManager()
-        guard [.authorizedAlways, .authorizedWhenInUse].contains(manager.authorizationStatus) else {
-            diagnostic(.fallbackInvalid, reason: .fallbackUnavailable)
-            diagnostic(.rejected)
-            return nil
-        }
-        let result = evidence(from: manager.location, shortcut: false)
-        diagnostic(result == nil ? .rejected : .accepted)
-        return result
-    }
-
-    @MainActor static func record(_ vehicle: FCABoundVehicle, kind: QueuedVehicleEvent.Kind, place: CLPlacemark? = nil) async -> String {
-        let time = Date()
-        if kind == .returning { diagnostic(.entered) }
+    @MainActor static func record(_ vehicle: FCABoundVehicle, kind: QueuedVehicleEvent.Kind) async -> String {
+        let intentStartedAt = Date() // Invocation time, not a claim about the disconnect time.
+        var progress = ReturnRecordingProgress()
+        defer { if kind == .returning { ReturnLocationLog.recording(progress) } }
+        if kind == .returning { ReturnLocationLog.emit(.intentEntered) }
         do {
             let runtime = try VehicleSessionRuntime.shared.get()
-            let location = kind == .returning ? evidence(place, at: time) : nil
-            if kind == .returning { diagnostic(.record) }
-            try await runtime.recordShortcut(selection: vehicle.id, kind: kind, time: time, location: location)
+            if kind == .take {
+                try await runtime.recordShortcut(selection: vehicle.id, kind: kind, time: intentStartedAt, location: nil)
+            } else {
+                let prepared = try await runtime.prepareNativeReturn(selection: vehicle.id)
+                let acquisition = ReturnLocationAcquisition()
+                guard let location = await acquisition.acquire() else {
+                    switch acquisition.outcome {
+                    case .unauthorized, .unavailable: return "ההחזרה לא נרשמה. פתחו את FCA ואפשרו גישה למיקום בהגדרות האייפון."
+                    case .cancelled: return "מדידת המיקום בוטלה. ההחזרה לא נרשמה."
+                    case .timedOut: return "ההחזרה לא נרשמה. לא התקבלה מדידה עדכנית ומדויקת בתוך 15 שניות. בדקו שמיקום מדויק מופעל ונסו שוב."
+                    default: return "ההחזרה לא נרשמה. שירותי המיקום אינם זמינים כעת. בדקו את הגדרות המיקום ונסו שוב."
+                    }
+                }
+                ReturnLocationLog.emit(.proceedingToRecord)
+                try await runtime.recordNativeReturn(prepared, location: location) { progress.didCommit() }
+                progress.didFinishProcessing()
+            }
             return "האירוע נשמר במכשיר לסנכרון."
         } catch ShortcutQueueError.location { return "ההחזרה לא נרשמה. נדרשת מדידת מיקום עדכנית ומדויקת." }
+        catch is CancellationError { return kind == .returning ? "הפעולה בוטלה לפני רישום ההחזרה. הפעילו שוב כשברצונכם להחזיר את הרכב." : "לא ניתן לרשום את האירוע. בדקו שהמכשיר נפתח לאחר האתחול ושהרכב משויך לחשבון." }
+        catch ShortcutQueueError.contextChanged { return "ההחזרה לא נרשמה: החשבון, הרכב או הנסיעה השתנו בזמן המדידה. בדקו את המצב והפעילו שוב את ההחזרה." }
         catch ShortcutQueueError.alreadyTaken { return "כבר קיימת לקיחה פתוחה לרכב הזה." }
         catch ShortcutQueueError.noUniqueTake { return "לא נמצאה לקיחה פתוחה וחד־משמעית לרכב הזה במכשיר." }
         catch ShortcutQueueError.legacyReturn { return "ההחזרה הקודמת חסומה ללא סיבת דחייה מאומתת. המידע נשמר; נדרשת בדיקה פרטנית מול התמיכה." }
@@ -146,9 +105,8 @@ struct FCAReturnVehicleIntent: AppIntent {
     static let title: LocalizedStringResource = "FCA — Return Vehicle"
     static let openAppWhenRun = false
     @Parameter(title: "Vehicle") var vehicle: FCABoundVehicle
-    @Parameter(title: "Current Location") var location: CLPlacemark?
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        .result(value: await VehicleShortcut.record(vehicle, kind: .returning, place: location))
+        .result(value: await VehicleShortcut.record(vehicle, kind: .returning))
     }
 }
 #endif

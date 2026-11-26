@@ -1,3 +1,4 @@
+from pathlib import Path
 """Allocator contracts and opt-in, isolated PostgreSQL assignment/Join races.
 
 Fixtures deliberately do not execute any manual migration or touch public data.
@@ -157,6 +158,8 @@ class FamilyCodePostgresTests(unittest.TestCase):
                 family_name_attempts smallint DEFAULT 0, address_attempts smallint DEFAULT 0,
                 family_code_attempts smallint DEFAULT 0, locked_until timestamptz,
                 created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW())""")
+            migration = (Path(__file__).resolve().parents[2] / "supabase/manual_migrations/2026112601_join_location_verification.sql").read_text()
+            conn.execute(migration.replace("public.", self.schema + ".").replace("BEGIN;", "").replace("COMMIT;", ""))
         self.family = self.create("creator")
         self.creator = self.query("SELECT id FROM users WHERE auth_user_id='creator'")[0][0]
 
@@ -176,7 +179,7 @@ class FamilyCodePostgresTests(unittest.TestCase):
             return conn.execute(sql, params).fetchall()
 
     def create(self, auth):
-        return database.create_family_with_first_user(name="test", home_address="test", user_name="test", auth_user_id=auth, legal_acceptance=LEGAL_ACCEPTANCE)
+        return database.create_family_with_first_user(name="test", home_address="test", user_name="test", home_latitude=0, home_longitude=0, auth_user_id=auth, legal_acceptance=LEGAL_ACCEPTANCE)
 
     def current(self):
         return self.query("SELECT family_code FROM families WHERE id=%s", (self.family,))[0][0]
@@ -186,7 +189,7 @@ class FamilyCodePostgresTests(unittest.TestCase):
 
     def session(self, step="family_code"):
         with self.connection() as conn:
-            conn.execute("INSERT INTO pwa_join_sessions(auth_user_id, family_id, step, family_name_attempts, family_code_attempts) VALUES ('joiner',%s,%s,1,1)", (self.family, step))
+            conn.execute("INSERT INTO pwa_join_sessions(auth_user_id, family_id, step, family_name_attempts, family_code_attempts, family_name, verified_latitude, verified_longitude, location_verified_at, location_verification_expires_at) VALUES ('joiner',%s,%s,1,1,'test',0,0,statement_timestamp(),statement_timestamp()+INTERVAL '15 minutes')", (self.family, step))
 
     def test_create_records_history_and_failed_create_rolls_back(self):
         self.assertEqual(self.query("SELECT code FROM family_code_history"), [(self.current(),)])

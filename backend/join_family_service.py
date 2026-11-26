@@ -209,7 +209,7 @@ def submit_join_family_address(auth_user_id, home_address):
     if not parsed_address:
         raise JoinFamilyError("INVALID_ADDRESS_FORMAT", 400)
 
-    _address_database_call(precheck_pwa_join_address, auth_user_id)
+    expected_session = _address_database_call(precheck_pwa_join_address, auth_user_id)
 
     normalized_address, house_number = parsed_address
     try:
@@ -239,6 +239,7 @@ def submit_join_family_address(auth_user_id, home_address):
         location["address"],
         location["latitude"],
         location["longitude"],
+        expected_session,
     )
     if not result["success"]:
         _address_diagnostic("family_location_unmatched")
