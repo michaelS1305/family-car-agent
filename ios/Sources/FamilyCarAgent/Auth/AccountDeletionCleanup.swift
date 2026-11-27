@@ -121,7 +121,31 @@ import Security
         #endif
     }
     private var name: String { environment.backendURL.absoluteString + "|" + environment.supabaseURL.absoluteString }
-    private var base: [String: Any] { [kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrSynchronizable as String:false] }
+    private var base: [String: Any] {
+        let query: [String:Any] = [kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrSynchronizable as String:false]
+        #if FCA_DELETION_APPLE_CHECKS
+        if Self.testDataProtection { return query.merging([kSecUseDataProtectionKeychain as String:true]) { _, new in new } }
+        #endif
+        return query
+    }
+    // A persistent reference is the selector. Attribute filters are illegal on iOS.
+    static func referenceQuery(_ reference: Data) -> [String:Any] {
+        let query: [String:Any] = [kSecValuePersistentRef as String:reference,
+            kSecReturnData as String:true,kSecReturnAttributes as String:true,
+            kSecMatchLimit as String:kSecMatchLimitOne]
+        #if FCA_DELETION_APPLE_CHECKS
+        if testDataProtection { return query.merging([kSecUseDataProtectionKeychain as String:true]) { _, new in new } }
+        #endif
+        return query
+    }
+    private func decodedRecord(_ item: [String:Any]) throws -> Record {
+        guard item[kSecAttrService as String] as? String == service,
+              let data=item[kSecValueData as String] as? Data else { throw AuthFailure.storage }
+        let record=try JSONDecoder().decode(Record.self,from:data)
+        guard item[kSecAttrAccount as String] as? String == record.owner.uuidString,
+              record.environment == name else { throw AuthFailure.storage }
+        return record
+    }
     private func records() throws -> [Record] {
         // Enumerate references only; never request all password data in one query.
         var q=base; q[kSecReturnPersistentRef as String]=true; q[kSecMatchLimit as String]=kSecMatchLimitAll
@@ -136,11 +160,7 @@ import Security
         if result == errSecItemNotFound { return [] }
         guard result == errSecSuccess, let references=value as? [Data] else { throw AuthFailure.storage }
         let resultRecords=try references.map { reference -> Record in
-            var itemQuery=base
-            itemQuery[kSecValuePersistentRef as String]=reference
-            itemQuery[kSecReturnData as String]=true
-            itemQuery[kSecReturnAttributes as String]=true
-            itemQuery[kSecMatchLimit as String]=kSecMatchLimitOne
+            let itemQuery=Self.referenceQuery(reference)
             var itemValue: CFTypeRef?
             #if FCA_DELETION_APPLE_CHECKS
             if failRecordRead { throw AuthFailure.storage }
@@ -150,17 +170,22 @@ import Security
             DeletionAppleDiagnostics.status("receipt_read",status)
             #endif
             // A missing individual item is an error, including concurrent deletion.
-            guard status == errSecSuccess, let item=itemValue as? [String:Any],
-                  item[kSecAttrService as String] as? String == service,
-                  let data=item[kSecValueData as String] as? Data else { throw AuthFailure.storage }
-            let record=try JSONDecoder().decode(Record.self,from:data)
-            guard item[kSecAttrAccount as String] as? String == record.owner.uuidString else { throw AuthFailure.storage }
-            return record
+            guard status == errSecSuccess, let item=itemValue as? [String:Any] else { throw AuthFailure.storage }
+            return try decodedRecord(item)
         }
         guard resultRecords.allSatisfy({ $0.environment == name }) else { throw AuthFailure.storage }
         return resultRecords
     }
     #if FCA_DELETION_APPLE_CHECKS
+    static var testDataProtection=false
+    func testDecode(_ item: [String:Any]) throws -> Record { try decodedRecord(item) }
+    var testService: String { service }
+    func testSeed(_ owner: UUID, data: Data) throws {
+        var query=base; query[kSecAttrAccount as String]=owner.uuidString
+        query[kSecValueData as String]=data
+        query[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        guard SecItemAdd(query as CFDictionary,nil)==errSecSuccess else { throw AuthFailure.storage }
+    }
     var failEnumeration=false
     var failRecordRead=false
     var failSubmittedWrite=false
@@ -173,7 +198,8 @@ import Security
         precondition(status == errSecSuccess)
         guard let references=value as? [Data] else { preconditionFailure("invalid test enumeration") }
         for reference in references {
-            var item=base; item[kSecValuePersistentRef as String]=reference
+            var item: [String:Any] = [kSecValuePersistentRef as String:reference]
+            if Self.testDataProtection { item[kSecUseDataProtectionKeychain as String]=true }
             precondition(SecItemDelete(item as CFDictionary)==errSecSuccess)
         }
     }

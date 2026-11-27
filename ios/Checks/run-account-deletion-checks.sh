@@ -18,6 +18,7 @@ if [[ "$(uname -s)" == Darwin ]]; then
     Sources/FamilyCarAgent/Auth/KeychainVault.swift Sources/FamilyCarAgent/Auth/AccountDeletionCleanup.swift \
     Checks/AccountDeletionAppleChecks.swift -o "$out/apple-checks"
   "$out/apple-checks"
+  "$out/apple-checks" --data-protection
 else
   echo 'NOT RUN: Apple Keychain integration requires macOS; wired into the existing macOS iOS validation job'
 fi

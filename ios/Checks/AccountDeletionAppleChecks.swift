@@ -35,6 +35,25 @@ final class DeletionHTTP: URLProtocol, @unchecked Sendable {
 }
 @main struct AccountDeletionAppleChecks {
     @MainActor static func main() async throws {
+        let dataProtection=CommandLine.arguments.contains("--data-protection")
+        if dataProtection {
+            let probe: [String:Any] = [kSecClass as String:kSecClassGenericPassword,
+                kSecAttrService as String:"fca.deletion.probe."+UUID().uuidString,
+                kSecAttrAccount as String:"probe",kSecValueData as String:Data([0]),
+                kSecUseDataProtectionKeychain as String:true,
+                kSecAttrAccessible as String:kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+            let status=SecItemAdd(probe as CFDictionary,nil)
+            if status == errSecMissingEntitlement {
+                print("NOT RUN: Data Protection Keychain runtime unavailable: missing entitlement (-34018); file-based tests are not iOS runtime verification")
+                return
+            }
+            DeletionAppleDiagnostics.status("data_protection_probe",status)
+            check(status==errSecSuccess)
+            var removal=probe; removal.removeValue(forKey:kSecValueData as String)
+            removal.removeValue(forKey:kSecAttrAccessible as String)
+            check(SecItemDelete(removal as CFDictionary)==errSecSuccess)
+        }
+        AccountDeletionCleanup.testDataProtection=dataProtection
         let root=FileManager.default.temporaryDirectory.appendingPathComponent("fca-apple-deletion-"+UUID().uuidString)
         VehicleEventQueue.testDirectory=root.appendingPathComponent("VehicleEventQueue")
         let config=URLSessionConfiguration.ephemeral; config.protocolClasses=[DeletionHTTP.self]
@@ -44,6 +63,11 @@ final class DeletionHTTP: URLProtocol, @unchecked Sendable {
         let cleanup=AccountDeletionCleanup(environment:.development)
         defer { KeychainVault.failClear=false; try? vault.clear(); cleanup.testErase(); http.invalidateAndCancel(); try? FileManager.default.removeItem(at:root) }
         var assertions=0
+        let reference=Data([1,2,3])
+        let query=AccountDeletionCleanup.referenceQuery(reference)
+        var expectedKeys=Set([kSecValuePersistentRef,kSecReturnData,kSecReturnAttributes,kSecMatchLimit].map { $0 as String })
+        if dataProtection { expectedKeys.insert(kSecUseDataProtectionKeychain as String) }
+        check(Set(query.keys)==expectedKeys && query[kSecValuePersistentRef as String] as? Data==reference); assertions += 1
         // Real Keychain enumeration and exact-reference retrieval, isolated from lifecycle fixtures.
         check(try cleanup.testRecords().isEmpty); assertions += 1
         cleanup.failEnumeration=true
@@ -52,6 +76,18 @@ final class DeletionHTTP: URLProtocol, @unchecked Sendable {
         let probeA=UUID(), probeB=UUID()
         let first=try cleanup.prepare(owner:probeA)
         check(try cleanup.testRecords()==[first]); assertions += 1
+        let attributes: [String:Any] = [kSecAttrService as String:cleanup.testService,
+            kSecAttrAccount as String:probeA.uuidString,kSecValueData as String:try JSONEncoder().encode(first)]
+        check(try cleanup.testDecode(attributes)==first); assertions += 1
+        for key in [kSecAttrService as String,kSecAttrAccount as String] {
+            var invalid=attributes; invalid[key]="unrelated"
+            do { _ = try cleanup.testDecode(invalid); fatalError("identity mismatch accepted") } catch {}
+            assertions += 1
+        }
+        let wrongEnvironment=AccountDeletionLifecycle.Record(owner:probeA,environment:"unrelated",operation:first.operation,secret:first.secret)
+        var invalid=attributes; invalid[kSecValueData as String]=try JSONEncoder().encode(wrongEnvironment)
+        do { _ = try cleanup.testDecode(invalid); fatalError("environment mismatch accepted") } catch {}
+        assertions += 1
         let secondProbe=try cleanup.prepare(owner:probeB)
         check(try Set(cleanup.testRecords().map(\.owner))==Set([probeA,probeB])); assertions += 1
         check(try cleanup.prepare(owner:probeA)==first && cleanup.prepare(owner:probeB)==secondProbe); assertions += 1
@@ -128,6 +164,37 @@ final class DeletionHTTP: URLProtocol, @unchecked Sendable {
         check(try vault.read()?.owner==other); assertions += 1
         do { try vault.write(login); fatalError("deleted owner recreated") } catch {}
         check(try cleanup.testRecords().isEmpty); assertions += 1
-        print("PASS: \(assertions) Apple integration assertions; real Keychain/SQLite/production orchestration, mocked HTTP and daemon")
+        // Independent pre-upgrade record: same persisted format, already submitted, no JWT.
+        let legacyOwner=UUID(), legacyOperation=UUID()
+        let legacySecret=String(repeating:"a",count:43)
+        let environment=AppEnvironment.development.backendURL.absoluteString+"|"+AppEnvironment.development.supabaseURL.absoluteString
+        let fixture=try JSONSerialization.data(withJSONObject:["owner":legacyOwner.uuidString,"environment":environment,
+            "operation":legacyOperation.uuidString,"secret":legacySecret,"submitted":true,"completed":false,"cleaned":false])
+        try cleanup.testSeed(legacyOwner,data:fixture)
+        let restoredCleanup=AccountDeletionCleanup(environment:.development)
+        let persisted=try restoredCleanup.testRecords().first!
+        check(persisted.operation==legacyOperation && persisted.secret==legacySecret && persisted.submitted); assertions += 1
+        // Expired/absent authentication never becomes proof of deletion.
+        try vault.clear()
+        let noJWT=SessionManager(vault:vault,transport:api); try noJWT.restore()
+        for code in [401,500,200] {
+            DeletionHTTP.respond={ request in
+                check(request.url!.path.hasSuffix("status"))
+                check(request.value(forHTTPHeaderField:"Authorization")=="DeletionStatus "+legacyOperation.uuidString.lowercased()+"."+legacySecret)
+                return (code,Data("{}".utf8))
+            }
+            do { _ = try await restoredCleanup.resume(api:api,sessions:noJWT) } catch {}
+            check(try restoredCleanup.testRecords()==[persisted]); assertions += 1
+        }
+        let legacyReply=try JSONSerialization.data(withJSONObject:["operation_id":legacyOperation.uuidString,"status":"completed",
+            "completed_at":"2026-11-27T00:00:00Z","expires_at":"2027-05-26T00:00:00Z"])
+        DeletionHTTP.respond={ request in
+            check(request.url!.path.hasSuffix("status"))
+            check(request.value(forHTTPHeaderField:"Authorization")=="DeletionStatus "+legacyOperation.uuidString.lowercased()+"."+legacySecret)
+            return (200,legacyReply)
+        }
+        check(try await restoredCleanup.resume(api:api,sessions:noJWT)); assertions += 1
+        check(try restoredCleanup.testRecords().isEmpty); assertions += 1
+        print("PASS: \(assertions) Apple integration assertions; Keychain mode=\(dataProtection ? "data-protection" : "macOS-file-based"); real Keychain/SQLite/production orchestration, mocked HTTP and daemon")
     }
 }
