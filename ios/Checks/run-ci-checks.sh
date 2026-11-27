@@ -49,3 +49,5 @@ done
   -o "$out/auth-debug"
 "$out/auth-debug" > "$out/auth-debug.log"
 echo 'PASS: DEBUG authentication and route checks'
+
+bash Checks/run-account-deletion-checks.sh

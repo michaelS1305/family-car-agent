@@ -139,6 +139,8 @@ app.include_router(vehicle_reference_router)
 app.include_router(device_router)
 app.include_router(native_push_router)
 app.include_router(contact_router)
+from account_deletion_api import DeletionProtocolMiddleware
+app.add_middleware(DeletionProtocolMiddleware)
 
 
 @app.exception_handler(IdentityUnavailable)

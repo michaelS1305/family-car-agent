@@ -112,6 +112,8 @@ class AccountDeletionPostgresTests(unittest.TestCase):
             ADD COLUMN last_attempt_at timestamptz,
             ADD COLUMN failure_category text,
             ADD COLUMN operator_attention boolean NOT NULL DEFAULT false;
+          CREATE TABLE account_deletion_receipts(operation_id uuid PRIMARY KEY, credential_digest bytea NOT NULL CHECK(octet_length(credential_digest)=32),job_ref uuid UNIQUE REFERENCES account_deletion_jobs(job_ref),state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','completed')),created_at timestamptz NOT NULL DEFAULT clock_timestamp(),completed_at timestamptz,expires_at timestamptz,
+          CHECK ((state='pending' AND job_ref IS NOT NULL AND completed_at IS NULL AND expires_at IS NULL) OR (state='completed' AND job_ref IS NULL AND completed_at IS NOT NULL AND expires_at IS NOT NULL AND isfinite(completed_at) AND isfinite(expires_at) AND completed_at>=created_at AND expires_at-completed_at=interval '4320 hours')));
           CREATE TABLE auth_identities(user_id uuid REFERENCES auth_users ON DELETE CASCADE,
             provider text,provider_id text,identity_data jsonb);
           CREATE TABLE apple_credential_attempts(generation bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

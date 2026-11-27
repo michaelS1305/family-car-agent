@@ -287,9 +287,9 @@ private final class HeldNativeWriteLock: @unchecked Sendable {
             let after = try tables.map { try migrationRows(v2, "SELECT * FROM \($0) ORDER BY 1") }
             let version = try migrationRows(v2, "PRAGMA user_version")
             let recoveryRows = try migrationRows(v2, "SELECT * FROM return_recoveries")
-            precondition(after == before && version == [["5"]] && recoveryRows.isEmpty)
+            precondition(after == before && version == [["6"]] && recoveryRows.isEmpty)
         }
-        print("PASS: SQLite v2 to v5 preserves payloads, IDs, ordering, states, blocked RETURN and idempotent reopening")
+        print("PASS: SQLite v2 to v6 preserves payloads, IDs, ordering, states, blocked RETURN and idempotent reopening")
 
         let sharedFixture = try await fixture(), ctx = sharedFixture.context
         let vault = SyncSessionVault()
@@ -682,6 +682,20 @@ private final class HeldNativeWriteLock: @unchecked Sendable {
         try await recoveryChecks(root: root)
         try await reconciliationHardening(root: root)
         try await metadataChecks(root: root)
+        let deleted=try SyncFixture(root:root.appendingPathComponent("deleted-callback"))
+        try await deleted.start(); _ = try await deleted.take(); await deleted.coordinator.wake()
+        let deletedLateCallback=deleted.transport.finish(1,body:accepted)
+        deleted.coordinator.fence()
+        try VehicleEventQueue.cleanupDeletedAccount(directory:deleted.queue.directory,environment:deleted.context.environment,owner:deleted.context.owner) {
+            try FileManager.default.removeItem(at:deleted.root.appendingPathComponent("uploads"))
+        }
+        await deleted.coordinator.receive(deletedLateCallback)
+        let afterDeletion=try migrationRows(deleted.queue.directory,"SELECT count(*) FROM events")
+        precondition(afterDeletion == [["0"]])
+        do { try deleted.restoreCoordinator(); preconditionFailure("deleted upload directory recreated") } catch {}
+        precondition(!FileManager.default.fileExists(atPath:deleted.root.appendingPathComponent("uploads").path))
+        print("PASS: deleted-account late upload acknowledgment and coordinator restart cannot recreate events or upload files")
+
     }
     @MainActor private static func recoveryChecks(root: URL) async throws {
         func fixture() async throws -> SyncFixture {
@@ -817,7 +831,7 @@ private final class HeldNativeWriteLock: @unchecked Sendable {
         precondition(v3rows[1].event == v3e && v3rows[1].state == .blocked)
         _ = try VehicleEventQueue(directory: v3dir)
         let upgradedVersion = try migrationRows(v3dir, "PRAGMA user_version")
-        precondition(upgradedVersion == [["5"]])
+        precondition(upgradedVersion == [["6"]])
         v3f.coordinator.fence()
         // Expiry requires an explicit new invocation. It never rewrites a task.
         let (ef, ee) = try await rejectedReturn()
@@ -942,9 +956,9 @@ private final class HeldNativeWriteLock: @unchecked Sendable {
             precondition(events[1].takeID == events[0].id && events[3].takeID == events[2].id)
             let version = try migrationRows(dir, "PRAGMA user_version")
             let tasks = try migrationRows(dir, "SELECT * FROM return_reconciliations")
-            precondition(version == [["5"]] && tasks.isEmpty)
+            precondition(version == [["6"]] && tasks.isEmpty)
         }
-        print("PASS: independent v3 schema, all rows/upload mappings preserved, v5 reopen/idempotency")
+        print("PASS: independent v3 schema, all rows/upload mappings preserved, v6 reopen/idempotency")
 
         for fault in ["between-writes", "commit"] {
             let (f, e, r) = try await prepared()
@@ -1385,6 +1399,19 @@ private final class HeldNativeWriteLock: @unchecked Sendable {
             precondition(before == after)
         }
         print("PASS: independent SQLite v4-v5 fixture, events, recovery/reconciliation payloads, mappings and acknowledgments preserved")
+        let deletionOwner=UUID()
+        let deletionKey="fixture-environment|\(deletionOwner.uuidString)|1|2|fixture-device"
+        // Re-key the independent synthetic fixture to the real account-partition format.
+        for table in ["devices","events","authorization_scopes","vehicle_authorizations"] {
+            try rejectionSQL(v4dir,"UPDATE \(table) SET context='\(deletionKey)' WHERE context='fixture-context'")
+        }
+        try VehicleEventQueue.cleanupDeletedAccount(directory:v4dir,environment:"fixture-environment",owner:deletionOwner) {}
+        for table in tables {
+            let remaining=try migrationRows(v4dir,"SELECT count(*) FROM \(table)")
+            precondition(remaining == [["0"]])
+        }
+        print("PASS: scoped cleanup removes blocked RETURN, recovery/reconciliation payloads, mappings and acknowledgments")
+
         let network=try SyncFixture(root:root.appendingPathComponent("metadata-network")); try await network.start()
         let nt=try await network.take(); await network.coordinator.wake()
         await network.coordinator.receive(network.transport.finish(1,body:accepted))

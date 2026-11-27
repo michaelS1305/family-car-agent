@@ -308,6 +308,14 @@ extension AuthTransport {
         session = current
         onInvalidation?(previous) // Reuse Push/vehicle revocation, retaining status credentials.
     }
+    /// Durable deleted-owner cleanup clears the matching Keychain item under its lock first.
+    func forgetDeletedSession(_ owner: UUID) {
+        guard session?.owner == owner else { return }
+        let previous=session
+        appleCapture?.cancel(); appleCapture=nil
+        generation += 1; refreshing?.cancel(); refreshing=nil; session=nil
+        onInvalidation?(previous)
+    }
     func clear() throws {
         let previous = session
         appleCapture?.cancel(); appleCapture = nil

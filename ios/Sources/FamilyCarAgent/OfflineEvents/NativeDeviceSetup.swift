@@ -39,9 +39,15 @@ struct NativeDeviceRegistration: Codable, Equatable {
         let data: Data
         do { data = try Data(contentsOf: file) }
         catch let error as CocoaError where error.code == .fileReadNoSuchFile { return nil }
-        return try JSONDecoder().decode(NativeDeviceRegistration.self, from: data)
+        catch { DeviceSetupDiagnostics.emit(.journal, .reading, code:DeviceSetupDiagnostics.code(error)); throw error }
+        return try DeviceSetupDiagnostics.check(.journal, .decoding) { try JSONDecoder().decode(NativeDeviceRegistration.self, from: data) }
     }
     func write(_ value: NativeDeviceRegistration) throws {
+        try VehicleEventQueue.withAccount(directory: directory.deletingLastPathComponent().appendingPathComponent("VehicleEventQueue"), environment: value.environment, owner: value.owner) {
+            try writeAuthorized(value)
+        }
+    }
+    private func writeAuthorized(_ value: NativeDeviceRegistration) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         #if os(iOS)
         try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: directory.path)
@@ -86,7 +92,7 @@ struct NativeDeviceRegistration: Codable, Equatable {
         guard let value = stored else { return nil }
         guard value.environment == environment.backendURL.absoluteString + "|" + environment.supabaseURL.absoluteString,
               value.owner == identity.owner, value.user == identity.user, value.family == identity.family,
-              !value.queuePrepared || value.device != nil else { throw NativeDeviceSetupError.recoveryRequired }
+              !value.queuePrepared || value.device != nil else { DeviceSetupDiagnostics.emit(.context, .mismatch); throw NativeDeviceSetupError.recoveryRequired }
         return value
     }
     func setMethod(_ method: VehicleConnectionMethod, vehicle: UUID, identity: ChatIdentity) throws {
@@ -101,7 +107,7 @@ struct NativeDeviceRegistration: Codable, Equatable {
         if let scope {
             guard let record, record.queuePrepared, record.device == scope.device,
                   record.environment == scope.environment, record.user == scope.user, record.family == scope.family
-            else { throw NativeDeviceSetupError.recoveryRequired }
+            else { DeviceSetupDiagnostics.emit(.context, .mismatch); throw NativeDeviceSetupError.recoveryRequired }
         }
         return record?.queuePrepared == true
     }

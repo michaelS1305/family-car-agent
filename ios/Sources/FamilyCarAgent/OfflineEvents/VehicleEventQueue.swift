@@ -1,5 +1,53 @@
 import Foundation
 import SQLite3
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+#if canImport(OSLog)
+import OSLog
+#endif
+
+enum DeviceSetupDiagnostics {
+    enum Stage: String { case setup, authorization, directory, protection, backup, sqlite, schema, partition, journal, context }
+    enum Reason: String { case prepare, bind, step, storage, cancelled, epoch, generation, sessionMissing, owner, inactive, user, family, resolution, creation, attributes, exclusion, opening, initialization, unsupported, invalid, reading, decoding, mismatch, denyBindings, invalidation }
+    enum Code: Int { case unspecified=0, missing=1, denied=2, diskFull=3, readOnly=4, io=5 }
+    static func code(_ error: Error) -> Code {
+        let value=error as NSError
+        if value.domain == NSCocoaErrorDomain {
+            switch value.code { case 4,260: return .missing; case 257,513: return .denied; case 640: return .diskFull; default: return .unspecified }
+        }
+        if value.domain == NSPOSIXErrorDomain {
+            switch value.code { case 2: return .missing; case 1,13: return .denied; case 28: return .diskFull; case 30: return .readOnly; case 5: return .io; default: return .unspecified }
+        }
+        return .unspecified
+    }
+    static func emit(_ stage: Stage, _ reason: Reason, code: Code = .unspecified) {
+        #if canImport(OSLog)
+        Logger(subsystem: "com.familycaragent.device", category: "setup")
+            .error("FCA_DEVICE_SETUP stage=\(stage.rawValue, privacy: .public) reason=\(reason.rawValue, privacy: .public) code=\(code.rawValue, privacy: .public)")
+        #endif
+    }
+    #if FCA_SQLITE_CHECKS
+    nonisolated(unsafe) static var sqliteObserver: ((Reason, Int32) -> Void)?
+    #endif
+    static func sqlite(_ reason: Reason, _ raw: Int32) {
+        let primary=raw & 0xff
+        let bounded: Int32 = (1...28).contains(primary) ? primary : 0
+        #if FCA_SQLITE_CHECKS
+        sqliteObserver?(reason,bounded)
+        #endif
+        #if canImport(OSLog)
+        Logger(subsystem:"com.familycaragent.device",category:"setup")
+            .error("FCA_DEVICE_SETUP stage=sqlite reason=\(reason.rawValue,privacy:.public) sqlite_code=\(bounded,privacy:.public)")
+        #endif
+    }
+    static func check<T>(_ stage: Stage, _ reason: Reason, _ body: () throws -> T) throws -> T {
+        do { return try body() } catch { emit(stage, reason, code:code(error)); throw error }
+    }
+}
+
 
 /// A durable projection of the existing identity, not a second authentication system.
 /// Session generations are intentionally not durable identity keys.
@@ -204,14 +252,109 @@ enum VehicleEventWire {
 
 /// One connection per actor; BEGIN IMMEDIATE also serializes separate queue instances/processes.
 actor VehicleEventQueue {
+    nonisolated let directory: URL
     private let db: VehicleQueueDatabase
 
+    #if FCA_DELETION_APPLE_CHECKS
+    nonisolated(unsafe) static var testDirectory: URL?
+    #endif
     static func applicationDirectory() throws -> URL {
-        try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+        #if FCA_DELETION_APPLE_CHECKS
+        guard let root=testDirectory else { throw VehicleQueueError.storage }
+        return root
+        #else
+        try DeviceSetupDiagnostics.check(.directory, .resolution) {
+            try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                     appropriateFor: nil, create: true).appendingPathComponent("VehicleEventQueue", isDirectory: true)
+        }
+        #endif
     }
 
-    init(directory: URL) throws { db = try VehicleQueueDatabase(directory: directory) }
+    init(directory: URL) throws { self.directory=directory; db = try DeviceSetupDiagnostics.check(.sqlite, .initialization) { try VehicleQueueDatabase(directory: directory) } }
+
+    nonisolated static func withAccount<T>(directory: URL, environment: String, owner: UUID, _ body: () throws -> T) throws -> T {
+        let db = try VehicleQueueDatabase(directory: directory)
+        return try db.transaction {
+            guard try db.rows("SELECT 1 FROM deleted_accounts WHERE environment=? AND owner=?", [environment, owner.uuidString]).isEmpty else { throw VehicleQueueError.contextUnavailable }
+            return try body()
+        }
+    }
+
+    nonisolated static func fenceDeletionUploads(directory: URL, environment: String, owner: UUID, bundle: String) throws -> [String] {
+        let db=try VehicleQueueDatabase(directory:directory)
+        try db.transaction { try db.execute("INSERT OR IGNORE INTO deleted_accounts(environment,owner) VALUES(?,?)",[environment,owner.uuidString]) }
+        let prefix=environment + "|" + owner.uuidString + "|"
+        var identifiers=Set<String>()
+        for row in try db.rows("SELECT context FROM devices WHERE environment=?",[environment]) {
+            guard let key=row[0], key.hasPrefix(prefix) else { continue }
+            let parts=String(key.dropFirst(environment.count+1)).split(separator:"|")
+            guard parts.count==4, UUID(uuidString:String(parts[0]))==owner,
+                  Int64(parts[1]) != nil, Int64(parts[2]) != nil, UUID(uuidString:String(parts[3])) != nil else { throw VehicleQueueError.storage }
+            identifiers.insert(bundle + ".vehicle-sync.v1." + parts.joined(separator:"."))
+        }
+        let sessionPrefix=bundle + ".vehicle-sync.v1." + owner.uuidString + "."
+        for url in try FileManager.default.contentsOfDirectory(at:directory,includingPropertiesForKeys:nil) where url.lastPathComponent.hasPrefix(sessionPrefix) {
+            guard url.lastPathComponent.count<256 else { throw VehicleQueueError.storage }
+            identifiers.insert(url.lastPathComponent)
+        }
+        return identifiers.sorted()
+    }
+
+    nonisolated static func synchronizeDirectory(_ directory: URL) throws {
+        #if canImport(Darwin) || canImport(Glibc)
+        let descriptor=open(directory.path,O_RDONLY)
+        guard descriptor>=0 else { throw VehicleQueueError.storage }
+        defer { _ = close(descriptor) }
+        guard fsync(descriptor)==0 else { throw VehicleQueueError.storage }
+        #else
+        throw VehicleQueueError.storage
+        #endif
+    }
+
+    nonisolated static func isDeleted(directory: URL, environment: String, owner: UUID) throws -> Bool {
+        let db = try VehicleQueueDatabase(directory:directory)
+        return try !db.rows("SELECT 1 FROM deleted_accounts WHERE environment=? AND owner=?",[environment,owner.uuidString]).isEmpty
+    }
+    nonisolated static func withLiveOwners<T>(directory: URL, environment: String, owners: Set<UUID>, _ body: (Set<UUID>) throws -> T) throws -> T {
+        let db=try VehicleQueueDatabase(directory:directory)
+        return try db.transaction {
+            let deleted=Set(try db.rows("SELECT owner FROM deleted_accounts WHERE environment=?",[environment]).compactMap { $0[0].flatMap(UUID.init(uuidString:)) })
+            return try body(owners.subtracting(deleted))
+        }
+    }
+    nonisolated static func withCleanupLock<T>(directory: URL, _ body: () throws -> T) throws -> T {
+        try VehicleQueueDatabase(directory:directory).transaction(body)
+    }
+
+    /// Caller must have durably stored an authoritative completion receipt first.
+    /// File removal is inside the same exclusion lock and BEFORE relational deletion;
+    /// a rollback leaves the source inventory available for a safe retry.
+    nonisolated static func cleanupDeletedAccount(directory: URL, environment: String, owner: UUID,
+                                                   removeFiles: () throws -> Void) throws {
+        let db = try VehicleQueueDatabase(directory: directory)
+        // Commit the fence independently. Failure later must never reopen this account.
+        try db.transaction {
+            try db.execute("INSERT OR IGNORE INTO deleted_accounts(environment,owner) VALUES(?,?)", [environment,owner.uuidString])
+        }
+        try db.transaction {
+            try removeFiles()
+            let prefix = environment + "|" + owner.uuidString + "|"
+            let keys = try db.rows("SELECT context FROM devices WHERE environment=?", [environment]).compactMap { $0[0] }.filter { $0.hasPrefix(prefix) }
+            for key in keys {
+                for table in ["take_session_metadata", "session_metadata_sync", "vehicle_authorizations", "authorization_scopes"] {
+                    try db.execute("DELETE FROM \(table) WHERE context=?", [key])
+                }
+                for table in ["return_recoveries", "return_reconciliations"] {
+                    try db.execute("DELETE FROM \(table) WHERE event IN (SELECT id FROM events WHERE context=?)", [key])
+                }
+                try db.execute("DELETE FROM events WHERE context=?", [key])
+                try db.execute("DELETE FROM devices WHERE context=?", [key])
+            }
+        }
+        // Rebuild live pages to discard prior freelist remnants as well. No sequence reset
+        // or database deletion. A busy/full-disk failure leaves cleanup pending for retry.
+        try db.execute("VACUUM")
+    }
 
     /// Server verification must reserve a durable fence BEFORE making any request.
     func beginVerification(_ context: VehicleQueueContext) throws -> UUID {
@@ -258,7 +401,7 @@ actor VehicleEventQueue {
             WHERE d.context=? AND d.active=1 GROUP BY d.context
             """, [context.key])
         guard let row = rows.first, row[0] == row[1], row[0] == row[2]
-        else { throw VehicleQueueError.contextUnavailable }
+        else { DeviceSetupDiagnostics.emit(.partition, .invalid); throw VehicleQueueError.contextUnavailable }
     }
 
     /// A lost registration journal must not disguise an existing installation as new.
@@ -784,6 +927,7 @@ actor VehicleEventQueue {
     }
 
     private func require(_ context: VehicleQueueContext, active: Bool = true) throws {
+        guard try db.rows("SELECT 1 FROM deleted_accounts WHERE environment=? AND owner=?", [context.environment,context.owner.uuidString]).isEmpty else { throw VehicleQueueError.contextUnavailable }
         guard let row = try db.rows("SELECT active FROM devices WHERE context=?", [context.key]).first,
               !active || row[0] == "1" else { throw VehicleQueueError.contextUnavailable }
     }
@@ -795,23 +939,24 @@ actor VehicleEventQueue {
 }
 
 /// Never escapes its owning actor after initialization. Errors intentionally omit SQL/data.
-private final class VehicleQueueDatabase: @unchecked Sendable {
+final class VehicleQueueDatabase: @unchecked Sendable {
     private let handle: OpaquePointer
 
     init(directory: URL) throws {
         guard directory.isFileURL else { throw VehicleQueueError.invalidInput }
         let fm = FileManager.default
-        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        try DeviceSetupDiagnostics.check(.directory, .creation) { try fm.createDirectory(at: directory, withIntermediateDirectories: true) }
         #if os(iOS)
-        try fm.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: directory.path)
+        try DeviceSetupDiagnostics.check(.protection, .attributes) { try fm.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: directory.path) }
         var root = directory
         var values = URLResourceValues(); values.isExcludedFromBackup = true
-        try root.setResourceValues(values)
+        try DeviceSetupDiagnostics.check(.backup, .exclusion) { try root.setResourceValues(values) }
         #endif
         var pointer: OpaquePointer?
         let path = directory.appendingPathComponent("vehicle-events.sqlite").path
         guard sqlite3_open_v2(path, &pointer, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
               let pointer else {
+            DeviceSetupDiagnostics.emit(.sqlite, .opening)
             if let pointer { sqlite3_close_v2(pointer) }
             throw VehicleQueueError.storage
         }
@@ -822,8 +967,11 @@ private final class VehicleQueueDatabase: @unchecked Sendable {
         // DELETE journal keeps recovery files in the protected, backup-excluded directory.
         try execute("PRAGMA journal_mode=DELETE")
         try execute("PRAGMA synchronous=FULL")
+        try execute("PRAGMA fullfsync=ON")
+        try execute("PRAGMA secure_delete=ON")
         try transaction {
-            guard let version = try rows("PRAGMA user_version").first?[0], ["0", "1", "2", "3", "4", "5"].contains(version) else {
+            guard let version = try rows("PRAGMA user_version").first?[0], ["0", "1", "2", "3", "4", "5", "6"].contains(version) else {
+                DeviceSetupDiagnostics.emit(.schema, .unsupported)
                 throw VehicleQueueError.unsupportedSchema
             }
             try execute("CREATE TABLE IF NOT EXISTS devices(context TEXT PRIMARY KEY,environment TEXT NOT NULL,device TEXT NOT NULL,last_sequence INTEGER NOT NULL CHECK(last_sequence>=0),active INTEGER NOT NULL CHECK(active IN(0,1)),UNIQUE(environment,device))")
@@ -850,7 +998,12 @@ private final class VehicleQueueDatabase: @unchecked Sendable {
                 try execute("DELETE FROM take_session_metadata")
                 try execute("DELETE FROM session_metadata_sync")
             }
-            try execute("PRAGMA user_version=5")
+            try execute("CREATE TABLE IF NOT EXISTS deleted_accounts(environment TEXT NOT NULL,owner TEXT NOT NULL,PRIMARY KEY(environment,owner))")
+            // Persistent fences survive cleanup, callbacks and independent Shortcut processes.
+            for action in ["INSERT", "UPDATE"] {
+                try execute("CREATE TRIGGER IF NOT EXISTS deleted_device_\(action) BEFORE \(action) ON devices WHEN EXISTS(SELECT 1 FROM deleted_accounts x WHERE x.environment=NEW.environment AND substr(NEW.context,length(x.environment)+2,37)=x.owner||'|') BEGIN SELECT RAISE(ABORT,'deleted account'); END")
+            }
+            try execute("PRAGMA user_version=6")
         }
         #if os(iOS)
         try fm.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: path)
@@ -913,24 +1066,28 @@ private final class VehicleQueueDatabase: @unchecked Sendable {
 
     func rows(_ sql: String, _ values: [String?] = []) throws -> [[String?]] {
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw VehicleQueueError.storage }
+        let prepared=sqlite3_prepare_v2(handle, sql, -1, &statement, nil)
+        guard prepared == SQLITE_OK, let statement else {
+            DeviceSetupDiagnostics.sqlite(.prepare,prepared); throw VehicleQueueError.storage
+        }
         defer { sqlite3_finalize(statement) }
         for (index, value) in values.enumerated() {
             let result: Int32
             if let value {
                 result = value.withCString { sqlite3_bind_text(statement, Int32(index + 1), $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }
             } else { result = sqlite3_bind_null(statement, Int32(index + 1)) }
-            guard result == SQLITE_OK else { throw VehicleQueueError.storage }
+            guard result == SQLITE_OK else { DeviceSetupDiagnostics.sqlite(.bind,result); throw VehicleQueueError.storage }
         }
         var result: [[String?]] = []
         while true {
-            switch sqlite3_step(statement) {
+            let stepped=sqlite3_step(statement)
+            switch stepped {
             case SQLITE_ROW:
                 result.append((0..<sqlite3_column_count(statement)).map { column in
                     sqlite3_column_text(statement, column).map { String(cString: $0) }
                 })
             case SQLITE_DONE: return result
-            default: throw VehicleQueueError.storage
+            default: DeviceSetupDiagnostics.sqlite(.step,stepped); throw VehicleQueueError.storage
             }
         }
     }
