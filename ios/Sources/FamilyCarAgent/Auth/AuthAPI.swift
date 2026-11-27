@@ -171,6 +171,12 @@ final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTrans
         self.http = URLSession(configuration: configuration, delegate: NoRedirect(), delegateQueue: nil)
         self.chatHTTP = URLSession(configuration: Self.chatConfiguration(), delegate: NoRedirect(), delegateQueue: nil)
     }
+    #if FCA_DELETION_APPLE_CHECKS
+    init(environment: AppEnvironment, testingHTTP: URLSession) {
+        self.environment=environment; publicKey="sb_publishable_local_test"
+        http=testingHTTP; chatHTTP=testingHTTP
+    }
+    #endif
     static func chatConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil; configuration.urlCache = nil
@@ -489,6 +495,22 @@ final class AuthAPI: AuthTransport, BackendTransport, ChatTransport, FamilyTrans
             token: token, auth: false)
         guard result.status == "stored" else { throw AuthFailure.invalidResponse }
     }
+    #if os(iOS) || FCA_DELETION_APPLE_CHECKS
+    func deletionProtocol<T: Decodable & Sendable>(_ type: T.Type, path: String, authorization: String? = nil, body: Data? = nil) async throws -> T {
+        guard ["request", "capabilities", "status"].contains(path) else { throw AuthFailure.configuration }
+        let suffix=path.isEmpty ? "api/account/deletion" : "api/account/deletion/" + path
+        var request=URLRequest(url:environment.backendURL.appendingPathComponent(suffix))
+        request.httpMethod=body == nil ? "GET" : "POST"; request.httpBody=body
+        request.setValue("application/json",forHTTPHeaderField:"Content-Type")
+        request.setValue(authorization,forHTTPHeaderField:"Authorization")
+        request.timeoutInterval=30
+        let (data,response)=try await http.data(for:request)
+        guard let response=response as? HTTPURLResponse else { throw AuthFailure.invalidResponse }
+        guard (200..<300).contains(response.statusCode) else { throw AuthFailure.rejected(response.statusCode,"DELETION_STATUS_UNAVAILABLE") }
+        guard data.count<=4096 else { throw AuthFailure.invalidResponse }
+        return try JSONDecoder().decode(type,from:data)
+    }
+    #endif
     func backend<T: Decodable & Sendable>(_ type: T.Type, path: String, token: String,
                                           fields: [String: Field]? = nil) async throws -> T {
         let paths: Set<String> = ["/api/account/deletion", "/api/account/deletion/preview", "/api/me", "/api/family", "/api/onboarding/create-family/address", "/api/onboarding/create-family",

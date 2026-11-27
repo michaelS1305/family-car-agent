@@ -292,7 +292,8 @@ def load_main_module(environment=None):
         with patch.dict(
             sys.modules,
             {
-                "account_deletion_api": stub_module("account_deletion_api", router=Mock(), deletion_lifespan=Mock()),
+                "account_deletion_api": stub_module("account_deletion_api", router=Mock(), deletion_lifespan=Mock(),
+                    DeletionProtocolMiddleware=type("DeletionProtocolMiddleware", (), {})),
                 "apple_credentials_api": stub_module("apple_credentials_api", router=Mock()),
                 "contact_api": stub_module("contact_api", router=Mock()),
                 "vehicle_reference_api": stub_module("vehicle_reference_api", router=Mock()),

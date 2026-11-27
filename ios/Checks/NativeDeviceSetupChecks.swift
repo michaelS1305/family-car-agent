@@ -56,24 +56,37 @@ import Foundation
         do { try await operation(); fatalError("Expected controlled failure") } catch { }
     }
     @MainActor static func main() async throws {
-        let shortcutMappings: [(VehicleConnectionMethod, String, String)] = [
-            (.carPlay, "1edc051a0b3f4afeb14ae74965b10468", "619ac45a66244e0b8fc14c00e778ffa6"),
-            (.bluetooth, "e4828a7b74864fc3823fd7dd8056509a", "4fa807f5c9494a3ca2e966c56063f40b")
+        let shortcutMappings: [(AppEnvironment, VehicleConnectionMethod, String, String)] = [
+            (.development, .carPlay, "099b74c9808f4dcba04a8578e2a469d0", "34aa0aaf15cb43a8b1824176231f3950"),
+            (.development, .bluetooth, "306ff496250b4e28a7702ca430e94ffe", "022b1a3800b243a4b576fb7deac614ab"),
+            (.production, .carPlay, "90e16638d8a84f44868298cfebf95a92", "f67ed93cb09c4dee8ed595c9d14db3db"),
+            (.production, .bluetooth, "e1bd388340fe49309523a570f05b12f6", "6ee5f10d3f154735b2e3c7ac4430dc7b")
         ]
-        for (method, take, returning) in shortcutMappings {
+        var allURLs=Set<String>()
+        for (environment, method, take, returning) in shortcutMappings {
             var ui = VehicleConnectionPresentation()
             ui.restore(method: method, authorization: .authorized)
-            precondition(ui.shortcutURL(for: .take)?.absoluteString == "https://www.icloud.com/shortcuts/" + take)
-            precondition(ui.shortcutURL(for: .returning)?.absoluteString == "https://www.icloud.com/shortcuts/" + returning)
+            let actions: [(VehicleConnectionPresentation.ShortcutAction,String)] = [(.take,take),(.returning,returning)]
+            for (action, identifier) in actions {
+                let url=ui.shortcutURL(for:action,environment:environment)!.absoluteString
+                precondition(url == "https://www.icloud.com/shortcuts/" + identifier)
+                precondition(allURLs.insert(url).inserted)
+                let other: AppEnvironment = environment == .development ? .production : .development
+                precondition(ui.shortcutURL(for:action,environment:other)?.absoluteString != url)
+                precondition(ui.shortcutURL(for:action,environment:nil) == nil)
+            }
             for state: VehicleConnectionAuthorizationState in [.inactive, .verificationPending, .temporarilyUnavailable, .verificationRequired, .recoveryRequired, .bindingRemoved] {
                 ui.restore(method: method, authorization: state)
-                precondition(ui.shortcutURL(for: .take) == nil && ui.shortcutURL(for: .returning) == nil)
+                precondition(ui.shortcutURL(for: .take, environment: environment) == nil && ui.shortcutURL(for: .returning, environment: environment) == nil)
             }
         }
-        var missingMethod = VehicleConnectionPresentation()
-        missingMethod.restore(method: nil, authorization: .authorized)
-        precondition(missingMethod.shortcutURL(for: .take) == nil && missingMethod.shortcutURL(for: .returning) == nil)
-        print("PASS: four Shortcut URLs; missing method and unauthorized states fail closed")
+        precondition(allURLs.count == 8)
+        for environment: AppEnvironment in [.development,.production] {
+            var missingMethod = VehicleConnectionPresentation()
+            missingMethod.restore(method: nil, authorization: .authorized)
+            precondition(missingMethod.shortcutURL(for: .take, environment: environment) == nil && missingMethod.shortcutURL(for: .returning, environment: environment) == nil)
+        }
+        print("PASS: eight exact environment-specific Shortcut URLs; cross-environment isolation; missing environment/method and unauthorized states fail closed")
         for method in VehicleConnectionMethod.allCases {
             var ui = VehicleConnectionPresentation()
             precondition(ui.screen == .loading && !ui.showsShortcuts)

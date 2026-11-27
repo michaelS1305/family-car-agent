@@ -166,6 +166,12 @@ actor PushTestAPI: NativePushTransport {
         await forcedAPI.setOffline(false); forcedStore.fail = false
         try await forced.reconcile()
         precondition(forcedStore.records.isEmpty && sessions.session == nil)
+        let another=UUID()
+        forcedStore.records=[.init(owner:owner,family:1,ref:UUID(),secret:"synthetic-a"), .init(owner:another,family:2,ref:UUID(),secret:"synthetic-b")]
+        try forced.forgetDeletedAccount(owner)
+        precondition(forcedStore.records.count==1 && forcedStore.records[0].owner==another)
+        try forced.forgetDeletedAccount(owner)
+        precondition(forcedStore.records.count==1)
         print("Native Push registration checks passed: confirmation, duplicate callbacks, rotation, offline retirement, restart, stale responses and storage failure. Synthetic only.")
     }
 }

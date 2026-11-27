@@ -161,7 +161,7 @@ struct VehicleUploadCompletion: Sendable {
         self.context = context; self.environment = environment; self.queue = queue
         auth = authentication; self.transport = transport; self.now = now
         self.retryWait = retryWait
-        files = try VehicleUploadFiles(directory: directory.appendingPathComponent(transport.identifier, isDirectory: true))
+        files = try VehicleUploadFiles(directory: directory.appendingPathComponent(transport.identifier, isDirectory: true), context: context, gateDirectory: queue.directory)
     }
 
     /// Foreground, future BGProcessing and explicit recovery hooks use this method.
@@ -605,17 +605,28 @@ struct VehicleUploadCompletion: Sendable {
 /// Files contain immutable event bodies and cooldown dates only, never headers.
 private struct VehicleUploadFiles {
     let directory: URL
-    init(directory: URL) throws {
+    let context: VehicleQueueContext
+    let gateDirectory: URL
+    init(directory: URL, context: VehicleQueueContext, gateDirectory: URL) throws {
+        self.gateDirectory=gateDirectory
+        self.context = context
         guard directory.isFileURL else { throw VehicleQueueError.invalidInput }
         self.directory = directory
+        try VehicleEventQueue.withAccount(directory:gateDirectory,environment:context.environment,owner:context.owner) {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         #if os(iOS)
         try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: directory.path)
         var url = directory; var values = URLResourceValues(); values.isExcludedFromBackup = true
         try url.setResourceValues(values)
         #endif
+        }
     }
     func payload(_ event: QueuedVehicleEvent) throws -> URL {
+        try VehicleEventQueue.withAccount(directory: gateDirectory, environment: context.environment, owner: context.owner) {
+            try payloadAuthorized(event)
+        }
+    }
+    private func payloadAuthorized(_ event: QueuedVehicleEvent) throws -> URL {
         let url = directory.appendingPathComponent(event.id.uuidString + ".json")
         // Existing bytes are authoritative for retry, including across app upgrades.
         if FileManager.default.fileExists(atPath: url.path) {
@@ -625,6 +636,11 @@ private struct VehicleUploadFiles {
         return url
     }
     func recoveryPayload(_ recovery: VehicleRecoveryRecord) throws -> URL {
+        try VehicleEventQueue.withAccount(directory: gateDirectory, environment: context.environment, owner: context.owner) {
+            try recoveryPayloadAuthorized(recovery)
+        }
+    }
+    private func recoveryPayloadAuthorized(_ recovery: VehicleRecoveryRecord) throws -> URL {
         let url = directory.appendingPathComponent(recovery.id.uuidString + ".json")
         if FileManager.default.fileExists(atPath: url.path) {
             guard try Data(contentsOf: url) == recovery.payload else { throw VehicleQueueError.conflict }
@@ -649,7 +665,7 @@ private struct VehicleUploadFiles {
         #endif
     }
     private func retryFile(_ id: UUID) -> URL { directory.appendingPathComponent(id.uuidString + ".retry") }
-    func deferUntil(_ id: UUID, date: Date) throws { try write(JSONEncoder().encode(date), to: retryFile(id)) }
+    func deferUntil(_ id: UUID, date: Date) throws { try VehicleEventQueue.withAccount(directory: gateDirectory, environment: context.environment, owner: context.owner) { try write(JSONEncoder().encode(date), to: retryFile(id)) } }
     func notBefore(_ id: UUID) throws -> Date? {
         guard FileManager.default.fileExists(atPath: retryFile(id).path) else { return nil }
         return try JSONDecoder().decode(Date.self, from: Data(contentsOf: retryFile(id)))
@@ -660,7 +676,7 @@ private struct VehicleUploadFiles {
         guard try Data(contentsOf: authFile(id)) == Data([1]) else { throw VehicleQueueError.storage }
         return true
     }
-    func reserveRefresh(_ id: UUID) throws { try write(Data([1]), to: authFile(id)) }
+    func reserveRefresh(_ id: UUID) throws { try VehicleEventQueue.withAccount(directory: gateDirectory, environment: context.environment, owner: context.owner) { try write(Data([1]), to: authFile(id)) } }
     func removeResolved(_ id: UUID) throws {
         for file in [directory.appendingPathComponent(id.uuidString + ".json"), retryFile(id), authFile(id)] {
             if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }

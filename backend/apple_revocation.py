@@ -284,6 +284,8 @@ def finalize(pool, attempt):
             raise ValueError('deletion finalization invariant')
         conn.execute('DELETE FROM apple_credentials WHERE auth_user_id=%s', (attempt.owner,))
         conn.execute('DELETE FROM apple_credential_attempts WHERE auth_user_id=%s', (attempt.owner,))
+        import deletion_receipts
+        deletion_receipts.finalize(conn, attempt.job)
         conn.execute('DELETE FROM account_deletion_jobs WHERE job_ref=%s AND attempt_count=%s',
                      (attempt.job, attempt.number))
     emit(attempt.job, 'completed', row[1])
