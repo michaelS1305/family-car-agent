@@ -17,9 +17,9 @@ jobs:
       - name: Download existing signed IPA
         uses: actions/download-artifact@v4
         with:
-          run-id: 45894300526
+          run-id: 46074799661
           github-token: ${{ github.token }}
-          name: ios-production-ipa-3e0cdea91621427a8e5eaa7b3c577db363687792
+          name: ios-production-ipa-2f4b07a48d96cba61e4576f4cf3a0a58477b7486
           path: ${{ runner.temp }}/testflight-input
 
       - name: Upload existing IPA to App Store Connect
@@ -63,7 +63,7 @@ jobs:
 
           assert info["CFBundleIdentifier"] == "com.familycaragent.app"
           assert info["FCAEnvironment"] == "production"
-          assert info["CFBundleVersion"] == "1000.1.88"
+          assert info["CFBundleVersion"] == "1000.2.4"
           assert info["CFBundleShortVersionString"] == "1.0.0"
 
           key_id = os.environ["FCA_ASC_KEY_ID"]
