@@ -165,7 +165,18 @@ import Security
     var failRecordRead=false
     var failSubmittedWrite=false
     func testRecords() throws -> [Record] { try records() }
-    func testErase() { SecItemDelete(base as CFDictionary) }
+    func testErase() {
+        var query=base; query[kSecReturnPersistentRef as String]=true; query[kSecMatchLimit as String]=kSecMatchLimitAll
+        var value: CFTypeRef?
+        let status=SecItemCopyMatching(query as CFDictionary,&value)
+        if status == errSecItemNotFound { return }
+        precondition(status == errSecSuccess)
+        guard let references=value as? [Data] else { preconditionFailure("invalid test enumeration") }
+        for reference in references {
+            var item=base; item[kSecValuePersistentRef as String]=reference
+            precondition(SecItemDelete(item as CFDictionary)==errSecSuccess)
+        }
+    }
     #endif
     private func save(_ record: Record) throws {
         #if FCA_DELETION_APPLE_CHECKS
