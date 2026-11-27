@@ -149,23 +149,27 @@ struct VehicleConnectionSetupView: View {
             }
         }
     }
+    // Reuse the validated runtime environment; no cross-environment fallback.
+    private var shortcutEnvironment: AppEnvironment? {
+        (try? VehicleSessionRuntime.shared.get())?.environment
+    }
     private func shortcutCard(action: VehicleConnectionPresentation.ShortcutAction, title: String, description: String) -> some View {
         panel {
             HStack(alignment: .top, spacing: 12) {
                 AppAssetImage(path: "icons/archive/single_car_icon.png", monochromeControl: true).frame(width: 64, height: 64).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(title).font(.title2.bold()).accessibilityAddTraits(.isHeader)
-                    Text(presentation.shortcutURL(for: action) == nil ? "לא ניתן לזהות את שיטת החיבור לרכב" : "ההתקנה מתבצעת באפליקציית קיצורים").font(.callout).foregroundStyle(ChatStyle.secondary)
+                    Text(presentation.shortcutURL(for: action, environment: shortcutEnvironment) == nil ? "לא ניתן לזהות את שיטת החיבור לרכב" : "ההתקנה מתבצעת באפליקציית קיצורים").font(.callout).foregroundStyle(ChatStyle.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             Text(description).foregroundStyle(ChatStyle.secondary).frame(maxWidth: .infinity, alignment: .leading)
             Button {
-                if let url = presentation.shortcutURL(for: action) { openURL(url) }
+                if let url = presentation.shortcutURL(for: action, environment: shortcutEnvironment) { openURL(url) }
             } label: {
                 Text("הוספת קיצור").font(.headline).foregroundStyle(ChatStyle.secondary)
                     .padding(12).frame(maxWidth: .infinity, minHeight: 48)
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(ChatStyle.border))
-            }.buttonStyle(.plain).disabled(presentation.shortcutURL(for: action) == nil)
+            }.buttonStyle(.plain).disabled(presentation.shortcutURL(for: action, environment: shortcutEnvironment) == nil)
                 .accessibilityHint("פותח קישור להוספת קיצור; אינו מאשר התקנה או הגדרת אוטומציה")
         }
     }

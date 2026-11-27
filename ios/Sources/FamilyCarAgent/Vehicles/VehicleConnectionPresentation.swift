@@ -11,14 +11,18 @@ struct VehicleConnectionPresentation {
     var canGoBack: Bool { screen == .setup && !methodLocked && authorization.permitsActivation }
     var showsShortcuts: Bool { authorization.isAuthorized }
     var showsActivation: Bool { screen == .setup && authorization.permitsActivation && method != nil }
-    func shortcutURL(for action: ShortcutAction) -> URL? {
-        guard showsShortcuts, let method else { return nil }
+    func shortcutURL(for action: ShortcutAction, environment: AppEnvironment?) -> URL? {
+        guard showsShortcuts, let method, let environment else { return nil }
         let identifier: String
-        switch (method, action) {
-        case (.carPlay, .take): identifier = "1edc051a0b3f4afeb14ae74965b10468"
-        case (.carPlay, .returning): identifier = "619ac45a66244e0b8fc14c00e778ffa6"
-        case (.bluetooth, .take): identifier = "e4828a7b74864fc3823fd7dd8056509a"
-        case (.bluetooth, .returning): identifier = "4fa807f5c9494a3ca2e966c56063f40b"
+        switch (environment, method, action) {
+        case (.development, .carPlay, .take): identifier = "099b74c9808f4dcba04a8578e2a469d0"
+        case (.development, .carPlay, .returning): identifier = "34aa0aaf15cb43a8b1824176231f3950"
+        case (.development, .bluetooth, .take): identifier = "306ff496250b4e28a7702ca430e94ffe"
+        case (.development, .bluetooth, .returning): identifier = "022b1a3800b243a4b576fb7deac614ab"
+        case (.production, .carPlay, .take): identifier = "90e16638d8a84f44868298cfebf95a92"
+        case (.production, .carPlay, .returning): identifier = "f67ed93cb09c4dee8ed595c9d14db3db"
+        case (.production, .bluetooth, .take): identifier = "e1bd388340fe49309523a570f05b12f6"
+        case (.production, .bluetooth, .returning): identifier = "6ee5f10d3f154735b2e3c7ac4430dc7b"
         }
         return URL(string: "https://www.icloud.com/shortcuts/" + identifier)
     }
