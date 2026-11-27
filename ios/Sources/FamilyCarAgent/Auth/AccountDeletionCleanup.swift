@@ -126,6 +126,9 @@ import Security
         var q=base; q[kSecReturnData as String]=true; q[kSecReturnAttributes as String]=true; q[kSecMatchLimit as String]=kSecMatchLimitAll
         var value: CFTypeRef?
         let result=SecItemCopyMatching(q as CFDictionary,&value)
+        #if FCA_DELETION_APPLE_CHECKS
+        DeletionAppleDiagnostics.status("receipt_read",result)
+        #endif
         if result == errSecItemNotFound { return [] }
         guard result == errSecSuccess, let items=value as? [[String:Any]] else { throw AuthFailure.storage }
         let resultRecords=try items.map { item -> Record in
@@ -150,14 +153,24 @@ import Security
         var q=base; q[kSecAttrAccount as String]=record.owner.uuidString
         if record.cleaned {
             let status=SecItemDelete(q as CFDictionary)
+        #if FCA_DELETION_APPLE_CHECKS
+        DeletionAppleDiagnostics.status("receipt_delete",status)
+        #endif
             guard status == errSecSuccess || status == errSecItemNotFound else { throw AuthFailure.storage }
             return
         }
         let data=try JSONEncoder().encode(record)
         let status=SecItemUpdate(q as CFDictionary,[kSecValueData as String:data] as CFDictionary)
+        #if FCA_DELETION_APPLE_CHECKS
+        DeletionAppleDiagnostics.status("receipt_update",status)
+        #endif
         if status == errSecItemNotFound {
             q[kSecValueData as String]=data; q[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            guard SecItemAdd(q as CFDictionary,nil) == errSecSuccess else { throw AuthFailure.storage }
+            let inserted=SecItemAdd(q as CFDictionary,nil)
+            #if FCA_DELETION_APPLE_CHECKS
+            DeletionAppleDiagnostics.status("receipt_add",inserted)
+            #endif
+            guard inserted == errSecSuccess else { throw AuthFailure.storage }
         } else if status != errSecSuccess { throw AuthFailure.storage }
     }
     func pending(owner: UUID?) throws -> Bool { try records().contains { !$0.cleaned && ($0.submitted || $0.completed) && (owner == nil || $0.owner == owner) } }

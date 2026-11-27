@@ -1,6 +1,12 @@
 // Real Apple Keychain + SQLite + production AuthAPI/cleanup. Network and OS daemon are fakes.
 import Foundation
 import Security
+enum DeletionAppleDiagnostics {
+    static func status(_ stage: StaticString, _ code: OSStatus) {
+        print("FCA_DELETION_APPLE_CHECK stage=\(stage) osstatus=\(code)")
+    }
+    static func stage(_ value: StaticString) { print("FCA_DELETION_APPLE_CHECK stage=\(value)") }
+}
 private func check(_ condition: Bool) { precondition(condition) }
 
 final class DeletionHTTP: URLProtocol, @unchecked Sendable {
@@ -40,7 +46,9 @@ final class DeletionHTTP: URLProtocol, @unchecked Sendable {
         var assertions=0
         let owner=UUID(), other=UUID()
         let login=AuthSession(owner:owner,accessToken:"local-test",refreshToken:"local-test",expires:Date().addingTimeInterval(3600),activated:true)
+        DeletionAppleDiagnostics.stage("initial_session_write")
         try vault.write(login)
+        DeletionAppleDiagnostics.stage("initial_session_restore")
         let sessions=SessionManager(vault:vault,transport:api); try sessions.restore()
         // Capability missing: actual production API refuses old Backend.
         DeletionHTTP.respond={ _ in (404,Data()) }
@@ -52,6 +60,7 @@ final class DeletionHTTP: URLProtocol, @unchecked Sendable {
             return request.url!.path.hasSuffix("capabilities") ? (200,capability) : (404,Data())
         }
         try await cleanup.support(api:api)
+        DeletionAppleDiagnostics.stage("receipt_prepare")
         let record=try cleanup.prepare(owner:owner)
         check(try AccountDeletionCleanup(environment:.development).testRecords().first==record); assertions += 1
         // Real SessionManager pending write succeeds, submitted Keychain write fails.
@@ -64,6 +73,7 @@ final class DeletionHTTP: URLProtocol, @unchecked Sendable {
         do { try await cleanup.begin(record,sessions:sessions,api:api); fatalError("mixed version") } catch {}
         check(try cleanup.testRecords().first?.submitted==true); assertions += 1
         let context=try VehicleQueueContext(environment:.development,identity:.init(owner:owner,user:1,family:1,generation:0,version:0),device:UUID())
+        DeletionAppleDiagnostics.stage("queue_prepare")
         let queue=try VehicleEventQueue(directory:VehicleEventQueue.testDirectory!)
         try await queue.initializeFreshDevice(context)
         let completion=try JSONSerialization.data(withJSONObject:["operation_id":record.operation.uuidString,"status":"completed","completed_at":"2026-01-01T00:00:00Z","expires_at":"2026-06-30T00:00:00Z"])
@@ -75,10 +85,12 @@ final class DeletionHTTP: URLProtocol, @unchecked Sendable {
         let expired=AuthSession(owner:owner,accessToken:"expired-test",refreshToken:"expired-test",expires:.distantPast,deletionPending:true,activated:true)
         try vault.write(expired)
         let expiredSessions=SessionManager(vault:vault,transport:api); try expiredSessions.restore()
+        DeletionAppleDiagnostics.stage("confirmed_cancellation_failure")
         VehicleBackgroundUploadTransport.fail=true
         do { _ = try await cleanup.resume(api:api,sessions:expiredSessions); fatalError("cancel failure") } catch {}
         check(try cleanup.testRecords().first?.completed==true); assertions += 1
         VehicleBackgroundUploadTransport.fail=false
+        DeletionAppleDiagnostics.stage("confirmed_keychain_failure")
         KeychainVault.failClear=true
         do { _ = try await cleanup.resume(api:api,sessions:expiredSessions); fatalError("Keychain failure") } catch {}
         check(try cleanup.testRecords().first?.completed==true); assertions += 1
@@ -88,6 +100,7 @@ final class DeletionHTTP: URLProtocol, @unchecked Sendable {
         KeychainVault.failClear=false
         let second=AuthSession(owner:other,accessToken:"other-test",refreshToken:"other-test",expires:Date().addingTimeInterval(3600),activated:true)
         try vault.write(second)
+        DeletionAppleDiagnostics.stage("restart_other_account")
         let restarted=SessionManager(vault:vault,transport:api); try restarted.restore()
         DeletionHTTP.respond={ _ in fatalError("durable completion must not need network") }
         check(try await AccountDeletionCleanup(environment:.development).resume(api:api,sessions:restarted)); assertions += 1
