@@ -3,9 +3,9 @@ import Foundation
 import Security
 enum DeletionAppleDiagnostics {
     static func status(_ stage: StaticString, _ code: OSStatus) {
-        print("FCA_DELETION_APPLE_CHECK stage=\(stage) osstatus=\(code)")
+        FileHandle.standardError.write(Data("FCA_DELETION_APPLE_CHECK stage=\(stage) osstatus=\(code)\n".utf8))
     }
-    static func stage(_ value: StaticString) { print("FCA_DELETION_APPLE_CHECK stage=\(value)") }
+    static func stage(_ value: StaticString) { FileHandle.standardError.write(Data("FCA_DELETION_APPLE_CHECK stage=\(value)\n".utf8)) }
 }
 private func check(_ condition: Bool) { precondition(condition) }
 
