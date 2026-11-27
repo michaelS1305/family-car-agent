@@ -123,16 +123,36 @@ import Security
     private var name: String { environment.backendURL.absoluteString + "|" + environment.supabaseURL.absoluteString }
     private var base: [String: Any] { [kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrSynchronizable as String:false] }
     private func records() throws -> [Record] {
-        var q=base; q[kSecReturnData as String]=true; q[kSecReturnAttributes as String]=true; q[kSecMatchLimit as String]=kSecMatchLimitAll
+        // Enumerate references only; never request all password data in one query.
+        var q=base; q[kSecReturnPersistentRef as String]=true; q[kSecMatchLimit as String]=kSecMatchLimitAll
         var value: CFTypeRef?
+        #if FCA_DELETION_APPLE_CHECKS
+        if failEnumeration { throw AuthFailure.storage }
+        #endif
         let result=SecItemCopyMatching(q as CFDictionary,&value)
         #if FCA_DELETION_APPLE_CHECKS
-        DeletionAppleDiagnostics.status("receipt_read",result)
+        DeletionAppleDiagnostics.status("receipt_enumerate",result)
         #endif
         if result == errSecItemNotFound { return [] }
-        guard result == errSecSuccess, let items=value as? [[String:Any]] else { throw AuthFailure.storage }
-        let resultRecords=try items.map { item -> Record in
-            guard let data=item[kSecValueData as String] as? Data else { throw AuthFailure.storage }
+        guard result == errSecSuccess, let references=value as? [Data] else { throw AuthFailure.storage }
+        let resultRecords=try references.map { reference -> Record in
+            var itemQuery=base
+            itemQuery[kSecValuePersistentRef as String]=reference
+            itemQuery[kSecReturnData as String]=true
+            itemQuery[kSecReturnAttributes as String]=true
+            itemQuery[kSecMatchLimit as String]=kSecMatchLimitOne
+            var itemValue: CFTypeRef?
+            #if FCA_DELETION_APPLE_CHECKS
+            if failRecordRead { throw AuthFailure.storage }
+            #endif
+            let status=SecItemCopyMatching(itemQuery as CFDictionary,&itemValue)
+            #if FCA_DELETION_APPLE_CHECKS
+            DeletionAppleDiagnostics.status("receipt_read",status)
+            #endif
+            // A missing individual item is an error, including concurrent deletion.
+            guard status == errSecSuccess, let item=itemValue as? [String:Any],
+                  item[kSecAttrService as String] as? String == service,
+                  let data=item[kSecValueData as String] as? Data else { throw AuthFailure.storage }
             let record=try JSONDecoder().decode(Record.self,from:data)
             guard item[kSecAttrAccount as String] as? String == record.owner.uuidString else { throw AuthFailure.storage }
             return record
@@ -141,6 +161,8 @@ import Security
         return resultRecords
     }
     #if FCA_DELETION_APPLE_CHECKS
+    var failEnumeration=false
+    var failRecordRead=false
     var failSubmittedWrite=false
     func testRecords() throws -> [Record] { try records() }
     func testErase() { SecItemDelete(base as CFDictionary) }

@@ -44,6 +44,27 @@ final class DeletionHTTP: URLProtocol, @unchecked Sendable {
         let cleanup=AccountDeletionCleanup(environment:.development)
         defer { KeychainVault.failClear=false; try? vault.clear(); cleanup.testErase(); http.invalidateAndCancel(); try? FileManager.default.removeItem(at:root) }
         var assertions=0
+        // Real Keychain enumeration and exact-reference retrieval, isolated from lifecycle fixtures.
+        check(try cleanup.testRecords().isEmpty); assertions += 1
+        cleanup.failEnumeration=true
+        do { _ = try cleanup.testRecords(); fatalError("enumeration failure treated as empty") } catch {}
+        cleanup.failEnumeration=false; assertions += 1
+        let probeA=UUID(), probeB=UUID()
+        let first=try cleanup.prepare(owner:probeA)
+        check(try cleanup.testRecords()==[first]); assertions += 1
+        let secondProbe=try cleanup.prepare(owner:probeB)
+        check(try Set(cleanup.testRecords().map(\.owner))==Set([probeA,probeB])); assertions += 1
+        check(try cleanup.prepare(owner:probeA)==first && cleanup.prepare(owner:probeB)==secondProbe); assertions += 1
+        cleanup.failRecordRead=true
+        do { _ = try cleanup.testRecords(); fatalError("individual read failure ignored") } catch {}
+        cleanup.failRecordRead=false; assertions += 1
+        let production=AccountDeletionCleanup(environment:.production)
+        defer { production.testErase() }
+        check(try production.testRecords().isEmpty); assertions += 1
+        _ = try production.prepare(owner:probeA)
+        check(try production.testRecords().count==1 && cleanup.testRecords().count==2); assertions += 1
+        cleanup.testErase()
+        check(try cleanup.testRecords().isEmpty && production.testRecords().count==1); assertions += 1
         let owner=UUID(), other=UUID()
         let login=AuthSession(owner:owner,accessToken:"local-test",refreshToken:"local-test",expires:Date().addingTimeInterval(3600),activated:true)
         DeletionAppleDiagnostics.stage("initial_session_write")
