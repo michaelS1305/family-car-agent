@@ -4,6 +4,13 @@ import Foundation
     func read() throws -> [NativePushRegistration.Record]
     func write(_ records: [NativePushRegistration.Record]) throws
     func newSecret() throws -> String
+    func removeDeletedOwner(_ owner: UUID) throws -> [NativePushRegistration.Record]
+}
+
+extension NativePushStore {
+    func removeDeletedOwner(_ owner: UUID) throws -> [NativePushRegistration.Record] {
+        let remaining=try read().filter { $0.owner != owner }; try write(remaining); return remaining
+    }
 }
 
 /// Dedicated device-only item. Never stores a JWT or a raw FCM token.
@@ -40,6 +47,12 @@ import Foundation
     private func save() throws {
         do { try store.write(records); blocked = false }
         catch { blocked = true; throw AuthFailure.storage }
+    }
+    func forgetDeletedAccount(_ owner: UUID) throws {
+        epoch += 1
+        // Read durable state even after a previous write failure.
+        let durable = try store.removeDeletedOwner(owner)
+        records = durable; loaded = true; blocked = false
     }
     func retire() throws {
         epoch += 1

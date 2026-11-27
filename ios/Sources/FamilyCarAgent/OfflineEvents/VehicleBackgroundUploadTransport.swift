@@ -4,6 +4,8 @@ import UIKit
 
 @MainActor final class VehicleBackgroundUploadTransport: NSObject, VehicleUploadTransport, URLSessionDataDelegate {
     private static var liveIdentifiers = Set<String>()
+    private static var instances: [String: VehicleBackgroundUploadTransport] = [:]
+    private let deletionCancellation = DeletionUploadCancellation()
     let identifier: String
     private var session: URLSession!
     private var known: [Int64: URLSessionTask] = [:]
@@ -40,6 +42,7 @@ import UIKit
         self.identifier = identifier
         super.init()
         session = URLSession(configuration: Self.configuration(identifier: identifier), delegate: self, delegateQueue: .main)
+        Self.instances[identifier]=self
     }
 
     func allTasks() async -> [VehicleUploadTask] {
@@ -69,6 +72,17 @@ import UIKit
 
     /// Teardown only after the future owner has reconciled/cancelled outstanding work.
     func invalidate() { session.invalidateAndCancel() }
+
+    /// Only confirmed cleanup calls this. Failure/timeout keeps the durable cleanup pending.
+    static func cancelForDeletion(_ identifier: String) async throws {
+        let transport: VehicleBackgroundUploadTransport
+        if let existing=instances[identifier] { transport=existing }
+        else { transport=try VehicleBackgroundUploadTransport(identifier:identifier) }
+        try await transport.waitForInvalidation()
+    }
+    private func waitForInvalidation() async throws {
+        try await deletionCancellation.wait { session.invalidateAndCancel() }
+    }
 
     private static func snapshot(_ task: URLSessionTask) -> VehicleUploadTask {
         let state: VehicleUploadTask.State
@@ -137,7 +151,11 @@ import UIKit
     }
 
     nonisolated func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
-        DispatchQueue.main.async { Self.liveIdentifiers.remove(self.identifier) }
+        DispatchQueue.main.async {
+            Self.liveIdentifiers.remove(self.identifier)
+            Self.instances.removeValue(forKey:self.identifier)
+            self.deletionCancellation.finish(failed:error != nil)
+        }
     }
 }
 

@@ -33,6 +33,81 @@ private func sql(_ directory: URL, _ statement: String) throws {
         try await queue.completeVerification(context, generation: generation, vehicles: vehicles)
     }
 
+    @MainActor static func deletionCleanupChecks() async throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent("deletion-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let a=try VehicleQueueContext(environment:.development,identity:.init(owner:UUID(),user:101,family:201,generation:0,version:0),device:UUID())
+        let b=try VehicleQueueContext(environment:.development,identity:.init(owner:UUID(),user:102,family:202,generation:0,version:0),device:UUID())
+        let vehicle=UUID(); let q=try VehicleEventQueue(directory:root)
+        for context in [a,b] {
+            try await q.initializeFreshDevice(context)
+            try await authorize(q,context,[vehicle])
+            _ = try await q.enqueueTake(context,vehicle:vehicle,occurredAt:Date())
+        }
+        // Independent previous-version state, reopened through the real migration path.
+        try sql(root,"DROP TRIGGER deleted_device_INSERT; DROP TRIGGER deleted_device_UPDATE; DROP TABLE deleted_accounts; PRAGMA user_version=5")
+        let migrated=try VehicleEventQueue(directory:root)
+        try await migrated.validateSequence(a); try await migrated.validateSequence(b)
+        let sessions=try VehicleEventQueue.fenceDeletionUploads(directory:root,environment:a.environment,owner:a.owner,bundle:AppEnvironment.development.bundleIdentifier)
+        precondition(sessions == ["\(AppEnvironment.development.bundleIdentifier).vehicle-sync.v1.\(a.owner.uuidString).\(a.user).\(a.family).\(a.device.uuidString)"])
+        precondition(!sessions.contains { $0.contains(b.owner.uuidString) })
+        for (error,expected) in [(NSError(domain:NSPOSIXErrorDomain,code:28),DeviceSetupDiagnostics.Code.diskFull),(NSError(domain:NSCocoaErrorDomain,code:257),.denied),(NSError(domain:"private-user-string",code:999),.unspecified)] {
+            precondition(DeviceSetupDiagnostics.code(error)==expected)
+        }
+        enum Injected: Error { case failure }
+        await fails {
+            try VehicleEventQueue.cleanupDeletedAccount(directory:root,environment:a.environment,owner:a.owner) { throw Injected.failure }
+        }
+        // Failed file removal cannot delete relational inventory or reopen A.
+        await fails { _ = try await migrated.enqueueTake(a,vehicle:vehicle,occurredAt:Date()) }
+        try await migrated.validateSequence(b)
+        try sql(root,"CREATE TRIGGER fail_cleanup BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT,'injected'); END")
+        await fails { try VehicleEventQueue.cleanupDeletedAccount(directory:root,environment:a.environment,owner:a.owner) {} }
+        try sql(root,"DROP TRIGGER fail_cleanup")
+        try sql(root,"CREATE TABLE cleanup_commit_hold(event TEXT REFERENCES events(id) DEFERRABLE INITIALLY DEFERRED); INSERT INTO cleanup_commit_hold SELECT id FROM events WHERE instr(context,'\(a.environment)|\(a.owner.uuidString)|')=1")
+        await fails { try VehicleEventQueue.cleanupDeletedAccount(directory:root,environment:a.environment,owner:a.owner) {} }
+        try await migrated.validateSequence(a) // COMMIT failure preserved the original rows.
+        try sql(root,"DROP TABLE cleanup_commit_hold")
+
+        try VehicleEventQueue.cleanupDeletedAccount(directory:root,environment:a.environment,owner:a.owner) {}
+        try VehicleEventQueue.cleanupDeletedAccount(directory:root,environment:a.environment,owner:a.owner) {}
+        try VehicleEventQueue.synchronizeDirectory(root)
+        let reopened=try VehicleEventQueue(directory:root)
+        try await reopened.validateSequence(b)
+        await fails { try await reopened.validateSequence(a) }
+        await fails { try await reopened.initializeFreshDevice(a) }
+        await fails { try VehicleEventQueue.withAccount(directory:root,environment:a.environment,owner:a.owner) { throw Injected.failure } }
+        var otherAccountWritable=false
+        try VehicleEventQueue.withAccount(directory:root,environment:b.environment,owner:b.owner) { otherAccountWritable=true }
+        precondition(otherAccountWritable)
+        print("PASS: deletion cleanup v5 migration, A/B isolation, unsynced deletion, file/SQL rollback, restart, idempotency and recreation fences")
+    }
+
+    @MainActor static func diagnosticChecks() async throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { DeviceSetupDiagnostics.sqliteObserver=nil; try? FileManager.default.removeItem(at:root) }
+        var observed=[String]()
+        DeviceSetupDiagnostics.sqliteObserver={ reason,code in observed.append("\(reason.rawValue):\(code)") }
+        let db=try VehicleQueueDatabase(directory:root)
+        await fails { try db.execute("SELECT * FROM nonexistent_private_name") }
+        await fails { try db.execute("SELECT 1",["private_parameter"]) }
+        try db.execute("CREATE TABLE failure_test(id INTEGER PRIMARY KEY)")
+        try db.execute("INSERT INTO failure_test VALUES(1)")
+        await fails { try db.execute("INSERT INTO failure_test VALUES(1)") }
+        let q=try VehicleEventQueue(directory:root)
+        let c=try VehicleQueueContext(environment:.development,identity:.init(owner:UUID(),user:1,family:2,generation:0,version:0),device:UUID())
+        try db.execute("ALTER TABLE devices RENAME TO hidden_devices")
+        await fails { try await q.validateSequence(c) }
+        try db.execute("ALTER TABLE hidden_devices RENAME TO devices")
+        try db.execute("CREATE TRIGGER fail_authorization BEFORE INSERT ON authorization_scopes BEGIN SELECT RAISE(ABORT,'private'); END")
+        try await q.initializeFreshDevice(c)
+        await fails { try VehicleEventQueue.revokeAuthorization(directory:root,context:c) }
+        DeviceSetupDiagnostics.sqlite(.step,Int32.max)
+        precondition(observed.count==6 && Array(observed.prefix(3))==["prepare:1","bind:25","step:19"] &&
+            ["prepare:1","step:1"].contains(observed[3]) && Array(observed.suffix(2))==["step:19","step:0"],observed.joined(separator:","))
+        print("PASS: six SQLite diagnostic cases: prepare, bind, step, sequence query, static authorization persistence, bounded unknown code")
+    }
+
     static func main() async throws {
         if CommandLine.arguments.count == 6 {
             let args = CommandLine.arguments
@@ -329,6 +404,8 @@ private func sql(_ directory: URL, _ statement: String) throws {
         print("LIMITATION: total fence-write failure leaves old durable state; fresh process cannot infer failed logout")
         try sql(fenceRoot, "DROP TRIGGER fail_all_scope; DROP TRIGGER fail_all_device")
         print("PASS: authorization migration, pending/unknown/revoked fences, stale evidence, persistence failures and separate-process ordering")
+        try await diagnosticChecks()
+        try await deletionCleanupChecks()
         print("PASS: durable queue, sequencing, concurrency, identity, causality, admission, rollback and process-crash recovery")
     }
 }

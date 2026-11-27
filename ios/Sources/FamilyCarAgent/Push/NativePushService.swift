@@ -103,6 +103,10 @@ import Network
         }
     }
 
+    func forgetDeletedAccount(_ owner: UUID) throws {
+        if identity?.owner == owner { invalidate() }
+        try registrar().forgetDeletedAccount(owner)
+    }
     func prepareLogout() async throws {
         guard !loggingOut else { return }
         loggingOut = true

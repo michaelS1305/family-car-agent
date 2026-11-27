@@ -126,11 +126,19 @@ import Network
         }
         var hasSavedScope: Bool { runtime.sessions.session?.vehicleScope != nil }
         func check() throws {
-            guard !runtime.authorizationStorageFailed, !Task.isCancelled, runtime.identityEpoch == epoch,
-                  runtime.sessions.generation == identity.generation,
-                  let session = runtime.sessions.session, session.owner == identity.owner, session.activated else { throw NativeDeviceSetupError.stale }
+            func reject(_ reason: DeviceSetupDiagnostics.Reason) throws -> Never {
+                DeviceSetupDiagnostics.emit(.setup, reason); throw NativeDeviceSetupError.stale
+            }
+            if runtime.authorizationStorageFailed { try reject(.storage) }
+            if Task.isCancelled { try reject(.cancelled) }
+            if runtime.identityEpoch != epoch { try reject(.epoch) }
+            if runtime.sessions.generation != identity.generation { try reject(.generation) }
+            guard let session = runtime.sessions.session else { try reject(.sessionMissing) }
+            if session.owner != identity.owner { try reject(.owner) }
+            if !session.activated { try reject(.inactive) }
             if let scope = session.vehicleScope {
-                guard scope.user == identity.user, scope.family == identity.family else { throw NativeDeviceSetupError.stale }
+                if scope.user != identity.user { try reject(.user) }
+                if scope.family != identity.family { try reject(.family) }
             }
         }
         private func request<T>(_ operation: (String) async throws -> T) async throws -> T {
@@ -189,7 +197,7 @@ import Network
         guard let s = sessions.session, let scope = s.vehicleScope else { return }
         do { try VehicleEventQueue.revokeAuthorization(directory: VehicleEventQueue.applicationDirectory(), context: context(s)) }
         catch {
-            authorizationStorageFailed = true
+            DeviceSetupDiagnostics.emit(.authorization, .denyBindings); authorizationStorageFailed = true
             invalidate(s)
             throw error
         }
@@ -342,12 +350,20 @@ import Network
             return t
         } catch { t.invalidate(); throw error }
     }
+    func fenceDeletedAccount(_ owner: UUID) {
+        if sessions.session?.owner == owner { invalidate(sessions.session); setup = nil }
+    }
     private func invalidate(_ old: AuthSession?) {
         invalidateRecording()
         identityEpoch += 1
         if let old, let c = try? context(old) {
-            do { try VehicleEventQueue.revokeAuthorization(directory: VehicleEventQueue.applicationDirectory(), context: c) }
-            catch { authorizationStorageFailed = true }
+            do {
+                let directory=try VehicleEventQueue.applicationDirectory()
+                if try !VehicleEventQueue.isDeleted(directory:directory,environment:c.environment,owner:c.owner) {
+                    try VehicleEventQueue.revokeAuthorization(directory:directory,context:c)
+                }
+            }
+            catch { DeviceSetupDiagnostics.emit(.authorization, .invalidation); authorizationStorageFailed = true }
         }
         coordinator?.fence()
         if let transport { transport.invalidate() }

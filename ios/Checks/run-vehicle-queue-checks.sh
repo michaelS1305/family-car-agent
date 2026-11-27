@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 out=$(mktemp -d "${TMPDIR:-/tmp}/fca-queue-checks.XXXXXX")
 trap 'rm -rf "$out"' EXIT
-flags=(-swift-version 6 -warnings-as-errors)
+flags=(-D FCA_SQLITE_CHECKS -swift-version 6 -warnings-as-errors)
 if [[ "$(uname -s)" == Linux ]]; then
   include="${SQLITE_INCLUDE_DIR:-/usr/include}"
   test -f "$include/sqlite3.h" || { echo 'SQLite development headers required (SQLITE_INCLUDE_DIR)'; exit 1; }

@@ -28,6 +28,7 @@ class DeletionApiTests(unittest.TestCase):
         self.api = load_api()
         self.app = FastAPI()
         self.app.include_router(self.api.router)
+        self.app.add_middleware(self.api.DeletionProtocolMiddleware)
         self.subject = str(uuid4())
         self.app.dependency_overrides[auth_service.get_deletion_identity] = lambda: AuthenticatedSupabaseUser(self.subject)
         self.client = TestClient(self.app)

@@ -3,8 +3,14 @@ import Security
 
 @MainActor final class KeychainVault: SessionVault {
     private let service: String
+    private let environment: AppEnvironment
     init(environment: AppEnvironment) {
+        self.environment = environment
+        #if FCA_DELETION_APPLE_CHECKS
+        service = "fca.auth.checks." + String(ProcessInfo.processInfo.processIdentifier) + environment.configurationName
+        #else
         service = environment.bundleIdentifier + "." + environment.supabaseURL.host! + ".auth.v1"
+        #endif
     }
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
@@ -28,6 +34,12 @@ import Security
         }, clearCorrupt: clear)
     }
     func write(_ session: AuthSession) throws {
+        let name=environment.backendURL.absoluteString + "|" + environment.supabaseURL.absoluteString
+        try VehicleEventQueue.withAccount(directory:VehicleEventQueue.applicationDirectory(),environment:name,owner:session.owner) {
+            try writeAuthorized(session)
+        }
+    }
+    private func writeAuthorized(_ session: AuthSession) throws {
         let attributes: [String: Any] = [kSecValueData as String: try JSONEncoder().encode(session)]
         let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
@@ -36,7 +48,13 @@ import Security
             guard SecItemAdd(query.merging(insertion) { _, new in new } as CFDictionary, nil) == errSecSuccess else { throw AuthFailure.storage }
         } else if status != errSecSuccess { throw AuthFailure.storage }
     }
+    #if FCA_DELETION_APPLE_CHECKS
+    static var failClear=false
+    #endif
     func clear() throws {
+        #if FCA_DELETION_APPLE_CHECKS
+        if Self.failClear { throw AuthFailure.storage }
+        #endif
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw AuthFailure.storage }
     }

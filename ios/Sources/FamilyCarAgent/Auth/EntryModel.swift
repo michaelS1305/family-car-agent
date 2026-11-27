@@ -40,7 +40,49 @@ import Combine
             if case AuthFailure.rejected(401, _) = error { handleDeletionAuthentication(error) }
         }
     }
+    #if os(iOS)
+    private func durableDeletion(submit: Bool) async {
+        guard !deletionBusy else { return }
+        deletionBusy=true; defer { deletionBusy=false }
+        do {
+            let runtime=try VehicleSessionRuntime.shared.get()
+            let cleanup=AccountDeletionCleanup(environment:runtime.environment)
+            defer {
+                // A lost response or failed submitted write must still reflect the
+                // durable pending session; evaluate the current owner after awaits.
+                if let pending=try? cleanup.pending(owner:runtime.sessions.session?.owner) {
+                    deletionBlocking = pending || runtime.sessions.session?.deletionPending == true
+                }
+                deletionRetryAllowed=(try? cleanup.needsExplicitRetry(owner:runtime.sessions.session?.owner)) ?? false
+            }
+            if !submit { if try !cleanup.hasPending() { return } }
+            deletionBlocking = try cleanup.pending(owner:runtime.sessions.session?.owner) || runtime.sessions.session?.deletionPending == true
+            deletionRetryAllowed=try cleanup.needsExplicitRetry(owner:runtime.sessions.session?.owner)
+            if submit {
+                guard let session=runtime.sessions.session, deletionPreviewOwner == session.owner,
+                      deletionPreviewGeneration == runtime.sessions.generation, deletionPreview != nil else { return }
+                let owner=session.owner; let generation=runtime.sessions.generation
+                try await cleanup.support(api:runtime.api)
+                guard runtime.sessions.session?.owner == owner, runtime.sessions.generation == generation else { throw AuthFailure.stale }
+                let record=try cleanup.prepare(owner:owner)
+                try await NativePushService.shared.prepareLogout()
+                guard runtime.sessions.session?.owner == owner, runtime.sessions.generation == generation else { throw AuthFailure.stale }
+                try await cleanup.begin(record,sessions:runtime.sessions,api:runtime.api)
+                deletionBlocking=true
+            }
+            let complete=try await cleanup.resume(api:runtime.api,sessions:runtime.sessions)
+            deletionMessage=complete ? "מחיקת החשבון והניקוי המקומי הושלמו." : "המחיקה או הניקוי המקומי טרם הושלמו. הנתונים נשמרו."
+            if complete, runtime.sessions.session == nil { version += 1; resetPrivate(); screen = .intro }
+        } catch {
+            deletionMessage="לא ניתן להשלים את אימות המחיקה או הניקוי המקומי כרגע. המידע להתאוששות נשמר; נסו לבדוק שוב."
+        }
+    }
+    #endif
     func submitDeletion() async {
+        #if os(iOS)
+        await durableDeletion(submit:true)
+        return
+        #else
         guard !deletionBusy, (!deletionBlocking || deletionRetryAllowed), deletionPreview != nil,
               let sessions, let owner = sessions.session?.owner,
               deletionPreviewOwner == owner, deletionPreviewGeneration == sessions.generation else { return }
@@ -68,8 +110,13 @@ import Combine
             }
             handleDeletionAuthentication(error)
         }
+        #endif
     }
     func checkDeletionStatus() async {
+        #if os(iOS)
+        await durableDeletion(submit:false)
+        return
+        #else
         guard deletionBlocking, !deletionBusy, let owner = sessions?.session?.owner else { return }
         deletionBusy = true
         defer { deletionBusy = false }
@@ -81,6 +128,7 @@ import Combine
             deletionMessage = "מצב המחיקה אינו ידוע כרגע. אפשר לבדוק שוב מאוחר יותר; אין בכך אישור שהמחיקה הושלמה."
             handleDeletionAuthentication(error)
         }
+        #endif
     }
     private func applyDeletion(_ value: DeletionReply) throws {
         switch value.status {
@@ -373,6 +421,9 @@ import Combine
         defer { restoring = false }
         await perform {
             try sessions?.restore()
+            #if os(iOS)
+            await durableDeletion(submit:false)
+            #endif
             guard sessions?.session != nil else { return }
             if sessions?.session?.deletionPending == true {
                 deletionBlocking = true
@@ -384,6 +435,9 @@ import Combine
         }
     }
     func resume() async {
+        #if os(iOS)
+        await durableDeletion(submit:false)
+        #endif
         // Ordinary foregrounding must not reset navigation or show global loading.
         guard !deletionBlocking, !busy, !checkingApple else { return }
         guard let user = sessions?.session?.appleUser else { refreshNativeDevice(); return }

@@ -4,7 +4,9 @@ import Security
 
 @MainActor final class NativePushKeychainStore: NativePushStore {
     private let service: String
+    private let environment: AppEnvironment
     init(environment: AppEnvironment) {
+        self.environment=environment
         service = environment.bundleIdentifier + "." + environment.backendURL.host! + ".push.v1"
     }
     private var query: [String:Any] {
@@ -19,7 +21,20 @@ import Security
         guard status == errSecSuccess, let data = value as? Data else { throw AuthFailure.storage }
         return try JSONDecoder().decode([NativePushRegistration.Record].self,from:data)
     }
+    func removeDeletedOwner(_ owner: UUID) throws -> [NativePushRegistration.Record] {
+        try VehicleEventQueue.withCleanupLock(directory:VehicleEventQueue.applicationDirectory()) {
+            let remaining=try read().filter { $0.owner != owner }
+            try writeUnlocked(remaining)
+            return remaining
+        }
+    }
     func write(_ records: [NativePushRegistration.Record]) throws {
+        let name=environment.backendURL.absoluteString + "|" + environment.supabaseURL.absoluteString
+        try VehicleEventQueue.withLiveOwners(directory:VehicleEventQueue.applicationDirectory(),environment:name,owners:Set(records.map(\.owner))) { allowed in
+            try writeUnlocked(records.filter { allowed.contains($0.owner) })
+        }
+    }
+    private func writeUnlocked(_ records: [NativePushRegistration.Record]) throws {
         let data = try JSONEncoder().encode(records)
         let attributes: [String:Any] = [kSecValueData as String:data]
         var status = SecItemUpdate(query as CFDictionary,attributes as CFDictionary)
